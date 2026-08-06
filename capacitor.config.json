@@ -1,0 +1,10 @@
+{
+  "appId": "com.livium888.scotlandtrip",
+  "appName": "Scotland with Ally",
+  "webDir": "www",
+  "bundledWebRuntime": false,
+  "backgroundColor": "#16324f",
+  "android": {
+    "backgroundColor": "#16324f"
+  }
+}

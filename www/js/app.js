@@ -1,0 +1,261 @@
+(function () {
+  "use strict";
+
+  const view = document.getElementById("view");
+  const tabbar = document.getElementById("tabbar");
+  const topbarTitle = document.getElementById("topbarTitle");
+  const topbarSub = document.getElementById("topbarSub");
+
+  const STORAGE_KEY = "scotland-trip-packing-v1";
+
+  function esc(s) {
+    const d = document.createElement("div");
+    d.textContent = s;
+    return d.innerHTML;
+  }
+
+  function cityColor(city) {
+    return CITY_COLORS[city] || CITY_COLORS.Travel;
+  }
+
+  // ---------- Views ----------
+
+  function renderOverview() {
+    const totalLow = BUDGET.reduce((a, b) => a + b.low, 0);
+    const totalHigh = BUDGET.reduce((a, b) => a + b.high, 0);
+    const cities = ["Edinburgh", "Stirling", "Glasgow"];
+
+    let html = `
+      <div class="hero">
+        <h1>${esc(TRIP.title)}</h1>
+        <p>${esc(TRIP.subtitle)}</p>
+        <div class="hero-stats">
+          <div class="hero-stat"><b>${TRIP.nights}</b><span>nights</span></div>
+          <div class="hero-stat"><b>${DAYS.length}</b><span>days planned</span></div>
+          <div class="hero-stat"><b>3</b><span>cities</span></div>
+        </div>
+      </div>
+
+      <div class="section-label">Trip at a glance</div>
+      <div class="card">
+        <p>${esc(TRIP.traveler)}. Peak Fringe/festival week in Edinburgh (7–31 Aug), so this plan
+        mixes gentle festival mornings with day trips to Stirling and Glasgow — especially over
+        the 22–23 Aug weekend, when Edinburgh's Old Town is at its most crowded.</p>
+      </div>
+
+      <div class="section-label">Cities</div>
+    `;
+
+    cities.forEach((c) => {
+      const count = DAYS.filter((d) => d.city === c).length;
+      html += `
+        <div class="card" style="display:flex;align-items:center;justify-content:space-between;">
+          <div>
+            <span class="pill" style="background:${cityColor(c)}">${esc(c)}</span>
+          </div>
+          <div style="font-size:13px;color:var(--ink-soft);">${count} day${count === 1 ? "" : "s"}</div>
+        </div>
+      `;
+    });
+
+    html += `
+      <div class="section-label">Estimated budget</div>
+      <div class="card">
+        <p style="margin-bottom:4px;">Activities, tickets &amp; transport for the week (excl. accommodation)</p>
+        <div class="budget-total" style="border-top:none;padding-top:8px;">
+          <b>Total estimate</b>
+          <span class="budget-range">£${totalLow}–£${totalHigh}</span>
+        </div>
+      </div>
+    `;
+
+    view.innerHTML = html;
+  }
+
+  function renderItinerary() {
+    let html = "";
+    DAYS.forEach((d, i) => {
+      html += `
+        <div class="card day-card" data-idx="${i}">
+          <div class="day-head" data-toggle="${i}">
+            <div class="day-head-left">
+              <span class="pill" style="background:${cityColor(d.city)}">${esc(d.city)}</span>
+              <span class="day-title">${esc(d.title)}</span>
+              <span class="day-date">${esc(d.day)} · ${esc(d.date)}</span>
+            </div>
+            <span class="chevron">▶</span>
+          </div>
+          <div class="day-summary">${esc(d.summary)}</div>
+          <div class="day-items">
+            ${d.items
+              .map(
+                (it) => `
+              <div class="item">
+                <div class="item-time">${esc(it.time)}</div>
+                <div class="item-body">
+                  <div class="item-name">${esc(it.name)}</div>
+                  <div class="item-detail">${esc(it.detail)}</div>
+                  <span class="item-tag">${esc(it.tag)}</span>
+                </div>
+              </div>
+            `
+              )
+              .join("")}
+          </div>
+        </div>
+      `;
+    });
+    view.innerHTML = html;
+
+    view.querySelectorAll("[data-toggle]").forEach((el) => {
+      el.addEventListener("click", () => {
+        el.closest(".day-card").classList.toggle("open");
+      });
+    });
+
+    // open first day by default
+    const first = view.querySelector(".day-card");
+    if (first) first.classList.add("open");
+  }
+
+  let placeFilter = "All";
+
+  function renderPlaces() {
+    const cities = ["All", "Edinburgh", "Stirling", "Glasgow"];
+    let html = `<div class="filter-row">`;
+    cities.forEach((c) => {
+      html += `<button class="filter-chip ${c === placeFilter ? "active" : ""}" data-city="${esc(c)}">${esc(c)}</button>`;
+    });
+    html += `</div>`;
+
+    const list = PLACES.filter((p) => placeFilter === "All" || p.city === placeFilter);
+
+    list.forEach((p) => {
+      html += `
+        <div class="card place-card">
+          <div style="flex:1;">
+            <div class="place-name">${esc(p.name)}</div>
+            <div class="place-meta">
+              <span class="pill" style="background:${cityColor(p.city)}">${esc(p.city)}</span>${esc(p.category)}
+            </div>
+            <div class="place-notes">${esc(p.notes)}</div>
+          </div>
+          <div class="place-price">${esc(p.price)}</div>
+        </div>
+      `;
+    });
+
+    view.innerHTML = html;
+
+    view.querySelectorAll("[data-city]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        placeFilter = btn.getAttribute("data-city");
+        renderPlaces();
+      });
+    });
+  }
+
+  function renderBudget() {
+    const totalLow = BUDGET.reduce((a, b) => a + b.low, 0);
+    const totalHigh = BUDGET.reduce((a, b) => a + b.high, 0);
+
+    let html = `<div class="card">`;
+    BUDGET.forEach((b) => {
+      const range = b.low === b.high ? (b.low === 0 ? "Free" : `£${b.low}`) : `£${b.low}–£${b.high}`;
+      html += `
+        <div class="budget-row">
+          <div class="budget-item">${esc(b.item)}</div>
+          <div class="budget-range">${range}</div>
+        </div>
+      `;
+    });
+    html += `
+      <div class="budget-total">
+        <b>Total (week)</b>
+        <span class="budget-range">£${totalLow}–£${totalHigh}</span>
+      </div>
+    </div>`;
+
+    html += `
+      <div class="section-label">Notes</div>
+      <div class="card">
+        <p>Ranges reflect optional items (Wallace Monument climb, Glasgow Science Centre, Zoo, Camera Obscura) —
+        skip any of them and the week can cost well under £200. Museums, parks and beaches used in this plan
+        (National Museum of Scotland, Botanic Garden, Kelvingrove, Portobello, Cramond) are free.</p>
+      </div>
+    `;
+
+    view.innerHTML = html;
+  }
+
+  function loadChecked() {
+    try {
+      return JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
+    } catch (e) {
+      return {};
+    }
+  }
+
+  function saveChecked(state) {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  }
+
+  function renderTips() {
+    let html = `<div class="section-label">Good to know</div>`;
+    TIPS.forEach((t) => {
+      html += `
+        <div class="card tip-card">
+          <h2>${esc(t.title)}</h2>
+          <p>${esc(t.body)}</p>
+        </div>
+      `;
+    });
+
+    const checked = loadChecked();
+    html += `<div class="section-label">Packing list</div>`;
+    html += `<div class="card"><ul class="packing-list">`;
+    PACKING.forEach((p, i) => {
+      const isChecked = !!checked[i];
+      html += `<li data-i="${i}" class="${isChecked ? "checked" : ""}">${esc(p)}</li>`;
+    });
+    html += `</ul></div>`;
+
+    view.innerHTML = html;
+
+    view.querySelectorAll(".packing-list li").forEach((li) => {
+      li.addEventListener("click", () => {
+        const i = li.getAttribute("data-i");
+        const state = loadChecked();
+        state[i] = !state[i];
+        saveChecked(state);
+        li.classList.toggle("checked");
+      });
+    });
+  }
+
+  const VIEWS = {
+    overview: { render: renderOverview, sub: TRIP.dates },
+    itinerary: { render: renderItinerary, sub: "Tap a day to expand" },
+    places: { render: renderPlaces, sub: "Edinburgh · Stirling · Glasgow" },
+    budget: { render: renderBudget, sub: "Estimated activity costs" },
+    tips: { render: renderTips, sub: "Walking, weather, safety & packing" },
+  };
+
+  function showView(name) {
+    const v = VIEWS[name];
+    if (!v) return;
+    v.render();
+    topbarSub.textContent = v.sub;
+    tabbar.querySelectorAll(".tab").forEach((t) => {
+      t.classList.toggle("active", t.getAttribute("data-view") === name);
+    });
+    view.scrollTop = 0;
+  }
+
+  tabbar.querySelectorAll(".tab").forEach((t) => {
+    t.addEventListener("click", () => showView(t.getAttribute("data-view")));
+  });
+
+  topbarTitle.textContent = TRIP.title;
+  showView("overview");
+})();
