@@ -99,33 +99,33 @@ const DAYS = [
     city: "Stirling",
     title: "Day trip: Stirling Castle",
     summary:
-      "Direct train from Edinburgh Waverley, ~41–49 min, frequent departures. Stirling is quiet compared to Edinburgh — good rebalance before the festival's busiest weekend.",
+      "Driving — ~36 miles/50 min each way via the M9, no tolls. Cheaper than the train for this trip (~£13–19 fuel+parking vs ~£24 for two adult train fares) and means no 0.5-mile uphill walk from the station to the Castle. Stirling is quiet compared to Edinburgh — good rebalance before the festival's busiest weekend.",
     items: [
       {
         time: "09:00",
-        name: "Train: Edinburgh Waverley → Stirling",
-        detail: "ScotRail/LNER, ~45 min direct, fares from ~£6.30 one-way (advance/off-peak).",
-        tag: "Travel",
+        name: "Drive: Edinburgh → Stirling",
+        detail: "~36 miles via the M9, ~50 min with no tolls. Fuel cost roughly £9–15 for the round trip depending on your car's mpg.",
+        tag: "Drive",
       },
       {
         time: "10:00",
         name: "Stirling Castle",
         detail:
-          "Great Hall, Royal Palace, kitchens. Adult from £17.50 online, under-7s free, family (2+2) ~£53 online. Open 9:30–18:00 (Apr–Sep). Less crowded than Edinburgh Castle — easier with a walking 4-year-old.",
+          "Great Hall, Royal Palace, kitchens. Adult from £17.50 online, under-7s free, family (2+2) ~£53 online. Open 9:30–18:00 (Apr–Sep). Less crowded than Edinburgh Castle — easier with a walking 4-year-old. Castle car park: £4 flat, up to 4 hours — can fill up on busy days, so arrive close to opening.",
         tag: "£53 family",
       },
       {
         time: "PM",
         name: "National Wallace Monument (view from outside, optional climb)",
         detail:
-          "The tower itself is a 246-step spiral staircase — tough for a 4-year-old, so treat the climb as optional/for one adult. The grounds and view up at the monument are worth the stop regardless. Adult ~£16.50, family ~£44.",
+          "The tower itself is a 246-step spiral staircase — tough for a 4-year-old, so treat the climb as optional/for one adult. The grounds and view up at the monument are worth the stop regardless. Adult ~£16.50, family ~£44. Has its own car park.",
         tag: "Optional climb",
       },
       {
         time: "Eve",
-        name: "Train back to Edinburgh",
-        detail: "Same ~45 min journey. Aim to leave before early evening rush.",
-        tag: "Travel",
+        name: "Drive back to Edinburgh",
+        detail: "Same ~50 min drive. Aim to leave before evening rush on the M9/A720.",
+        tag: "Drive",
       },
     ],
   },
@@ -135,33 +135,39 @@ const DAYS = [
     city: "Glasgow",
     title: "Day trip: Glasgow museums",
     summary:
-      "Saturday is the worst day for Old Town crowds in Edinburgh — this day trip sidesteps it entirely. Direct train, ~44 min–1h05 from Waverley to Queen Street.",
+      "Driving — ~46 miles/1h each way via the M8, no tolls. Cost is close to a wash against the train (~£23–32 fuel+parking vs ~£26–34 for two adult train fares), but the real win is Kelvingrove and the Science Centre are ~3 miles apart and NOT walkable — with the car it's a direct 10-min drive between them instead of a bus/subway/taxi transfer. Saturday traffic on the M8 should be lighter than a weekday commute.",
     items: [
       {
         time: "09:00",
-        name: "Train: Edinburgh Waverley → Glasgow Queen St",
-        detail: "ScotRail every 15–30 min, or Lumo. ~45 min–1h. Advance fares from ~£6.50 one-way.",
-        tag: "Travel",
+        name: "Drive: Edinburgh → Glasgow",
+        detail: "~46 miles via the M8, ~1h with no tolls. Fuel cost roughly £12–19 for the round trip depending on your car's mpg.",
+        tag: "Drive",
       },
       {
         time: "10:00",
         name: "Kelvingrove Art Gallery & Museum",
         detail:
-          "Free entry to the permanent collection — Scotland's most-visited free attraction. Sir Roger the stuffed elephant, floating heads, arms & armour, natural history. Open Mon–Thu & Sat 10–5, Fri & Sun 11–5.",
+          "Free entry to the permanent collection — Scotland's most-visited free attraction. Sir Roger the stuffed elephant, floating heads, arms & armour, natural history. Open Mon–Thu & Sat 10–5, Fri & Sun 11–5. On-site car park off Argyle Street, ~100 spaces, £3/hour.",
         tag: "Free",
+      },
+      {
+        time: "~13:00",
+        name: "Drive: Kelvingrove → Glasgow Science Centre",
+        detail: "~10 min via the Squinty Bridge/M8 — this leg isn't walkable, so having the car directly solves the gap between the two attractions.",
+        tag: "Drive",
       },
       {
         time: "13:30",
         name: "Glasgow Science Centre",
         detail:
-          "Interactive hands-on exhibits, planetarium (+£3.50). Adult ~£15.50 off-peak, child ~£12, family (2+2) ~£35. Open Wed–Sun in term time, daily in school holidays.",
+          "Interactive hands-on exhibits, planetarium (+£3.50). Adult ~£15.50 off-peak, child ~£12, family (2+2) ~£35. Open Wed–Sun in term time, daily in school holidays. Its own car park is £4 flat for the day if you're visiting the Centre.",
         tag: "~£35 family",
       },
       {
         time: "Eve",
-        name: "Train back to Edinburgh",
-        detail: "Grab dinner in Glasgow first if energy allows, or eat once back.",
-        tag: "Travel",
+        name: "Drive back to Edinburgh",
+        detail: "Grab dinner in Glasgow first if energy allows (Paesano Pizza is a few minutes from the M8), or eat once back. ~1h drive.",
+        tag: "Drive",
       },
     ],
   },
@@ -282,7 +288,7 @@ const PLACES = [
     name: "Stirling Castle",
     category: "Castle",
     price: "~£53 family",
-    notes: "Great Hall, Royal Palace. Quieter than Edinburgh Castle. ~45 min train from Edinburgh.",
+    notes: "Great Hall, Royal Palace. Quieter than Edinburgh Castle. ~50 min drive from Edinburgh via the M9; on-site car park £4 flat (up to 4 hrs).",
     website: "https://www.stirlingcastle.scot/",
     mapsQuery: "Stirling Castle Stirling",
   },
@@ -450,7 +456,8 @@ const BUDGET = [
   { item: "Camera Obscura (optional)", low: 0, high: 65 },
   { item: "National Museum of Scotland", low: 0, high: 0 },
   { item: "Royal Botanic Garden / Kelvingrove / beaches", low: 0, high: 0 },
-  { item: "Rail: Edinburgh↔Stirling↔Glasgow (family, return)", low: 60, high: 100 },
+  { item: "Fuel: Edinburgh↔Stirling↔Glasgow driving (return, ~164 miles)", low: 21, high: 34 },
+  { item: "Parking: Stirling Castle + Glasgow (Kelvingrove + Science Centre)", low: 14, high: 16 },
   { item: "Local buses/trams in Edinburgh", low: 20, high: 40 },
   { item: "Treats, ice cream, café stops", low: 40, high: 60 },
 ];
@@ -493,8 +500,8 @@ const TIPS = [
       "Fringe kids' shows, Edinburgh Zoo, and Stirling Castle can sell out on sunny weekends — book online a few days before.",
   },
   {
-    title: "Trains to Stirling & Glasgow",
+    title: "Driving to Stirling & Glasgow",
     body:
-      "Both are direct from Edinburgh Waverley, both under an hour, and both run every 15–30 minutes — easy, low-risk day trips that don't require a car.",
+      "You already have the car, so driving beats the train on cost for Stirling (~£13–19 all-in vs ~£24 for two adult train fares) and is roughly a wash for Glasgow — but it directly solves the fact that Kelvingrove and the Science Centre are ~3 miles apart and not walkable. No motorway tolls in Scotland either way. Stirling Castle's car park can fill up on busy days, so aim for opening time; in Glasgow, park at Kelvingrove first, then a 10-min drive to the Science Centre's own car park for the afternoon.",
   },
 ];
