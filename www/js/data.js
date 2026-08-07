@@ -13,6 +13,7 @@ const CITY_COLORS = {
   Edinburgh: "#2f5d8c",
   Stirling: "#7a5c3e",
   Glasgow: "#8c3f6b",
+  Other: "#6b6f76",
   Travel: "#4a7a5f",
 };
 

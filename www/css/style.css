@@ -442,6 +442,41 @@ body {
   background: var(--paper);
 }
 
+.pick-maps-btn {
+  display: block;
+  text-align: center;
+  text-decoration: none;
+  margin: 12px 16px;
+  padding: 12px;
+  border-radius: 10px;
+  background: var(--navy);
+  color: #fff;
+  font-size: 13.5px;
+  font-weight: 700;
+}
+.pick-maps-btn:active { background: var(--navy-dark); }
+
+.move-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 0 16px 14px;
+}
+.move-label { font-size: 11.5px; color: var(--ink-soft); font-weight: 700; margin-right: 2px; }
+.move-chip {
+  flex-shrink: 0;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--ink-soft);
+  font-size: 11.5px;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-family: inherit;
+}
+.move-chip.active { background: var(--navy); color: #fff; border-color: var(--navy); }
+
 .search-map {
   height: 220px;
   width: 100%;

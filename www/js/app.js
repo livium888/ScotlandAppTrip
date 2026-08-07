@@ -153,6 +153,16 @@
     savePicks(loadPicks().filter((p) => p.id !== id));
   }
 
+  // Manually overrides the auto-assigned (nearest-city) grouping - e.g. to
+  // pull something out of Edinburgh into a general "Other" bucket instead.
+  function setPickCity(id, city) {
+    const picks = loadPicks();
+    const p = picks.find((x) => x.id === id);
+    if (!p) return;
+    p.city = city;
+    savePicks(picks);
+  }
+
   function wirePickToggles(rerender) {
     view.querySelectorAll("[data-toggle-pick]").forEach((btn) => {
       btn.addEventListener("click", () => {
@@ -886,6 +896,7 @@
     }
 
     const mapElId = pickMapElId(p.id);
+    const groupOptions = ["Edinburgh", "Stirling", "Glasgow", "Other"];
 
     return `
       <div class="card pick-card" data-pick-id="${esc(p.id)}">
@@ -896,14 +907,21 @@
               ${p.city ? `<span class="pill" style="background:${cityColor(p.city)}">${esc(p.city)}</span>` : ""}${esc(p.category)}
             </div>
             ${descriptionHtml}
-            <div class="place-links">
-              ${p.website ? `<a href="${esc(p.website)}" target="_blank" rel="noopener">🌐 Website</a>` : ""}
-              ${mapsUrl ? `<a href="${mapsUrl}" target="_blank" rel="noopener">📍 Map</a>` : ""}
-            </div>
+            ${p.website ? `<div class="place-links"><a href="${esc(p.website)}" target="_blank" rel="noopener">🌐 Website</a></div>` : ""}
           </div>
           <button class="pick-remove" data-remove-pick="${esc(p.id)}" aria-label="Remove">✕</button>
         </div>
         ${p.lat != null ? `<div class="pick-mini-map" id="${mapElId}"></div>` : ""}
+        ${mapsUrl ? `<a class="pick-maps-btn" href="${mapsUrl}" target="_blank" rel="noopener">📍 Open in Google Maps</a>` : ""}
+        <div class="move-row">
+          <span class="move-label">Group:</span>
+          ${groupOptions
+            .map(
+              (c) =>
+                `<button class="move-chip${p.city === c ? " active" : ""}" data-move-pick="${esc(p.id)}|${esc(c)}">${esc(c)}</button>`
+            )
+            .join("")}
+        </div>
         ${renderNearbyPanel(p)}
       </div>
     `;
@@ -1078,7 +1096,7 @@
     } else {
       html += `<button class="hero-share" id="sharePicks" style="color:var(--navy);border-color:var(--line);background:var(--card);margin:16px 0;">↗ Share my picks</button>`;
 
-      const groups = { Edinburgh: [], Stirling: [], Glasgow: [], Unsorted: [] };
+      const groups = { Edinburgh: [], Stirling: [], Glasgow: [], Other: [], Unsorted: [] };
       picks.forEach((p) => {
         (groups[p.city] || groups.Unsorted).push(p);
       });
@@ -1183,6 +1201,14 @@
     view.querySelectorAll("[data-remove-pick]").forEach((btn) => {
       btn.addEventListener("click", () => {
         removePick(btn.getAttribute("data-remove-pick"));
+        renderPicks();
+      });
+    });
+
+    view.querySelectorAll("[data-move-pick]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const [id, city] = btn.getAttribute("data-move-pick").split("|");
+        setPickCity(id, city);
         renderPicks();
       });
     });
