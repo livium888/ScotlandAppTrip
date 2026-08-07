@@ -3,9 +3,9 @@
 
 const TRIP = {
   title: "Scotland with Ally",
-  subtitle: "Edinburgh · Stirling · Glasgow — 18–24 Aug 2026",
-  dates: "Tue 18 Aug – Mon 24 Aug 2026",
-  nights: 6,
+  subtitle: "Edinburgh · Stirling · Glasgow — 19–24 Aug 2026",
+  dates: "Wed 19 Aug (PM arrival) – Mon 24 Aug 2026 (AM departure to Portsmouth)",
+  nights: 5,
   traveler: "Family of 3, child age 4 (walks — no stroller)",
 };
 
@@ -18,31 +18,39 @@ const CITY_COLORS = {
 
 const DAYS = [
   {
-    date: "Tue 18 Aug",
+    date: "Wed 19 Aug",
     day: "Day 1",
     city: "Edinburgh",
-    title: "Arrival & easy settle-in",
+    title: "Afternoon arrival — Botanic Garden or Museum",
     summary:
-      "Travel day. Keep it light — a short walk, open space to run, early dinner, early night.",
+      "Landing mid/late afternoon leaves a few hours, not a full day — pick ONE low-key thing based on weather and how tired everyone is, then dinner and an early night. Don't try to fit both.",
     items: [
       {
         time: "PM",
-        name: "Royal Botanic Garden Edinburgh",
+        name: "Option A: Royal Botanic Garden Edinburgh",
         place: "Royal Botanic Garden",
         detail:
-          "Free entry (donation welcome). 70+ acres of lawns and paths — perfect for a 4-year-old to run off travel energy. Note: the Glasshouses are closed for restoration through 2026.",
+          "Free entry (donation welcome). 70+ acres of lawns and paths — good if the weather's decent and everyone wants to run off travel energy outdoors. Glasshouses closed for restoration through 2026.",
+        tag: "Free",
+      },
+      {
+        time: "PM",
+        name: "Option B: National Museum of Scotland",
+        place: "National Museum of Scotland",
+        detail:
+          "Free entry. Indoor and low-key — a better call if it's wet or everyone's just tired after travel. Under-5s Imagine gallery, T-Rex, café on site. Open till 17:00.",
         tag: "Free",
       },
       {
         time: "Eve",
-        name: "Stockbridge dinner",
-        detail: "Scran & Scallie or Bell's Diner — relaxed, kid menus, ~15 min walk from the Botanics. (The Pantry is a great option too, but it's lunch/brunch only — closes 3pm.)",
+        name: "Dinner",
+        detail: "Scran & Scallie or Bell's Diner (Stockbridge, near the Botanics) if you did Option A, or Civerinos on Hunter Square (near the Museum) if you did Option B.",
         tag: "Food",
       },
     ],
   },
   {
-    date: "Wed 19 Aug",
+    date: "Thu 20 Aug",
     day: "Day 2",
     city: "Edinburgh",
     title: "Fringe morning + Old Town",
@@ -64,6 +72,13 @@ const DAYS = [
       },
       {
         time: "PM",
+        name: "Optional: Splash Test Dummies Circus",
+        detail:
+          "Circus Hub on the Meadows, ~12:05pm. Runs Thu–Sun only, so today's one of the few days it fits. From ~£15.50 — only add this if the Bubble Man show didn't already tire everyone out.",
+        tag: "Fringe · Optional",
+      },
+      {
+        time: "PM",
         name: "Rest at accommodation",
         detail: "Front-load the day — a 4-year-old flags in festival crowds by mid-afternoon.",
         tag: "Downtime",
@@ -71,33 +86,8 @@ const DAYS = [
     ],
   },
   {
-    date: "Thu 20 Aug",
-    day: "Day 3",
-    city: "Edinburgh",
-    title: "Museum day (all-weather)",
-    summary:
-      "National Museum of Scotland is free, central, and has a dedicated under-5s gallery — a great rainy-day anchor.",
-    items: [
-      {
-        time: "10:00",
-        name: "National Museum of Scotland",
-        place: "National Museum of Scotland",
-        detail:
-          "Free entry. Head straight for the Imagine gallery (under-5s soft play/tactile), then the T-Rex skeleton and interactive Science floor. Café on site.",
-        tag: "Free",
-      },
-      {
-        time: "PM",
-        name: "Optional: Splash Test Dummies Circus",
-        detail:
-          "Circus Hub on the Meadows, ~12:05pm. Runs Thu–Sun only (dark Mon–Wed). From ~£15.50.",
-        tag: "Fringe · Optional",
-      },
-    ],
-  },
-  {
     date: "Fri 21 Aug",
-    day: "Day 4",
+    day: "Day 3",
     city: "Stirling",
     title: "Day trip: Stirling Castle",
     summary:
@@ -135,7 +125,7 @@ const DAYS = [
   },
   {
     date: "Sat 22 Aug",
-    day: "Day 5",
+    day: "Day 4",
     city: "Glasgow",
     title: "Day trip: Glasgow museums",
     summary:
@@ -179,7 +169,7 @@ const DAYS = [
   },
   {
     date: "Sun 23 Aug",
-    day: "Day 6",
+    day: "Day 5",
     city: "Edinburgh",
     title: "Zoo or beach — stay out of the Old Town",
     summary:
@@ -205,23 +195,16 @@ const DAYS = [
   },
   {
     date: "Mon 24 Aug",
-    day: "Day 7",
+    day: "Day 6",
     city: "Edinburgh",
-    title: "Departure",
-    summary: "Some Fringe shows are dark on Mondays. Keep the morning light before travel.",
+    title: "Departure to Portsmouth",
+    summary:
+      "Morning departure — there's no real time for an activity today. Pack the night before so the morning is just breakfast and leaving, not a scramble with a 4-year-old.",
     items: [
       {
-        time: "09:00",
-        name: "Camera Obscura & World of Illusions (optional)",
-        place: "Camera Obscura & World of Illusions",
-        detail:
-          "Early-bird before 9am saves ~£4. Six floors of illusions, rooftop views. ~2 hrs, all-weather. Plenty of stairs — fine since you're walking, not pushing a stroller.",
-        tag: "Optional",
-      },
-      {
-        time: "Later",
-        name: "Travel onward",
-        detail: "Pad in extra time — festival-season taxis and trams get busy.",
+        time: "AM",
+        name: "Travel to Portsmouth",
+        detail: "Pad in extra time to get to the airport/station — festival-season traffic and taxis get busy even early. Have snacks ready for the journey.",
         tag: "Travel",
       },
     ],
@@ -462,7 +445,6 @@ const BUDGET = [
   { item: "Wallace Monument (optional)", low: 0, high: 44 },
   { item: "Glasgow Science Centre (family)", low: 0, high: 35 },
   { item: "Edinburgh Zoo (family)", low: 0, high: 48 },
-  { item: "Camera Obscura (optional)", low: 0, high: 65 },
   { item: "National Museum of Scotland", low: 0, high: 0 },
   { item: "Royal Botanic Garden / Kelvingrove / beaches", low: 0, high: 0 },
   { item: "Fuel: Edinburgh↔Stirling↔Glasgow driving (return, ~164 miles)", low: 21, high: 34 },
@@ -492,6 +474,11 @@ const TIPS = [
     title: "One main activity a day",
     body:
       "Don't stack a Fringe show AND a big attraction AND a long walk on the same day. This itinerary deliberately gives each day one anchor activity.",
+  },
+  {
+    title: "Short trip: no spare days",
+    body:
+      "A PM arrival Wednesday and an AM departure Monday leaves 4 full days plus one half-day — every day in this plan is already spoken for, with nothing held in reserve. If one day gets rained out or the flight's delayed, the honest trade-off is dropping the least essential piece that day (the optional Wallace Monument climb, Splash Test Dummies, or the whole Zoo/Beach day) rather than trying to double up elsewhere.",
   },
   {
     title: "Weekend crowd-dodge",

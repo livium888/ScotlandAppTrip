@@ -314,8 +314,8 @@
     html += `
       <div class="section-label">Notes</div>
       <div class="card">
-        <p>Ranges reflect optional items (Wallace Monument climb, Glasgow Science Centre, Zoo, Camera Obscura) —
-        skip any of them and the week can cost well under £200. Museums, parks and beaches used in this plan
+        <p>Ranges reflect optional items (Wallace Monument climb, Glasgow Science Centre, Zoo) —
+        skip any of them and the trip can cost well under £200. Museums, parks and beaches used in this plan
         (National Museum of Scotland, Botanic Garden, Kelvingrove, Portobello, Cramond) are free.</p>
       </div>
     `;
