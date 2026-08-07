@@ -19,7 +19,8 @@
   "homepage": "https://github.com/livium888/scotlandapptrip#readme",
   "dependencies": {
     "@capacitor/android": "^8.5.0",
-    "@capacitor/core": "^8.5.0"
+    "@capacitor/core": "^8.5.0",
+    "@capacitor/share": "^8.0.1"
   },
   "devDependencies": {
     "@capacitor/cli": "^8.5.0"

@@ -82,6 +82,83 @@
     placeModal.classList.remove("open");
   }
 
+  // ---------- Sharing ----------
+
+  function formatDayShareText(day) {
+    const lines = [];
+    lines.push(`🏴 Scotland with Ally — ${day.day}, ${day.date}`);
+    lines.push(`${day.city} — ${day.title}`);
+    lines.push("");
+    lines.push(day.summary);
+    lines.push("");
+    day.items.forEach((it) => {
+      lines.push(`${it.time} — ${it.name}`);
+      lines.push(it.detail);
+      const p = it.place ? findPlace(it.place) : null;
+      if (p && p.website) lines.push(`🌐 ${p.website}`);
+      if (p && p.mapsQuery) lines.push(`📍 ${mapsUrlFor(p.mapsQuery)}`);
+      lines.push("");
+    });
+    return lines.join("\n").trim();
+  }
+
+  function formatFullItineraryShareText() {
+    const lines = [`🏴 ${TRIP.title}`, TRIP.subtitle, TRIP.dates, ""];
+    DAYS.forEach((d) => {
+      lines.push(`— ${d.day}, ${d.date} (${d.city}) —`);
+      lines.push(d.title);
+      d.items.forEach((it) => lines.push(`  ${it.time} ${it.name}`));
+      lines.push("");
+    });
+    return lines.join("\n").trim();
+  }
+
+  async function shareText(title, text) {
+    const plugins = window.Capacitor && window.Capacitor.Plugins;
+    if (plugins && plugins.Share) {
+      try {
+        await plugins.Share.share({ title, text, dialogTitle: title });
+        return;
+      } catch (e) {
+        if (e && e.message === "Share canceled") return;
+        // fall through to web fallbacks below
+      }
+    }
+    if (navigator.share) {
+      try {
+        await navigator.share({ title, text });
+        return;
+      } catch (e) {
+        if (e && e.name === "AbortError") return;
+      }
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      try {
+        await navigator.clipboard.writeText(text);
+        toast("Copied to clipboard — paste it into WhatsApp");
+        return;
+      } catch (e) {
+        // fall through
+      }
+    }
+    window.prompt("Copy this to share:", text);
+  }
+
+  let toastTimer = null;
+  function toast(message) {
+    let el = document.getElementById("toast");
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "toast";
+      el.className = "toast";
+      document.body.appendChild(el);
+    }
+    el.textContent = message;
+    el.classList.add("show");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.classList.remove("show"), 2400);
+  }
+
   // ---------- Views ----------
 
   function renderOverview() {
@@ -98,6 +175,7 @@
           <div class="hero-stat"><b>${DAYS.length}</b><span>days planned</span></div>
           <div class="hero-stat"><b>3</b><span>cities</span></div>
         </div>
+        <button class="hero-share" id="shareTrip">↗ Share whole itinerary</button>
       </div>
 
       <div class="section-label">Trip at a glance</div>
@@ -134,6 +212,13 @@
     `;
 
     view.innerHTML = html;
+
+    const shareBtn = document.getElementById("shareTrip");
+    if (shareBtn) {
+      shareBtn.addEventListener("click", () => {
+        shareText(TRIP.title, formatFullItineraryShareText());
+      });
+    }
   }
 
   function renderItinerary() {
@@ -167,6 +252,7 @@
             `
               )
               .join("")}
+            <button class="day-share" data-share-day="${i}">↗ Share this day</button>
           </div>
         </div>
       `;
@@ -182,6 +268,14 @@
     view.querySelectorAll("[data-place]").forEach((el) => {
       el.addEventListener("click", () => {
         openPlaceModal(el.getAttribute("data-place"));
+      });
+    });
+
+    view.querySelectorAll("[data-share-day]").forEach((el) => {
+      el.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const d = DAYS[Number(el.getAttribute("data-share-day"))];
+        shareText(`${d.day}: ${d.title}`, formatDayShareText(d));
       });
     });
 
