@@ -6,6 +6,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
+import android.widget.Toast;
 import com.getcapacitor.BridgeActivity;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.PluginHandle;
@@ -57,8 +58,22 @@ public class MainActivity extends BridgeActivity {
 
   private void handleShareIntent(Intent intent) {
     if (intent == null || !Intent.ACTION_SEND.equals(intent.getAction())) return;
-    if (!"text/plain".equals(intent.getType())) return;
+
+    String type = intent.getType();
     String sharedText = intent.getStringExtra(Intent.EXTRA_TEXT);
+
+    // TEMPORARY DIAGNOSTIC (share-debug-2) - remove once the share flow is
+    // confirmed working end to end. No device/cable needed to read this.
+    Toast.makeText(
+      this,
+      "share-debug-2: type=" + type + " hasText=" + (sharedText != null),
+      Toast.LENGTH_LONG
+    ).show();
+
+    // Was previously an exact "text/plain".equals(type) check, which would
+    // silently reject the share if the sender attaches parameters like
+    // "text/plain; charset=utf-8" - startsWith tolerates that.
+    if (type == null || !type.startsWith("text/plain")) return;
     if (sharedText == null || sharedText.trim().isEmpty()) return;
 
     final String text = sharedText.trim();
@@ -150,11 +165,15 @@ public class MainActivity extends BridgeActivity {
     new Handler(Looper.getMainLooper()).post(() -> {
       try {
         PluginHandle handle = getBridge().getPlugin("ShareReceiver");
+        // TEMPORARY DIAGNOSTIC (share-debug-2) - remove once the share flow
+        // is confirmed working end to end.
+        Toast.makeText(this, "share-debug-2: delivering, pluginFound=" + (handle != null), Toast.LENGTH_LONG).show();
         if (handle != null) {
           ((SharePlugin) handle.getInstance()).deliverSharedPlace(payload);
         }
       } catch (Exception e) {
         Log.w(TAG, "deliverSharedPlace failed", e);
+        Toast.makeText(this, "share-debug-2: delivery failed - " + e, Toast.LENGTH_LONG).show();
       }
     });
   }

@@ -1396,6 +1396,10 @@
   const shareReceiver = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.ShareReceiver;
   if (shareReceiver) {
     shareReceiver.addListener("sharedPlace", handleSharedPlace);
+  } else if (window.Capacitor) {
+    // TEMPORARY DIAGNOSTIC (share-debug-2) - remove once the share flow is
+    // confirmed working end to end. Only fires on native (Capacitor present).
+    alert("share-debug-2: ShareReceiver plugin not found on window.Capacitor.Plugins");
   }
 
   topbarTitle.textContent = TRIP.title;
