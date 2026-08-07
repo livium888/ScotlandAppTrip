@@ -162,6 +162,57 @@
     });
   }
 
+  let eatsFilter = "All";
+
+  function renderEats() {
+    const cities = ["All", "Edinburgh", "Stirling", "Glasgow"];
+    let html = `<div class="filter-row">`;
+    cities.forEach((c) => {
+      html += `<button class="filter-chip ${c === eatsFilter ? "active" : ""}" data-city="${esc(c)}">${esc(c)}</button>`;
+    });
+    html += `</div>`;
+
+    html += `
+      <div class="card">
+        <p>Independent, well-reviewed picks near each stop — not fast-food chains, not fine-dining prices.
+        £ = casual/cheap, ££ = mid-range, £££ = a step up but still no white tablecloths.</p>
+      </div>
+    `;
+
+    const list = EATS.filter((e) => eatsFilter === "All" || e.city === eatsFilter);
+
+    list.forEach((e) => {
+      const mapsUrl = e.mapsQuery
+        ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(e.mapsQuery)}`
+        : null;
+      html += `
+        <div class="card place-card">
+          <div style="flex:1;">
+            <div class="place-name">${esc(e.name)}</div>
+            <div class="place-meta">
+              <span class="pill" style="background:${cityColor(e.city)}">${esc(e.city)}</span>${esc(e.area)} · ${esc(e.meal)}
+            </div>
+            <div class="place-notes">${esc(e.notes)}</div>
+            <div class="place-links">
+              ${e.website ? `<a href="${esc(e.website)}" target="_blank" rel="noopener">🌐 Website</a>` : ""}
+              ${mapsUrl ? `<a href="${mapsUrl}" target="_blank" rel="noopener">📍 Map</a>` : ""}
+            </div>
+          </div>
+          <div class="place-price">${esc(e.price)}</div>
+        </div>
+      `;
+    });
+
+    view.innerHTML = html;
+
+    view.querySelectorAll("[data-city]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        eatsFilter = btn.getAttribute("data-city");
+        renderEats();
+      });
+    });
+  }
+
   function renderBudget() {
     const totalLow = BUDGET.reduce((a, b) => a + b.low, 0);
     const totalHigh = BUDGET.reduce((a, b) => a + b.high, 0);
@@ -244,6 +295,7 @@
     overview: { render: renderOverview, sub: TRIP.dates },
     itinerary: { render: renderItinerary, sub: "Tap a day to expand" },
     places: { render: renderPlaces, sub: "Edinburgh · Stirling · Glasgow" },
+    eats: { render: renderEats, sub: "Lunch & dinner picks, kid-friendly" },
     budget: { render: renderBudget, sub: "Estimated activity costs" },
     tips: { render: renderTips, sub: "Walking, weather, safety & packing" },
   };
