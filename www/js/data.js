@@ -28,6 +28,7 @@ const DAYS = [
       {
         time: "PM",
         name: "Royal Botanic Garden Edinburgh",
+        place: "Royal Botanic Garden",
         detail:
           "Free entry (donation welcome). 70+ acres of lawns and paths — perfect for a 4-year-old to run off travel energy. Note: the Glasshouses are closed for restoration through 2026.",
         tag: "Free",
@@ -80,6 +81,7 @@ const DAYS = [
       {
         time: "10:00",
         name: "National Museum of Scotland",
+        place: "National Museum of Scotland",
         detail:
           "Free entry. Head straight for the Imagine gallery (under-5s soft play/tactile), then the T-Rex skeleton and interactive Science floor. Café on site.",
         tag: "Free",
@@ -110,6 +112,7 @@ const DAYS = [
       {
         time: "10:00",
         name: "Stirling Castle",
+        place: "Stirling Castle",
         detail:
           "Great Hall, Royal Palace, kitchens. Adult from £17.50 online, under-7s free, family (2+2) ~£53 online. Open 9:30–18:00 (Apr–Sep). Less crowded than Edinburgh Castle — easier with a walking 4-year-old. Castle car park: £4 flat, up to 4 hours — can fill up on busy days, so arrive close to opening.",
         tag: "£53 family",
@@ -117,6 +120,7 @@ const DAYS = [
       {
         time: "PM",
         name: "National Wallace Monument (view from outside, optional climb)",
+        place: "National Wallace Monument",
         detail:
           "The tower itself is a 246-step spiral staircase — tough for a 4-year-old, so treat the climb as optional/for one adult. The grounds and view up at the monument are worth the stop regardless. Adult ~£16.50, family ~£44. Has its own car park.",
         tag: "Optional climb",
@@ -146,6 +150,7 @@ const DAYS = [
       {
         time: "10:00",
         name: "Kelvingrove Art Gallery & Museum",
+        place: "Kelvingrove Art Gallery & Museum",
         detail:
           "Free entry to the permanent collection — Scotland's most-visited free attraction. Sir Roger the stuffed elephant, floating heads, arms & armour, natural history. Open Mon–Thu & Sat 10–5, Fri & Sun 11–5. On-site car park off Argyle Street, ~100 spaces, £3/hour.",
         tag: "Free",
@@ -159,6 +164,7 @@ const DAYS = [
       {
         time: "13:30",
         name: "Glasgow Science Centre",
+        place: "Glasgow Science Centre",
         detail:
           "Interactive hands-on exhibits, planetarium (+£3.50). Adult ~£15.50 off-peak, child ~£12, family (2+2) ~£35. Open Wed–Sun in term time, daily in school holidays. Its own car park is £4 flat for the day if you're visiting the Centre.",
         tag: "~£35 family",
@@ -182,6 +188,7 @@ const DAYS = [
       {
         time: "10:00",
         name: "Edinburgh Zoo",
+        place: "Edinburgh Zoo",
         detail:
           "Adult £29.50, child (3–15) £17.50, under-3 free; family ~£48. Hillside site, fine for a walking 4-year-old with good shoes. Note: Penguin Parade is postponed indefinitely (avian flu precaution) — don't promise penguins on parade.",
         tag: "~£48 family",
@@ -189,6 +196,7 @@ const DAYS = [
       {
         time: "alt",
         name: "Alternative: Portobello Beach",
+        place: "Portobello Beach",
         detail:
           "Free. Sand, shallow paddling, promenade for scooters, two playgrounds, ice cream. Bus 15/26, ~20–25 min.",
         tag: "Free",
@@ -205,6 +213,7 @@ const DAYS = [
       {
         time: "09:00",
         name: "Camera Obscura & World of Illusions (optional)",
+        place: "Camera Obscura & World of Illusions",
         detail:
           "Early-bird before 9am saves ~£4. Six floors of illusions, rooftop views. ~2 hrs, all-weather. Plenty of stairs — fine since you're walking, not pushing a stroller.",
         tag: "Optional",

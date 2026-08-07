@@ -18,6 +18,70 @@
     return CITY_COLORS[city] || CITY_COLORS.Travel;
   }
 
+  function mapsUrlFor(mapsQuery) {
+    return mapsQuery
+      ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(mapsQuery)}`
+      : null;
+  }
+
+  function findPlace(name) {
+    return PLACES.find((p) => p.name === name) || EATS.find((e) => e.name === name);
+  }
+
+  // ---------- Place detail modal ----------
+
+  const placeModal = document.getElementById("placeModal");
+
+  function openPlaceModal(name) {
+    const p = findPlace(name);
+    if (!p) return;
+    const mapsUrl = mapsUrlFor(p.mapsQuery);
+    const subtitle = [p.category || p.meal, p.area].filter(Boolean).join(" · ");
+
+    placeModal.innerHTML = `
+      <div class="modal-backdrop" data-close="1">
+        <div class="modal-sheet" role="dialog" aria-label="${esc(p.name)}">
+          <div class="modal-handle"></div>
+          <button class="modal-close" data-close="1" aria-label="Close">✕</button>
+          <div class="modal-body">
+            <span class="pill" style="background:${cityColor(p.city)}">${esc(p.city)}</span>
+            <h2 class="modal-title">${esc(p.name)}</h2>
+            ${subtitle ? `<div class="modal-subtitle">${esc(subtitle)}</div>` : ""}
+            <div class="modal-price">${esc(p.price)}</div>
+            ${
+              p.nearAttraction
+                ? `<div class="place-distance">📍 ${esc(p.distance)} — near ${esc(p.nearAttraction)}</div>`
+                : ""
+            }
+            <p class="modal-notes">${esc(p.notes)}</p>
+            <div class="modal-actions">
+              ${
+                p.website
+                  ? `<a class="modal-btn" href="${esc(p.website)}" target="_blank" rel="noopener">🌐 Official website</a>`
+                  : ""
+              }
+              ${
+                mapsUrl
+                  ? `<a class="modal-btn modal-btn-primary" href="${mapsUrl}" target="_blank" rel="noopener">📍 Open in Google Maps</a>`
+                  : ""
+              }
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+    placeModal.classList.add("open");
+    placeModal.querySelectorAll("[data-close]").forEach((el) => {
+      el.addEventListener("click", (e) => {
+        if (e.target === el) closePlaceModal();
+      });
+    });
+  }
+
+  function closePlaceModal() {
+    placeModal.classList.remove("open");
+  }
+
   // ---------- Views ----------
 
   function renderOverview() {
@@ -90,10 +154,12 @@
             ${d.items
               .map(
                 (it) => `
-              <div class="item">
+              <div class="item${it.place ? " item-linked" : ""}"${
+                  it.place ? ` data-place="${esc(it.place)}"` : ""
+                }>
                 <div class="item-time">${esc(it.time)}</div>
                 <div class="item-body">
-                  <div class="item-name">${esc(it.name)}</div>
+                  <div class="item-name">${esc(it.name)}${it.place ? ' <span class="item-arrow">›</span>' : ""}</div>
                   <div class="item-detail">${esc(it.detail)}</div>
                   <span class="item-tag">${esc(it.tag)}</span>
                 </div>
@@ -110,6 +176,12 @@
     view.querySelectorAll("[data-toggle]").forEach((el) => {
       el.addEventListener("click", () => {
         el.closest(".day-card").classList.toggle("open");
+      });
+    });
+
+    view.querySelectorAll("[data-place]").forEach((el) => {
+      el.addEventListener("click", () => {
+        openPlaceModal(el.getAttribute("data-place"));
       });
     });
 
