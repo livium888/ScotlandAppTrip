@@ -24,6 +24,13 @@
       : null;
   }
 
+  // A raw "lat,lon" query just drops an unlabelled pin - no name, reviews,
+  // hours, or photos attached. Searching by name (+ city for disambiguation)
+  // resolves to the actual place listing instead, so always prefer that.
+  function pickMapsQuery(p) {
+    return p.mapsQuery || `${p.name}${p.city ? ", " + p.city : ""}, Scotland`;
+  }
+
   function findPlace(name) {
     return PLACES.find((p) => p.name === name) || EATS.find((e) => e.name === name);
   }
@@ -879,9 +886,7 @@
   }
 
   function renderPickCard(p) {
-    const mapsUrl = p.lat != null
-      ? `https://www.google.com/maps/search/?api=1&query=${p.lat},${p.lon}`
-      : mapsUrlFor(p.mapsQuery);
+    const mapsUrl = mapsUrlFor(pickMapsQuery(p));
     let descriptionHtml;
     if (p.enrichStatus === "loading") {
       descriptionHtml = `<p class="pick-status">Fetching details from OpenStreetMap & Wikipedia…</p>`;
@@ -1009,16 +1014,17 @@
       renderPicks();
       return;
     }
+    const nearCity = nearestCity(candidate.lat, candidate.lon);
     const pick = {
       id,
       source: "custom",
       name: candidate.name,
-      city: nearestCity(candidate.lat, candidate.lon),
+      city: nearCity,
       category: candidate.type || "Custom",
       notes: "",
       description: "",
       website: candidate.website || "",
-      mapsQuery: candidate.name,
+      mapsQuery: `${candidate.name}, ${nearCity}, Scotland`,
       lat: candidate.lat,
       lon: candidate.lon,
       enrichStatus: "loading",
