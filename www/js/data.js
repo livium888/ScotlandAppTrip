@@ -220,6 +220,8 @@ const PLACES = [
     category: "Museum",
     price: "Free",
     notes: "Under-5s Imagine gallery, T-Rex, interactive Science floor. Best rainy-day pick.",
+    website: "https://www.nms.ac.uk/national-museum-of-scotland/",
+    mapsQuery: "National Museum of Scotland Chambers Street Edinburgh",
   },
   {
     city: "Edinburgh",
@@ -227,6 +229,8 @@ const PLACES = [
     category: "Park",
     price: "Free (donation)",
     notes: "70+ acres, calm escape from festival crowds. Glasshouses closed through 2026.",
+    website: "https://www.rbge.org.uk/",
+    mapsQuery: "Royal Botanic Garden Edinburgh Inverleith Row",
   },
   {
     city: "Edinburgh",
@@ -234,6 +238,8 @@ const PLACES = [
     category: "Zoo",
     price: "~£48 family",
     notes: "Book online ahead. Penguin Parade postponed indefinitely.",
+    website: "https://www.edinburghzoo.org.uk/",
+    mapsQuery: "Edinburgh Zoo Corstorphine Road",
   },
   {
     city: "Edinburgh",
@@ -241,6 +247,8 @@ const PLACES = [
     category: "Attraction",
     price: "~£25 adult",
     notes: "Early-bird discount before 9am. All-weather, lots of stairs.",
+    website: "https://www.camera-obscura.co.uk/",
+    mapsQuery: "Camera Obscura Castlehill Edinburgh",
   },
   {
     city: "Edinburgh",
@@ -248,6 +256,8 @@ const PLACES = [
     category: "Castle",
     price: "~£21.50 adult",
     notes: "Steep cobbles — go at 09:30 opening on a weekday to beat crowds.",
+    website: "https://www.edinburghcastle.scot/",
+    mapsQuery: "Edinburgh Castle Castlehill Edinburgh",
   },
   {
     city: "Edinburgh",
@@ -255,6 +265,8 @@ const PLACES = [
     category: "Beach",
     price: "Free",
     notes: "Sand, paddling, playgrounds, ice cream. Bus 15/26.",
+    website: "https://www.edinburgh.gov.uk/directory-record/1085967/portobello-parks-and-beach",
+    mapsQuery: "Portobello Beach Edinburgh",
   },
   {
     city: "Edinburgh",
@@ -262,6 +274,8 @@ const PLACES = [
     category: "Beach",
     price: "Free",
     notes: "Tidal causeway to Cramond Island — check safe-crossing times before walking out.",
+    website: "https://www.cramondassociation.org.uk/visiting-cramond",
+    mapsQuery: "Cramond Edinburgh",
   },
   {
     city: "Stirling",
@@ -269,6 +283,8 @@ const PLACES = [
     category: "Castle",
     price: "~£53 family",
     notes: "Great Hall, Royal Palace. Quieter than Edinburgh Castle. ~45 min train from Edinburgh.",
+    website: "https://www.stirlingcastle.scot/",
+    mapsQuery: "Stirling Castle Stirling",
   },
   {
     city: "Stirling",
@@ -276,6 +292,8 @@ const PLACES = [
     category: "Monument",
     price: "~£44 family",
     notes: "246-step spiral stair to the top — treat as optional with a 4-year-old.",
+    website: "https://www.nationalwallacemonument.com/",
+    mapsQuery: "National Wallace Monument Abbey Craig Stirling",
   },
   {
     city: "Glasgow",
@@ -283,6 +301,8 @@ const PLACES = [
     category: "Museum",
     price: "Free",
     notes: "Scotland's most-visited free attraction. Great for kids — animals, arms & armour.",
+    website: "https://www.glasgowlife.org.uk/museums/venues/kelvingrove-art-gallery-and-museum",
+    mapsQuery: "Kelvingrove Art Gallery and Museum Glasgow",
   },
   {
     city: "Glasgow",
@@ -290,6 +310,8 @@ const PLACES = [
     category: "Science Centre",
     price: "~£35 family",
     notes: "Hands-on interactive exhibits, planetarium extra. Check open days (closed Mon/Tue in term time).",
+    website: "https://www.glasgowsciencecentre.org/",
+    mapsQuery: "Glasgow Science Centre 50 Pacific Quay",
   },
 ];
 

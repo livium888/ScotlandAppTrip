@@ -210,6 +210,14 @@ body {
 .place-name { font-weight: 700; font-size: 14.5px; margin-bottom: 3px; }
 .place-meta { font-size: 12px; color: var(--ink-soft); margin-bottom: 6px; }
 .place-notes { font-size: 13px; color: var(--ink-soft); line-height: 1.4; }
+.place-links { display: flex; gap: 14px; margin-top: 8px; }
+.place-links a {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--navy);
+  text-decoration: none;
+}
+.place-links a:active { opacity: 0.6; }
 .place-price {
   flex-shrink: 0;
   font-size: 12px;

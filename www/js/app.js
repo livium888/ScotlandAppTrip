@@ -131,6 +131,9 @@
     const list = PLACES.filter((p) => placeFilter === "All" || p.city === placeFilter);
 
     list.forEach((p) => {
+      const mapsUrl = p.mapsQuery
+        ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(p.mapsQuery)}`
+        : null;
       html += `
         <div class="card place-card">
           <div style="flex:1;">
@@ -139,6 +142,10 @@
               <span class="pill" style="background:${cityColor(p.city)}">${esc(p.city)}</span>${esc(p.category)}
             </div>
             <div class="place-notes">${esc(p.notes)}</div>
+            <div class="place-links">
+              ${p.website ? `<a href="${esc(p.website)}" target="_blank" rel="noopener">🌐 Website</a>` : ""}
+              ${mapsUrl ? `<a href="${mapsUrl}" target="_blank" rel="noopener">📍 Map</a>` : ""}
+            </div>
           </div>
           <div class="place-price">${esc(p.price)}</div>
         </div>
