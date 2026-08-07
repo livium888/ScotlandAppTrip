@@ -739,17 +739,45 @@
 
   // Overpass (OpenStreetMap's "find everything of type X near here" API) -
   // free, no key, same OSM data Nominatim and the tile layer already use.
+  // The free public Overpass instance (overpass-api.de) is shared community
+  // infrastructure and can be slow, rate-limited, or briefly down. Fall
+  // through a couple of mirror servers before giving up.
+  const OVERPASS_ENDPOINTS = [
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+    "https://overpass.openstreetmap.ru/api/interpreter",
+  ];
+
   async function overpassNearby(lat, lon, cat, radius) {
     radius = radius || 1200;
     const filter = `["${cat.tag}"="${cat.value}"]`;
-    const q = `[out:json][timeout:25];(node${filter}(around:${radius},${lat},${lon});way${filter}(around:${radius},${lat},${lon}););out center 25;`;
-    const res = await fetch("https://overpass-api.de/api/interpreter", {
-      method: "POST",
-      body: q,
-      headers: { "Content-Type": "text/plain" },
-    });
-    if (!res.ok) throw new Error("overpass error");
-    const data = await res.json();
+    const q = `[out:json][timeout:20];(node${filter}(around:${radius},${lat},${lon});way${filter}(around:${radius},${lat},${lon}););out center 25;`;
+
+    let lastError = null;
+    let data = null;
+    for (const endpoint of OVERPASS_ENDPOINTS) {
+      try {
+        const res = await fetch(endpoint, {
+          method: "POST",
+          body: q,
+          headers: { "Content-Type": "text/plain" },
+        });
+        if (!res.ok) {
+          lastError = new Error(`overpass ${endpoint} returned ${res.status}`);
+          continue;
+        }
+        data = await res.json();
+        lastError = null;
+        break;
+      } catch (e) {
+        lastError = e;
+      }
+    }
+    if (lastError) {
+      console.error("overpassNearby failed on all endpoints:", lastError);
+      throw lastError;
+    }
+
     return data.elements
       .map((el) => {
         const c = el.type === "node" ? { lat: el.lat, lon: el.lon } : el.center;
@@ -808,7 +836,12 @@
         if (state.status === "loading") {
           html += `<p class="pick-status" style="padding:0 16px 16px;">Searching OpenStreetMap for ${esc(catLabel(state.category)).toLowerCase()} nearby…</p>`;
         } else if (state.status === "error") {
-          html += `<p class="pick-status" style="padding:0 16px 16px;">Search failed — try again in a moment.</p>`;
+          html += `
+            <div style="padding:0 16px 16px;">
+              <p class="pick-status">Search failed — the free OpenStreetMap server this uses can be slow or overloaded sometimes. Give it a moment and retry.</p>
+              <button class="candidate-add" data-nearby-cat="${esc(p.id)}|${esc(state.category)}">↻ Retry</button>
+            </div>
+          `;
         } else if (state.status === "done") {
           if (!state.results.length) {
             html += `<p class="pick-status" style="padding:0 16px 16px;">No ${esc(catLabel(state.category)).toLowerCase()} found within ~1.2km.</p>`;
