@@ -1362,15 +1362,15 @@
   });
 
   // ---------- Receiving a share from Google Maps ----------
-  // Called from native Android (MainActivity.java) when the app is opened
-  // via the share sheet from Google Maps. Two shapes of payload:
+  // Delivered by the native ShareReceiver plugin (MainActivity.java /
+  // SharePlugin.java) when the app is opened via the share sheet from
+  // Google Maps. Two shapes of payload:
   //  - {name, lat, lon, rawText}: got trusted coordinates straight from the
   //    share link - skip straight to "which folder does this go in".
   //  - {name, rawText} only: could only recover a name (e.g. a short link
   //    that failed to resolve) - fall back to the normal search-and-confirm
   //    flow so the map still confirms the right match.
-  window.handleSharedPlace = function (payload) {
-    window.__sharedPlacePayload = null;
+  function handleSharedPlace(payload) {
     if (!payload || !payload.name) return;
     showView("picks");
     if (payload.lat != null && payload.lon != null) {
@@ -1388,13 +1388,16 @@
       const input = document.getElementById("pickSearchInput");
       if (input) input.value = payload.name;
     }
-  };
+  }
+
+  // notifyListeners on the native side uses retainUntilConsumed, so this
+  // still fires with the right payload even if the share arrived before the
+  // page (and this addListener call) existed - no race with page load time.
+  const shareReceiver = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.ShareReceiver;
+  if (shareReceiver) {
+    shareReceiver.addListener("sharedPlace", handleSharedPlace);
+  }
 
   topbarTitle.textContent = TRIP.title;
   showView("overview");
-
-  // In case the share intent arrived before this script finished loading.
-  if (window.__sharedPlacePayload) {
-    window.handleSharedPlace(window.__sharedPlacePayload);
-  }
 })();

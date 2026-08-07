@@ -7,11 +7,12 @@ import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
 import com.getcapacitor.BridgeActivity;
+import com.getcapacitor.JSObject;
+import com.getcapacitor.PluginHandle;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import org.json.JSONObject;
 
 /**
  * Beyond Capacitor's default activity, this app registers as an Android
@@ -37,8 +38,14 @@ public class MainActivity extends BridgeActivity {
 
   @Override
   protected void onCreate(Bundle savedInstanceState) {
+    // Deliberately not also calling handleShareIntent(getIntent()) here:
+    // BridgeActivity's onCreate() ends by calling this.load(), which itself
+    // calls this.onNewIntent(getIntent()) - virtual dispatch sends that to
+    // the override below, so the initial intent is already handled once
+    // super.onCreate() returns. Calling it again here would double-fire
+    // (and, with retainUntilConsumed, double-queue) every cold-start share.
+    registerPlugin(SharePlugin.class);
     super.onCreate(savedInstanceState);
-    handleShareIntent(getIntent());
   }
 
   @Override
@@ -84,7 +91,7 @@ public class MainActivity extends BridgeActivity {
     }
 
     if (name == null || name.isEmpty()) name = rawName;
-    deliverToWebView(name, lat, lon, sharedText);
+    deliverSharedPlace(name, lat, lon, sharedText);
   }
 
   // Manually follows redirects (rather than letting HttpURLConnection auto-follow)
@@ -127,29 +134,28 @@ public class MainActivity extends BridgeActivity {
     return null;
   }
 
-  private void deliverToWebView(String name, Double lat, Double lon, String rawText) {
-    try {
-      JSONObject payload = new JSONObject();
-      payload.put("name", name);
-      payload.put("rawText", rawText);
-      if (lat != null && lon != null) {
-        payload.put("lat", lat);
-        payload.put("lon", lon);
-      }
-      // Always stash it as a plain property first (can't "fail" the way a
-      // call to a maybe-not-yet-defined function could), then also try
-      // calling the handler directly in case the page already loaded it.
-      String js =
-        "window.__sharedPlacePayload = " +
-        payload.toString() +
-        "; if (window.handleSharedPlace) { window.handleSharedPlace(window.__sharedPlacePayload); }";
-      new Handler(Looper.getMainLooper()).post(() -> {
-        if (getBridge() != null && getBridge().getWebView() != null) {
-          getBridge().getWebView().evaluateJavascript(js, null);
-        }
-      });
-    } catch (Exception e) {
-      Log.w(TAG, "deliverToWebView failed", e);
+  // Delivered through the ShareReceiver Capacitor plugin (retainUntilConsumed
+  // notifyListeners) rather than a raw evaluateJavascript() call. On a cold
+  // start via the share sheet, the WebView is still loading index.html/app.js
+  // at this point, so a bare JS injection here can land on a blank page and
+  // be silently discarded before the real page - and its listener - exist.
+  private void deliverSharedPlace(String name, Double lat, Double lon, String rawText) {
+    JSObject payload = new JSObject();
+    payload.put("name", name);
+    payload.put("rawText", rawText);
+    if (lat != null && lon != null) {
+      payload.put("lat", lat);
+      payload.put("lon", lon);
     }
+    new Handler(Looper.getMainLooper()).post(() -> {
+      try {
+        PluginHandle handle = getBridge().getPlugin("ShareReceiver");
+        if (handle != null) {
+          ((SharePlugin) handle.getInstance()).deliverSharedPlace(payload);
+        }
+      } catch (Exception e) {
+        Log.w(TAG, "deliverSharedPlace failed", e);
+      }
+    });
   }
 }
