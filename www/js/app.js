@@ -28,7 +28,10 @@
   // hours, or photos attached. Searching by name (+ city for disambiguation)
   // resolves to the actual place listing instead, so always prefer that.
   function pickMapsQuery(p) {
-    return p.mapsQuery || `${p.name}${p.city ? ", " + p.city : ""}, Scotland`;
+    // Deliberately never falls back to p.city (the folder) - that's pure
+    // organisation, not geography, and baking it into the search text can
+    // send Maps looking in the wrong place entirely.
+    return p.mapsQuery || `${p.name}, Scotland`;
   }
 
   function findPlace(name) {
@@ -66,6 +69,36 @@
 
   function savePicks(picks) {
     localStorage.setItem(PICKS_KEY, JSON.stringify(picks));
+  }
+
+  // Folders are user-owned organisation, separate from geography - a pick's
+  // folder should never be baked into its Google Maps search query, since a
+  // rough nearest-city guess (or a folder the user deliberately renamed)
+  // being injected into the search text can make Maps return the wrong place.
+  const FOLDERS_KEY = "scotland-trip-folders-v1";
+
+  function loadFolders() {
+    try {
+      const f = JSON.parse(localStorage.getItem(FOLDERS_KEY));
+      return Array.isArray(f) && f.length ? f : ["Edinburgh", "Stirling", "Glasgow"];
+    } catch (e) {
+      return ["Edinburgh", "Stirling", "Glasgow"];
+    }
+  }
+
+  function saveFolders(folders) {
+    localStorage.setItem(FOLDERS_KEY, JSON.stringify(folders));
+  }
+
+  function addFolder(name) {
+    const trimmed = (name || "").trim();
+    if (!trimmed) return null;
+    const folders = loadFolders();
+    if (!folders.includes(trimmed)) {
+      folders.push(trimmed);
+      saveFolders(folders);
+    }
+    return trimmed;
   }
 
   function pickId(source, name) {
@@ -324,6 +357,58 @@
 
   function closePlaceModal() {
     placeModal.classList.remove("open");
+  }
+
+  // Asks which folder a new pick should go in - existing folders as chips,
+  // or type a new one to create it on the spot. onConfirm(folder) fires once
+  // the user picks or creates one; the sheet closes either way.
+  function openFolderPicker(candidateName, suggestedFolder, onConfirm) {
+    const folders = loadFolders();
+
+    placeModal.innerHTML = `
+      <div class="modal-backdrop" data-close="1">
+        <div class="modal-sheet" role="dialog" aria-label="Choose a folder">
+          <div class="modal-handle"></div>
+          <button class="modal-close" data-close="1" aria-label="Close">✕</button>
+          <div class="modal-body">
+            <h2 class="modal-title">Add "${esc(candidateName)}" to…</h2>
+            <div class="filter-row" id="folderChips">
+              ${folders
+                .map(
+                  (f) =>
+                    `<button class="filter-chip${f === suggestedFolder ? " active" : ""}" data-pick-folder="${esc(f)}">${esc(f)}</button>`
+                )
+                .join("")}
+            </div>
+            <form class="search-bar" id="newFolderForm" style="margin-top:4px;">
+              <input type="text" id="newFolderInput" placeholder="Or create a new folder…" autocomplete="off" />
+              <button type="submit" aria-label="Create folder">+</button>
+            </form>
+          </div>
+        </div>
+      </div>
+    `;
+    placeModal.classList.add("open");
+
+    const finalize = (folder) => {
+      closePlaceModal();
+      onConfirm(folder);
+    };
+
+    placeModal.querySelectorAll("[data-close]").forEach((el) => {
+      el.addEventListener("click", (e) => {
+        if (e.target === el) closePlaceModal();
+      });
+    });
+    placeModal.querySelectorAll("[data-pick-folder]").forEach((btn) => {
+      btn.addEventListener("click", () => finalize(btn.getAttribute("data-pick-folder")));
+    });
+    document.getElementById("newFolderForm").addEventListener("submit", (e) => {
+      e.preventDefault();
+      const name = document.getElementById("newFolderInput").value.trim();
+      if (!name) return;
+      finalize(addFolder(name));
+    });
   }
 
   // ---------- Sharing ----------
@@ -901,7 +986,7 @@
     }
 
     const mapElId = pickMapElId(p.id);
-    const groupOptions = ["Edinburgh", "Stirling", "Glasgow", "Other"];
+    const folders = loadFolders();
 
     return `
       <div class="card pick-card" data-pick-id="${esc(p.id)}">
@@ -919,13 +1004,14 @@
         ${p.lat != null ? `<div class="pick-mini-map" id="${mapElId}"></div>` : ""}
         ${mapsUrl ? `<a class="pick-maps-btn" href="${mapsUrl}" target="_blank" rel="noopener">📍 Open in Google Maps</a>` : ""}
         <div class="move-row">
-          <span class="move-label">Group:</span>
-          ${groupOptions
+          <span class="move-label">Folder:</span>
+          ${folders
             .map(
               (c) =>
                 `<button class="move-chip${p.city === c ? " active" : ""}" data-move-pick="${esc(p.id)}|${esc(c)}">${esc(c)}</button>`
             )
             .join("")}
+          <button class="move-chip" data-new-folder-for="${esc(p.id)}">+ New</button>
         </div>
         ${renderNearbyPanel(p)}
       </div>
@@ -1006,7 +1092,7 @@
     L.marker([pick.lat, pick.lon]).addTo(map);
   }
 
-  async function confirmAddCandidate(candidate) {
+  async function confirmAddCandidate(candidate, folder) {
     const id = pickId("custom", candidate.name);
     const picks = loadPicks();
     if (picks.some((p) => p.id === id)) {
@@ -1014,17 +1100,20 @@
       renderPicks();
       return;
     }
-    const nearCity = nearestCity(candidate.lat, candidate.lon);
+    // Maps query is built from real geographic data (Nominatim's full
+    // address, when we have it) - never from the folder, which is just the
+    // user's own organisation and may have nothing to do with geography.
+    const mapsQuery = candidate.displayName || `${candidate.name}, Scotland`;
     const pick = {
       id,
       source: "custom",
       name: candidate.name,
-      city: nearCity,
+      city: folder || nearestCity(candidate.lat, candidate.lon),
       category: candidate.type || "Custom",
       notes: "",
       description: "",
       website: candidate.website || "",
-      mapsQuery: `${candidate.name}, ${nearCity}, Scotland`,
+      mapsQuery,
       lat: candidate.lat,
       lon: candidate.lon,
       enrichStatus: "loading",
@@ -1102,12 +1191,22 @@
     } else {
       html += `<button class="hero-share" id="sharePicks" style="color:var(--navy);border-color:var(--line);background:var(--card);margin:16px 0;">↗ Share my picks</button>`;
 
-      const groups = { Edinburgh: [], Stirling: [], Glasgow: [], Other: [], Unsorted: [] };
+      // Section order follows the folders list (so a manually reordered/renamed
+      // folder stays put), then any leftover city values from before the
+      // folders feature existed, then Unsorted last.
+      const sectionOrder = loadFolders().slice();
+      picks.forEach((p) => {
+        if (p.city && !sectionOrder.includes(p.city)) sectionOrder.push(p.city);
+      });
+      sectionOrder.push("Unsorted");
+
+      const groups = {};
+      sectionOrder.forEach((c) => (groups[c] = []));
       picks.forEach((p) => {
         (groups[p.city] || groups.Unsorted).push(p);
       });
 
-      Object.keys(groups).forEach((city) => {
+      sectionOrder.forEach((city) => {
         if (!groups[city].length) return;
         html += `<div class="section-label">${esc(city)}</div>`;
         groups[city].forEach((p) => {
@@ -1141,7 +1240,9 @@
       initSearchResultsMap(pickSearch.results);
       view.querySelectorAll("[data-add-candidate]").forEach((btn) => {
         btn.addEventListener("click", () => {
-          confirmAddCandidate(pickSearch.results[Number(btn.getAttribute("data-add-candidate"))]);
+          const candidate = pickSearch.results[Number(btn.getAttribute("data-add-candidate"))];
+          const suggested = nearestCity(candidate.lat, candidate.lon);
+          openFolderPicker(candidate.name, suggested, (folder) => confirmAddCandidate(candidate, folder));
         });
       });
     }
@@ -1186,8 +1287,11 @@
         const [id, idx] = btn.getAttribute("data-add-nearby").split("|");
         const state = getNearby(id);
         const r = state.results[Number(idx)];
+        const parentPick = picks.find((p) => p.id === id);
         if (!r) return;
-        confirmAddCandidate({ name: r.name, lat: r.lat, lon: r.lon, type: catLabel(state.category), website: r.website });
+        const candidate = { name: r.name, lat: r.lat, lon: r.lon, type: catLabel(state.category), website: r.website };
+        const suggested = (parentPick && parentPick.city) || nearestCity(r.lat, r.lon);
+        openFolderPicker(candidate.name, suggested, (folder) => confirmAddCandidate(candidate, folder));
       });
     });
 
@@ -1216,6 +1320,17 @@
         const [id, city] = btn.getAttribute("data-move-pick").split("|");
         setPickCity(id, city);
         renderPicks();
+      });
+    });
+
+    view.querySelectorAll("[data-new-folder-for]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const id = btn.getAttribute("data-new-folder-for");
+        const pick = picks.find((p) => p.id === id);
+        openFolderPicker(pick ? pick.name : "this pick", pick && pick.city, (folder) => {
+          setPickCity(id, folder);
+          renderPicks();
+        });
       });
     });
   }
