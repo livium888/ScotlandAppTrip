@@ -209,6 +209,12 @@ body {
 .place-card { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
 .place-name { font-weight: 700; font-size: 14.5px; margin-bottom: 3px; }
 .place-meta { font-size: 12px; color: var(--ink-soft); margin-bottom: 6px; }
+.place-distance {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--teal);
+  margin-bottom: 5px;
+}
 .place-notes { font-size: 13px; color: var(--ink-soft); line-height: 1.4; }
 .place-links { display: flex; gap: 14px; margin-top: 8px; }
 .place-links a {

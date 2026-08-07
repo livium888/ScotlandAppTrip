@@ -192,6 +192,11 @@
             <div class="place-meta">
               <span class="pill" style="background:${cityColor(e.city)}">${esc(e.city)}</span>${esc(e.area)} · ${esc(e.meal)}
             </div>
+            ${
+              e.nearAttraction
+                ? `<div class="place-distance">📍 ${esc(e.distance)} — near ${esc(e.nearAttraction)}</div>`
+                : ""
+            }
             <div class="place-notes">${esc(e.notes)}</div>
             <div class="place-links">
               ${e.website ? `<a href="${esc(e.website)}" target="_blank" rel="noopener">🌐 Website</a>` : ""}
