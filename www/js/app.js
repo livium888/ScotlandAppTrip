@@ -1361,6 +1361,40 @@
     t.addEventListener("click", () => showView(t.getAttribute("data-view")));
   });
 
+  // ---------- Receiving a share from Google Maps ----------
+  // Called from native Android (MainActivity.java) when the app is opened
+  // via the share sheet from Google Maps. Two shapes of payload:
+  //  - {name, lat, lon, rawText}: got trusted coordinates straight from the
+  //    share link - skip straight to "which folder does this go in".
+  //  - {name, rawText} only: could only recover a name (e.g. a short link
+  //    that failed to resolve) - fall back to the normal search-and-confirm
+  //    flow so the map still confirms the right match.
+  window.handleSharedPlace = function (payload) {
+    window.__sharedPlacePayload = null;
+    if (!payload || !payload.name) return;
+    showView("picks");
+    if (payload.lat != null && payload.lon != null) {
+      const candidate = {
+        name: payload.name,
+        lat: payload.lat,
+        lon: payload.lon,
+        displayName: payload.rawText,
+      };
+      const suggested = nearestCity(payload.lat, payload.lon);
+      openFolderPicker(candidate.name, suggested, (folder) => confirmAddCandidate(candidate, folder));
+    } else {
+      pickSearch = { query: payload.name, status: "idle", results: [] };
+      renderPicks();
+      const input = document.getElementById("pickSearchInput");
+      if (input) input.value = payload.name;
+    }
+  };
+
   topbarTitle.textContent = TRIP.title;
   showView("overview");
+
+  // In case the share intent arrived before this script finished loading.
+  if (window.__sharedPlacePayload) {
+    window.handleSharedPlace(window.__sharedPlacePayload);
+  }
 })();
