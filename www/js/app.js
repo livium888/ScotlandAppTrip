@@ -28,6 +28,23 @@
     return PLACES.find((p) => p.name === name) || EATS.find((e) => e.name === name);
   }
 
+  function goToMapsSearch(query) {
+    const q = (query || "").trim();
+    if (!q) return;
+    window.open(mapsUrlFor(q), "_blank", "noopener");
+  }
+
+  function wireSearchBar(formId, inputId, buildQuery) {
+    const form = document.getElementById(formId);
+    if (!form) return;
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const raw = document.getElementById(inputId).value;
+      if (!raw.trim()) return;
+      goToMapsSearch(buildQuery ? buildQuery(raw) : raw);
+    });
+  }
+
   // ---------- Place detail modal ----------
 
   const placeModal = document.getElementById("placeModal");
@@ -287,8 +304,16 @@
   let placeFilter = "All";
 
   function renderPlaces() {
+    let html = `
+      <form class="search-bar" id="placesSearchForm">
+        <input type="search" id="placesSearchInput" placeholder="Search any other place or attraction…" autocomplete="off" />
+        <button type="submit" aria-label="Search on Google Maps">🔍</button>
+      </form>
+      <p class="search-hint">Opens Google Maps — browse it there for nearby restaurants, reviews, and the official website.</p>
+    `;
+
     const cities = ["All", "Edinburgh", "Stirling", "Glasgow"];
-    let html = `<div class="filter-row">`;
+    html += `<div class="filter-row">`;
     cities.forEach((c) => {
       html += `<button class="filter-chip ${c === placeFilter ? "active" : ""}" data-city="${esc(c)}">${esc(c)}</button>`;
     });
@@ -297,9 +322,7 @@
     const list = PLACES.filter((p) => placeFilter === "All" || p.city === placeFilter);
 
     list.forEach((p) => {
-      const mapsUrl = p.mapsQuery
-        ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(p.mapsQuery)}`
-        : null;
+      const mapsUrl = mapsUrlFor(p.mapsQuery);
       html += `
         <div class="card place-card">
           <div style="flex:1;">
@@ -326,13 +349,23 @@
         renderPlaces();
       });
     });
+
+    wireSearchBar("placesSearchForm", "placesSearchInput");
   }
 
   let eatsFilter = "All";
 
   function renderEats() {
+    let html = `
+      <form class="search-bar" id="eatsSearchForm">
+        <input type="search" id="eatsSearchInput" placeholder="Search restaurants near…" autocomplete="off" />
+        <button type="submit" aria-label="Search restaurants on Google Maps">🔍</button>
+      </form>
+      <p class="search-hint">Opens Google Maps already searching "restaurants near" wherever you type.</p>
+    `;
+
     const cities = ["All", "Edinburgh", "Stirling", "Glasgow"];
-    let html = `<div class="filter-row">`;
+    html += `<div class="filter-row">`;
     cities.forEach((c) => {
       html += `<button class="filter-chip ${c === eatsFilter ? "active" : ""}" data-city="${esc(c)}">${esc(c)}</button>`;
     });
@@ -348,9 +381,7 @@
     const list = EATS.filter((e) => eatsFilter === "All" || e.city === eatsFilter);
 
     list.forEach((e) => {
-      const mapsUrl = e.mapsQuery
-        ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(e.mapsQuery)}`
-        : null;
+      const mapsUrl = mapsUrlFor(e.mapsQuery);
       html += `
         <div class="card place-card">
           <div style="flex:1;">
@@ -382,6 +413,8 @@
         renderEats();
       });
     });
+
+    wireSearchBar("eatsSearchForm", "eatsSearchInput", (raw) => `restaurants near ${raw}`);
   }
 
   function renderBudget() {
