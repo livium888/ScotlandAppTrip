@@ -396,6 +396,38 @@ body {
   white-space: nowrap;
 }
 
+/* Picks */
+.pick-toggle {
+  border: none;
+  background: none;
+  font-size: 22px;
+  line-height: 1;
+  color: var(--ink-faint, var(--ink-soft));
+  padding: 2px;
+}
+.pick-toggle.picked { color: #c8455a; }
+.pick-toggle:active { opacity: 0.6; }
+
+.pick-remove {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 50%;
+  background: var(--paper);
+  color: var(--ink-soft);
+  font-size: 12px;
+  align-self: flex-start;
+}
+.pick-remove:active { background: var(--line); }
+
+.pick-status {
+  font-size: 12.5px;
+  color: var(--ink-soft);
+  font-style: italic;
+  margin: 0 0 8px;
+}
+
 /* Budget */
 .budget-row {
   display: flex;

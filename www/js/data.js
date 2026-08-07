@@ -16,6 +16,14 @@ const CITY_COLORS = {
   Travel: "#4a7a5f",
 };
 
+// Approximate city-centre anchors, used to bucket a geocoded custom pick
+// into Edinburgh/Stirling/Glasgow by nearest distance.
+const CITY_COORDS = {
+  Edinburgh: { lat: 55.9533, lon: -3.1883 },
+  Stirling: { lat: 56.1165, lon: -3.9369 },
+  Glasgow: { lat: 55.8642, lon: -4.2518 },
+};
+
 const DAYS = [
   {
     date: "Wed 19 Aug",

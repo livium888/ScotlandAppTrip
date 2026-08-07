@@ -45,6 +45,189 @@
     });
   }
 
+  // ---------- Picks (bookmarks + custom places) ----------
+
+  const PICKS_KEY = "scotland-trip-picks-v1";
+
+  function loadPicks() {
+    try {
+      return JSON.parse(localStorage.getItem(PICKS_KEY) || "[]");
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function savePicks(picks) {
+    localStorage.setItem(PICKS_KEY, JSON.stringify(picks));
+  }
+
+  function pickId(source, name) {
+    return `${source}:${name}`;
+  }
+
+  function isPicked(source, name) {
+    return loadPicks().some((p) => p.id === pickId(source, name));
+  }
+
+  function haversineKm(lat1, lon1, lat2, lon2) {
+    const R = 6371;
+    const dLat = ((lat2 - lat1) * Math.PI) / 180;
+    const dLon = ((lon2 - lon1) * Math.PI) / 180;
+    const a =
+      Math.sin(dLat / 2) ** 2 +
+      Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLon / 2) ** 2;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
+
+  function nearestCity(lat, lon) {
+    let best = null;
+    let bestDist = Infinity;
+    Object.keys(CITY_COORDS).forEach((city) => {
+      const c = CITY_COORDS[city];
+      const d = haversineKm(lat, lon, c.lat, c.lon);
+      if (d < bestDist) {
+        bestDist = d;
+        best = city;
+      }
+    });
+    return best;
+  }
+
+  function togglePick(source, item) {
+    const id = pickId(source, item.name);
+    let picks = loadPicks();
+    const existing = picks.find((p) => p.id === id);
+    if (existing) {
+      picks = picks.filter((p) => p.id !== id);
+      savePicks(picks);
+      return;
+    }
+    const pick = {
+      id,
+      source,
+      name: item.name,
+      city: item.city || null,
+      category: item.category || item.meal || "Custom",
+      notes: item.notes || "",
+      description: "",
+      website: item.website || "",
+      mapsQuery: item.mapsQuery || item.name,
+      lat: null,
+      lon: null,
+      enrichStatus: item.website ? "done" : "idle",
+      addedAt: Date.now(),
+    };
+    picks.push(pick);
+    savePicks(picks);
+    if (pick.enrichStatus === "idle") enrichPick(pick.id);
+  }
+
+  function removePick(id) {
+    savePicks(loadPicks().filter((p) => p.id !== id));
+  }
+
+  function wirePickToggles(rerender) {
+    view.querySelectorAll("[data-toggle-pick]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const source = btn.getAttribute("data-toggle-pick");
+        const name = btn.getAttribute("data-name");
+        const item = source === "places" ? PLACES.find((p) => p.name === name) : EATS.find((e) => e.name === name);
+        if (!item) return;
+        togglePick(source, item);
+        rerender();
+      });
+    });
+  }
+
+  // Free, no-API-key enrichment: Nominatim (OpenStreetMap) for coordinates
+  // and a fallback website, Wikidata + Wikipedia for a real description and
+  // confirmed official website. Best-effort - failures just leave the pick
+  // as-is rather than blocking anything.
+  async function geocodePlace(name, cityHint) {
+    const q = cityHint ? `${name}, ${cityHint}, Scotland` : `${name}, Scotland`;
+    const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&addressdetails=0&extratags=1&q=${encodeURIComponent(q)}`;
+    const res = await fetch(url, { headers: { Accept: "application/json" } });
+    if (!res.ok) throw new Error("nominatim error");
+    const data = await res.json();
+    if (!data.length) return null;
+    const r = data[0];
+    return {
+      lat: parseFloat(r.lat),
+      lon: parseFloat(r.lon),
+      website: (r.extratags && r.extratags.website) || null,
+    };
+  }
+
+  async function wikiEnrich(name) {
+    const searchUrl = `https://www.wikidata.org/w/api.php?action=wbsearchentities&search=${encodeURIComponent(
+      name
+    )}&language=en&format=json&origin=*`;
+    const searchRes = await fetch(searchUrl);
+    if (!searchRes.ok) throw new Error("wikidata search error");
+    const searchData = await searchRes.json();
+    const hit = searchData.search && searchData.search[0];
+    if (!hit) return null;
+
+    let website = null;
+    try {
+      const entUrl = `https://www.wikidata.org/w/api.php?action=wbgetentities&ids=${hit.id}&props=claims&format=json&origin=*`;
+      const entRes = await fetch(entUrl);
+      const entData = await entRes.json();
+      const claims = entData.entities[hit.id].claims;
+      const p856 = claims && claims.P856;
+      if (p856 && p856[0] && p856[0].mainsnak && p856[0].mainsnak.datavalue) {
+        website = p856[0].mainsnak.datavalue.value;
+      }
+    } catch (e) {
+      // no official-website claim available - not fatal
+    }
+
+    let description = hit.description || null;
+    try {
+      const title = (hit.label || name).replace(/ /g, "_");
+      const sumRes = await fetch(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}`);
+      if (sumRes.ok) {
+        const sum = await sumRes.json();
+        if (sum.extract) description = sum.extract;
+      }
+    } catch (e) {
+      // no Wikipedia page - Wikidata's short description is still fine
+    }
+
+    return { description, website };
+  }
+
+  async function enrichPick(id) {
+    let picks = loadPicks();
+    const pick = picks.find((p) => p.id === id);
+    if (!pick) return;
+    pick.enrichStatus = "loading";
+    savePicks(picks);
+    if (view.dataset.activeTab === "picks") renderPicks();
+
+    const [geo, wiki] = await Promise.all([
+      geocodePlace(pick.name, pick.city).catch(() => null),
+      wikiEnrich(pick.name).catch(() => null),
+    ]);
+
+    picks = loadPicks();
+    const fresh = picks.find((p) => p.id === id);
+    if (!fresh) return; // removed while enriching
+    if (geo) {
+      fresh.lat = geo.lat;
+      fresh.lon = geo.lon;
+      if (!fresh.website && geo.website) fresh.website = geo.website;
+      if (!fresh.city) fresh.city = nearestCity(geo.lat, geo.lon);
+    }
+    if (wiki) {
+      if (wiki.description) fresh.description = wiki.description;
+      if (!fresh.website && wiki.website) fresh.website = wiki.website;
+    }
+    fresh.enrichStatus = geo || wiki ? "done" : "empty";
+    savePicks(picks);
+    if (view.dataset.activeTab === "picks") renderPicks();
+  }
+
   // ---------- Place detail modal ----------
 
   const placeModal = document.getElementById("placeModal");
@@ -323,6 +506,7 @@
 
     list.forEach((p) => {
       const mapsUrl = mapsUrlFor(p.mapsQuery);
+      const picked = isPicked("places", p.name);
       html += `
         <div class="card place-card">
           <div style="flex:1;">
@@ -336,7 +520,10 @@
               ${mapsUrl ? `<a href="${mapsUrl}" target="_blank" rel="noopener">📍 Map</a>` : ""}
             </div>
           </div>
-          <div class="place-price">${esc(p.price)}</div>
+          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px;">
+            <button class="pick-toggle${picked ? " picked" : ""}" data-toggle-pick="places" data-name="${esc(p.name)}" aria-label="Bookmark">${picked ? "♥" : "♡"}</button>
+            <div class="place-price">${esc(p.price)}</div>
+          </div>
         </div>
       `;
     });
@@ -350,6 +537,7 @@
       });
     });
 
+    wirePickToggles(renderPlaces);
     wireSearchBar("placesSearchForm", "placesSearchInput");
   }
 
@@ -382,6 +570,7 @@
 
     list.forEach((e) => {
       const mapsUrl = mapsUrlFor(e.mapsQuery);
+      const picked = isPicked("eats", e.name);
       html += `
         <div class="card place-card">
           <div style="flex:1;">
@@ -400,7 +589,10 @@
               ${mapsUrl ? `<a href="${mapsUrl}" target="_blank" rel="noopener">📍 Map</a>` : ""}
             </div>
           </div>
-          <div class="place-price">${esc(e.price)}</div>
+          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px;">
+            <button class="pick-toggle${picked ? " picked" : ""}" data-toggle-pick="eats" data-name="${esc(e.name)}" aria-label="Bookmark">${picked ? "♥" : "♡"}</button>
+            <div class="place-price">${esc(e.price)}</div>
+          </div>
         </div>
       `;
     });
@@ -414,6 +606,7 @@
       });
     });
 
+    wirePickToggles(renderEats);
     wireSearchBar("eatsSearchForm", "eatsSearchInput", (raw) => `restaurants near ${raw}`);
   }
 
@@ -495,11 +688,116 @@
     });
   }
 
+  function renderPickCard(p) {
+    const mapsUrl = p.lat != null
+      ? `https://www.google.com/maps/search/?api=1&query=${p.lat},${p.lon}`
+      : mapsUrlFor(p.mapsQuery);
+    let descriptionHtml;
+    if (p.enrichStatus === "loading") {
+      descriptionHtml = `<p class="pick-status">Fetching details from OpenStreetMap & Wikipedia…</p>`;
+    } else if (p.description) {
+      descriptionHtml = `<p class="place-notes">${esc(p.description)}</p>`;
+    } else if (p.notes) {
+      descriptionHtml = `<p class="place-notes">${esc(p.notes)}</p>`;
+    } else if (p.enrichStatus === "empty") {
+      descriptionHtml = `<p class="pick-status">No extra details found for this one.</p>`;
+    } else {
+      descriptionHtml = "";
+    }
+
+    return `
+      <div class="card place-card" data-pick-id="${esc(p.id)}">
+        <div style="flex:1;">
+          <div class="place-name">${esc(p.name)}</div>
+          <div class="place-meta">
+            ${p.city ? `<span class="pill" style="background:${cityColor(p.city)}">${esc(p.city)}</span>` : ""}${esc(p.category)}
+          </div>
+          ${descriptionHtml}
+          <div class="place-links">
+            ${p.website ? `<a href="${esc(p.website)}" target="_blank" rel="noopener">🌐 Website</a>` : ""}
+            ${mapsUrl ? `<a href="${mapsUrl}" target="_blank" rel="noopener">📍 Map</a>` : ""}
+          </div>
+        </div>
+        <button class="pick-remove" data-remove-pick="${esc(p.id)}" aria-label="Remove">✕</button>
+      </div>
+    `;
+  }
+
+  function renderPicks() {
+    const picks = loadPicks();
+
+    let html = `
+      <div class="card">
+        <p>Bookmark places from Places/Eats (♡), or add anywhere else you've found — coordinates and a
+        real description come from OpenStreetMap and Wikipedia automatically, free, no account needed.</p>
+      </div>
+      <form class="search-bar" id="addPickForm">
+        <input type="text" id="addPickInput" placeholder="Add a place by name…" autocomplete="off" />
+        <button type="submit" aria-label="Add">+</button>
+      </form>
+    `;
+
+    if (picks.length === 0) {
+      html += `<div class="card"><p>No picks yet.</p></div>`;
+    } else {
+      html += `<button class="hero-share" id="sharePicks" style="color:var(--navy);border-color:var(--line);background:var(--card);margin-bottom:16px;">↗ Share my picks</button>`;
+
+      const groups = { Edinburgh: [], Stirling: [], Glasgow: [], Unsorted: [] };
+      picks.forEach((p) => {
+        (groups[p.city] || groups.Unsorted).push(p);
+      });
+
+      Object.keys(groups).forEach((city) => {
+        if (!groups[city].length) return;
+        html += `<div class="section-label">${esc(city)}</div>`;
+        groups[city].forEach((p) => {
+          html += renderPickCard(p);
+        });
+      });
+    }
+
+    view.innerHTML = html;
+
+    const addForm = document.getElementById("addPickForm");
+    if (addForm) {
+      addForm.addEventListener("submit", (e) => {
+        e.preventDefault();
+        const input = document.getElementById("addPickInput");
+        const name = input.value.trim();
+        if (!name) return;
+        togglePick("custom", { name, category: "Custom" });
+        input.value = "";
+        renderPicks();
+      });
+    }
+
+    const shareBtn = document.getElementById("sharePicks");
+    if (shareBtn) {
+      shareBtn.addEventListener("click", () => {
+        const lines = ["🏴 My picks for Scotland with Ally", ""];
+        picks.forEach((p) => {
+          lines.push(`• ${p.name}${p.city ? ` (${p.city})` : ""}`);
+          if (p.description) lines.push(`  ${p.description}`);
+          if (p.website) lines.push(`  🌐 ${p.website}`);
+        });
+        shareText("My picks", lines.join("\n"));
+      });
+    }
+
+    view.querySelectorAll("[data-remove-pick]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        removePick(btn.getAttribute("data-remove-pick"));
+        renderPicks();
+      });
+    });
+  }
+
   const VIEWS = {
     overview: { render: renderOverview, sub: TRIP.dates },
     itinerary: { render: renderItinerary, sub: "Tap a day to expand" },
     places: { render: renderPlaces, sub: "Edinburgh · Stirling · Glasgow" },
     eats: { render: renderEats, sub: "Lunch & dinner picks, kid-friendly" },
+    picks: { render: renderPicks, sub: "Your bookmarks & custom adds" },
     budget: { render: renderBudget, sub: "Estimated activity costs" },
     tips: { render: renderTips, sub: "Walking, weather, safety & packing" },
   };
@@ -507,6 +805,7 @@
   function showView(name) {
     const v = VIEWS[name];
     if (!v) return;
+    view.dataset.activeTab = name;
     v.render();
     topbarSub.textContent = v.sub;
     tabbar.querySelectorAll(".tab").forEach((t) => {
