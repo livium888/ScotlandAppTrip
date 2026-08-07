@@ -119,7 +119,34 @@
     };
     picks.push(pick);
     savePicks(picks);
-    if (pick.enrichStatus === "idle") enrichPick(pick.id);
+    if (pick.enrichStatus === "idle") {
+      enrichPick(pick.id); // full enrich: geocode + Wikipedia (custom/no-website items)
+    } else {
+      ensureGeocoded(pick.id); // already has a website/notes - just fetch coordinates for the map
+    }
+  }
+
+  // Bookmarked catalog items (Places/Eats) already have good website/notes,
+  // so enrichPick() is skipped for them - but the map and "explore nearby"
+  // still need coordinates, so fetch those quietly without touching the
+  // existing description/website.
+  async function ensureGeocoded(id) {
+    let picks = loadPicks();
+    const pick = picks.find((p) => p.id === id);
+    if (!pick || pick.lat != null) return;
+    try {
+      const geo = await geocodePlace(pick.name, pick.city);
+      picks = loadPicks();
+      const fresh = picks.find((p) => p.id === id);
+      if (!fresh || fresh.lat != null || !geo) return;
+      fresh.lat = geo.lat;
+      fresh.lon = geo.lon;
+      if (!fresh.city) fresh.city = nearestCity(geo.lat, geo.lon);
+      savePicks(picks);
+      if (view.dataset.activeTab === "picks") renderPicks();
+    } catch (e) {
+      // best-effort - the pick just won't get a mini-map/nearby search
+    }
   }
 
   function removePick(id) {
@@ -688,6 +715,126 @@
     });
   }
 
+  // ---------- Explore nearby (Overpass / OpenStreetMap) ----------
+
+  const NEARBY_CATEGORIES = [
+    { key: "restaurant", label: "Restaurants", icon: "🍽️", tag: "amenity", value: "restaurant" },
+    { key: "cafe", label: "Cafes", icon: "☕", tag: "amenity", value: "cafe" },
+    { key: "parking", label: "Car parks", icon: "🅿️", tag: "amenity", value: "parking" },
+    { key: "museum", label: "Museums", icon: "🏛️", tag: "tourism", value: "museum" },
+    { key: "playground", label: "Playgrounds", icon: "🛝", tag: "leisure", value: "playground" },
+    { key: "toilets", label: "Toilets", icon: "🚻", tag: "amenity", value: "toilets" },
+    { key: "pharmacy", label: "Pharmacies", icon: "💊", tag: "amenity", value: "pharmacy" },
+    { key: "supermarket", label: "Supermarkets", icon: "🛒", tag: "shop", value: "supermarket" },
+  ];
+
+  function catLabel(key) {
+    const c = NEARBY_CATEGORIES.find((x) => x.key === key);
+    return c ? c.label : "Places";
+  }
+
+  function nearbyMapElId(pickId) {
+    return "nearbymap-" + pickId.replace(/[^a-zA-Z0-9]/g, "_");
+  }
+
+  // Overpass (OpenStreetMap's "find everything of type X near here" API) -
+  // free, no key, same OSM data Nominatim and the tile layer already use.
+  async function overpassNearby(lat, lon, cat, radius) {
+    radius = radius || 1200;
+    const filter = `["${cat.tag}"="${cat.value}"]`;
+    const q = `[out:json][timeout:25];(node${filter}(around:${radius},${lat},${lon});way${filter}(around:${radius},${lat},${lon}););out center 25;`;
+    const res = await fetch("https://overpass-api.de/api/interpreter", {
+      method: "POST",
+      body: q,
+      headers: { "Content-Type": "text/plain" },
+    });
+    if (!res.ok) throw new Error("overpass error");
+    const data = await res.json();
+    return data.elements
+      .map((el) => {
+        const c = el.type === "node" ? { lat: el.lat, lon: el.lon } : el.center;
+        if (!c || !el.tags || !el.tags.name) return null;
+        return {
+          name: el.tags.name,
+          lat: c.lat,
+          lon: c.lon,
+          website: el.tags.website || el.tags["contact:website"] || null,
+          openingHours: el.tags.opening_hours || null,
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => haversineKm(lat, lon, a.lat, a.lon) - haversineKm(lat, lon, b.lat, b.lon))
+      .slice(0, 12);
+  }
+
+  let nearbyState = {};
+
+  function getNearby(pickId) {
+    if (!nearbyState[pickId]) nearbyState[pickId] = { open: false, category: null, status: "idle", results: [] };
+    return nearbyState[pickId];
+  }
+
+  function initNearbyMap(pick, results) {
+    const el = document.getElementById(nearbyMapElId(pick.id));
+    if (!el) return;
+    const map = L.map(el, { scrollWheelZoom: false });
+    pickMiniMaps.push(map);
+    addTileLayer(map);
+    L.marker([pick.lat, pick.lon], {
+      icon: L.divIcon({ className: "center-marker", html: "★", iconSize: [24, 24], iconAnchor: [12, 12] }),
+    }).addTo(map);
+    results.forEach((r, i) => {
+      L.marker([r.lat, r.lon]).addTo(map).bindTooltip(`${i + 1}. ${r.name}`);
+    });
+    const bounds = L.latLngBounds([[pick.lat, pick.lon], ...results.map((r) => [r.lat, r.lon])]);
+    map.fitBounds(bounds.pad(0.2));
+  }
+
+  function renderNearbyPanel(p) {
+    if (p.lat == null) {
+      return `<p class="pick-status" style="padding:0 16px 16px;">Getting location for "explore nearby"…</p>`;
+    }
+    const state = getNearby(p.id);
+    let html = `<div class="nearby-panel">`;
+    html += `<button class="nearby-toggle" data-nearby-toggle="${esc(p.id)}">🔎 ${state.open ? "Hide nearby search" : "Explore nearby"}</button>`;
+    if (state.open) {
+      html += `<div class="filter-row" style="padding:0 16px 10px;">`;
+      NEARBY_CATEGORIES.forEach((c) => {
+        html += `<button class="filter-chip${state.category === c.key ? " active" : ""}" data-nearby-cat="${esc(p.id)}|${c.key}">${c.icon} ${esc(c.label)}</button>`;
+      });
+      html += `</div>`;
+
+      if (state.category) {
+        if (state.status === "loading") {
+          html += `<p class="pick-status" style="padding:0 16px 16px;">Searching OpenStreetMap for ${esc(catLabel(state.category)).toLowerCase()} nearby…</p>`;
+        } else if (state.status === "error") {
+          html += `<p class="pick-status" style="padding:0 16px 16px;">Search failed — try again in a moment.</p>`;
+        } else if (state.status === "done") {
+          if (!state.results.length) {
+            html += `<p class="pick-status" style="padding:0 16px 16px;">No ${esc(catLabel(state.category)).toLowerCase()} found within ~1.2km.</p>`;
+          } else {
+            html += `<div class="nearby-map" id="${nearbyMapElId(p.id)}"></div>`;
+            state.results.forEach((r, i) => {
+              const distKm = haversineKm(p.lat, p.lon, r.lat, r.lon);
+              const distLabel = distKm < 1 ? `${Math.round(distKm * 1000)} m` : `${distKm.toFixed(1)} km`;
+              html += `
+                <div class="candidate-card">
+                  <div style="flex:1;">
+                    <div class="place-name">${i + 1}. ${esc(r.name)}</div>
+                    <div class="place-notes">${esc(distLabel)} away${r.openingHours ? " · " + esc(r.openingHours) : ""}</div>
+                  </div>
+                  <button class="candidate-add" data-add-nearby="${esc(p.id)}|${i}">+</button>
+                </div>
+              `;
+            });
+          }
+        }
+      }
+    }
+    html += `</div>`;
+    return html;
+  }
+
   function renderPickCard(p) {
     const mapsUrl = p.lat != null
       ? `https://www.google.com/maps/search/?api=1&query=${p.lat},${p.lon}`
@@ -724,6 +871,7 @@
           <button class="pick-remove" data-remove-pick="${esc(p.id)}" aria-label="Remove">✕</button>
         </div>
         ${p.lat != null ? `<div class="pick-mini-map" id="${mapElId}"></div>` : ""}
+        ${renderNearbyPanel(p)}
       </div>
     `;
   }
@@ -943,6 +1091,47 @@
 
     picks.forEach((p) => {
       if (p.lat != null) initPickMiniMap(p);
+      const state = nearbyState[p.id];
+      if (state && state.open && state.category && state.status === "done" && state.results.length) {
+        initNearbyMap(p, state.results);
+      }
+    });
+
+    view.querySelectorAll("[data-nearby-toggle]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        getNearby(btn.getAttribute("data-nearby-toggle")).open ^= true;
+        renderPicks();
+      });
+    });
+
+    view.querySelectorAll("[data-nearby-cat]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const [id, catKey] = btn.getAttribute("data-nearby-cat").split("|");
+        const pick = loadPicks().find((p) => p.id === id);
+        const cat = NEARBY_CATEGORIES.find((c) => c.key === catKey);
+        if (!pick || !cat) return;
+        const state = getNearby(id);
+        state.category = catKey;
+        state.status = "loading";
+        renderPicks();
+        try {
+          state.results = await overpassNearby(pick.lat, pick.lon, cat);
+          state.status = "done";
+        } catch (e) {
+          state.status = "error";
+        }
+        renderPicks();
+      });
+    });
+
+    view.querySelectorAll("[data-add-nearby]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const [id, idx] = btn.getAttribute("data-add-nearby").split("|");
+        const state = getNearby(id);
+        const r = state.results[Number(idx)];
+        if (!r) return;
+        confirmAddCandidate({ name: r.name, lat: r.lat, lon: r.lon, type: catLabel(state.category), website: r.website });
+      });
     });
 
     const shareBtn = document.getElementById("sharePicks");
