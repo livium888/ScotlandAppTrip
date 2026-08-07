@@ -705,22 +705,147 @@
       descriptionHtml = "";
     }
 
+    const mapElId = pickMapElId(p.id);
+
     return `
-      <div class="card place-card" data-pick-id="${esc(p.id)}">
-        <div style="flex:1;">
-          <div class="place-name">${esc(p.name)}</div>
-          <div class="place-meta">
-            ${p.city ? `<span class="pill" style="background:${cityColor(p.city)}">${esc(p.city)}</span>` : ""}${esc(p.category)}
+      <div class="card pick-card" data-pick-id="${esc(p.id)}">
+        <div class="pick-card-top">
+          <div style="flex:1;">
+            <div class="place-name">${esc(p.name)}</div>
+            <div class="place-meta">
+              ${p.city ? `<span class="pill" style="background:${cityColor(p.city)}">${esc(p.city)}</span>` : ""}${esc(p.category)}
+            </div>
+            ${descriptionHtml}
+            <div class="place-links">
+              ${p.website ? `<a href="${esc(p.website)}" target="_blank" rel="noopener">🌐 Website</a>` : ""}
+              ${mapsUrl ? `<a href="${mapsUrl}" target="_blank" rel="noopener">📍 Map</a>` : ""}
+            </div>
           </div>
-          ${descriptionHtml}
-          <div class="place-links">
-            ${p.website ? `<a href="${esc(p.website)}" target="_blank" rel="noopener">🌐 Website</a>` : ""}
-            ${mapsUrl ? `<a href="${mapsUrl}" target="_blank" rel="noopener">📍 Map</a>` : ""}
-          </div>
+          <button class="pick-remove" data-remove-pick="${esc(p.id)}" aria-label="Remove">✕</button>
         </div>
-        <button class="pick-remove" data-remove-pick="${esc(p.id)}" aria-label="Remove">✕</button>
+        ${p.lat != null ? `<div class="pick-mini-map" id="${mapElId}"></div>` : ""}
       </div>
     `;
+  }
+
+  // ---------- Picks: search-and-confirm with a real map ----------
+
+  let pickSearch = { query: "", status: "idle", results: [] }; // idle | loading | done | error
+  const pickMiniMaps = []; // Leaflet map instances from the last render, torn down before re-render
+
+  async function searchNominatim(query) {
+    const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&addressdetails=1&q=${encodeURIComponent(
+      `${query}, Scotland`
+    )}`;
+    const res = await fetch(url, { headers: { Accept: "application/json" } });
+    if (!res.ok) throw new Error("nominatim error");
+    const data = await res.json();
+    return data.map((r) => ({
+      name: (r.namedetails && r.namedetails.name) || r.display_name.split(",")[0],
+      displayName: r.display_name,
+      lat: parseFloat(r.lat),
+      lon: parseFloat(r.lon),
+      type: r.type,
+      website: (r.extratags && r.extratags.website) || null,
+    }));
+  }
+
+  function destroyMiniMaps() {
+    pickMiniMaps.forEach((m) => m.remove());
+    pickMiniMaps.length = 0;
+  }
+
+  function addTileLayer(map) {
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      attribution: "© OpenStreetMap contributors",
+      maxZoom: 19,
+    }).addTo(map);
+  }
+
+  function initSearchResultsMap(results) {
+    const el = document.getElementById("pickSearchMap");
+    if (!el || !results.length) return;
+    const map = L.map(el, { scrollWheelZoom: false });
+    pickMiniMaps.push(map);
+    addTileLayer(map);
+    const markers = results.map((r, i) =>
+      L.marker([r.lat, r.lon])
+        .addTo(map)
+        .bindTooltip(`${i + 1}. ${r.name}`, { permanent: false })
+    );
+    const bounds = L.latLngBounds(results.map((r) => [r.lat, r.lon]));
+    map.fitBounds(bounds.pad(0.3));
+    markers.forEach((m, i) => {
+      m.on("click", () => {
+        const card = view.querySelector(`[data-candidate="${i}"]`);
+        if (card) card.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      });
+    });
+  }
+
+  function pickMapElId(id) {
+    return "map-" + id.replace(/[^a-zA-Z0-9]/g, "_");
+  }
+
+  function initPickMiniMap(pick) {
+    const el = document.getElementById(pickMapElId(pick.id));
+    if (!el || pick.lat == null) return;
+    const map = L.map(el, {
+      scrollWheelZoom: false,
+      dragging: false,
+      zoomControl: false,
+      attributionControl: false,
+    });
+    pickMiniMaps.push(map);
+    addTileLayer(map);
+    map.setView([pick.lat, pick.lon], 14);
+    L.marker([pick.lat, pick.lon]).addTo(map);
+  }
+
+  async function confirmAddCandidate(candidate) {
+    const id = pickId("custom", candidate.name);
+    const picks = loadPicks();
+    if (picks.some((p) => p.id === id)) {
+      pickSearch = { query: "", status: "idle", results: [] };
+      renderPicks();
+      return;
+    }
+    const pick = {
+      id,
+      source: "custom",
+      name: candidate.name,
+      city: nearestCity(candidate.lat, candidate.lon),
+      category: candidate.type || "Custom",
+      notes: "",
+      description: "",
+      website: candidate.website || "",
+      mapsQuery: candidate.name,
+      lat: candidate.lat,
+      lon: candidate.lon,
+      enrichStatus: "loading",
+      addedAt: Date.now(),
+    };
+    picks.push(pick);
+    savePicks(picks);
+    pickSearch = { query: "", status: "idle", results: [] };
+    renderPicks();
+
+    let wiki = null;
+    try {
+      wiki = await wikiEnrich(candidate.name);
+    } catch (e) {
+      // best-effort only
+    }
+    const fresh = loadPicks();
+    const target = fresh.find((p) => p.id === id);
+    if (!target) return; // removed while enriching
+    if (wiki) {
+      if (wiki.description) target.description = wiki.description;
+      if (!target.website && wiki.website) target.website = wiki.website;
+    }
+    target.enrichStatus = wiki ? "done" : "empty";
+    savePicks(fresh);
+    if (view.dataset.activeTab === "picks") renderPicks();
   }
 
   function renderPicks() {
@@ -728,19 +853,49 @@
 
     let html = `
       <div class="card">
-        <p>Bookmark places from Places/Eats (♡), or add anywhere else you've found — coordinates and a
-        real description come from OpenStreetMap and Wikipedia automatically, free, no account needed.</p>
+        <p>Bookmark places from Places/Eats (♡), or search for anywhere else you've found — confirm the
+        right one on the map, then a real description comes from Wikipedia automatically. Free, no account needed.</p>
       </div>
-      <form class="search-bar" id="addPickForm">
-        <input type="text" id="addPickInput" placeholder="Add a place by name…" autocomplete="off" />
-        <button type="submit" aria-label="Add">+</button>
+      <form class="search-bar" id="pickSearchForm">
+        <input type="text" id="pickSearchInput" placeholder="Search for a place to add…" autocomplete="off" value="${esc(
+          pickSearch.query
+        )}" />
+        <button type="submit" aria-label="Search">🔍</button>
       </form>
     `;
+
+    if (pickSearch.status === "loading") {
+      html += `<div class="card"><p class="pick-status">Searching OpenStreetMap…</p></div>`;
+    } else if (pickSearch.status === "error") {
+      html += `<div class="card"><p class="pick-status">Search failed — check your connection and try again.</p></div>`;
+    } else if (pickSearch.status === "done") {
+      if (!pickSearch.results.length) {
+        html += `<div class="card"><p class="pick-status">No matches for "${esc(pickSearch.query)}" — try a shorter or more general name.</p></div>`;
+      } else {
+        html += `
+          <div class="card" style="padding:0;overflow:hidden;">
+            <div id="pickSearchMap" class="search-map"></div>
+          </div>
+          <p class="search-hint">Tap the right match below (or its pin above) to add it.</p>
+        `;
+        pickSearch.results.forEach((r, i) => {
+          html += `
+            <div class="card candidate-card" data-candidate="${i}">
+              <div style="flex:1;">
+                <div class="place-name">${i + 1}. ${esc(r.name)}</div>
+                <div class="place-notes">${esc(r.displayName)}</div>
+              </div>
+              <button class="candidate-add" data-add-candidate="${i}">Add</button>
+            </div>
+          `;
+        });
+      }
+    }
 
     if (picks.length === 0) {
       html += `<div class="card"><p>No picks yet.</p></div>`;
     } else {
-      html += `<button class="hero-share" id="sharePicks" style="color:var(--navy);border-color:var(--line);background:var(--card);margin-bottom:16px;">↗ Share my picks</button>`;
+      html += `<button class="hero-share" id="sharePicks" style="color:var(--navy);border-color:var(--line);background:var(--card);margin:16px 0;">↗ Share my picks</button>`;
 
       const groups = { Edinburgh: [], Stirling: [], Glasgow: [], Unsorted: [] };
       picks.forEach((p) => {
@@ -756,20 +911,39 @@
       });
     }
 
+    destroyMiniMaps();
     view.innerHTML = html;
 
-    const addForm = document.getElementById("addPickForm");
-    if (addForm) {
-      addForm.addEventListener("submit", (e) => {
+    const searchForm = document.getElementById("pickSearchForm");
+    if (searchForm) {
+      searchForm.addEventListener("submit", async (e) => {
         e.preventDefault();
-        const input = document.getElementById("addPickInput");
-        const name = input.value.trim();
-        if (!name) return;
-        togglePick("custom", { name, category: "Custom" });
-        input.value = "";
+        const q = document.getElementById("pickSearchInput").value.trim();
+        if (!q) return;
+        pickSearch = { query: q, status: "loading", results: [] };
+        renderPicks();
+        try {
+          const results = await searchNominatim(q);
+          pickSearch = { query: q, status: "done", results };
+        } catch (err) {
+          pickSearch = { query: q, status: "error", results: [] };
+        }
         renderPicks();
       });
     }
+
+    if (pickSearch.status === "done" && pickSearch.results.length) {
+      initSearchResultsMap(pickSearch.results);
+      view.querySelectorAll("[data-add-candidate]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          confirmAddCandidate(pickSearch.results[Number(btn.getAttribute("data-add-candidate"))]);
+        });
+      });
+    }
+
+    picks.forEach((p) => {
+      if (p.lat != null) initPickMiniMap(p);
+    });
 
     const shareBtn = document.getElementById("sharePicks");
     if (shareBtn) {
