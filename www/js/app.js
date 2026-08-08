@@ -99,6 +99,10 @@
       // Manchester", ""). Empty means search the whole world.
       destination: stored.destination !== undefined ? stored.destination : DEFAULT_DESTINATION,
       googleKey: stored.googleKey || "",
+      geminiKey: stored.geminiKey || "",
+      // Free text about who is travelling, so AI suggestions are tailored
+      // rather than generic ("family of 3, 4-year-old who walks, no stroller").
+      travellers: stored.travellers !== undefined ? stored.travellers : TRIP.traveler || "",
     };
   }
 
@@ -113,6 +117,131 @@
   function scopedQuery(text) {
     const dest = loadTripSettings().destination.trim();
     return dest ? `${text}, ${dest}` : text;
+  }
+
+  // ---------- Gemini (optional, free tier) ----------
+  // Used for the things a database lookup is bad at: judgement, and turning a
+  // vague ask into candidate places. Google Search grounding is switched on so
+  // answers come from real search results with citations attached, rather than
+  // from the model's memory.
+  //
+  // Deliberately never trusted for opening hours. Those change seasonally and
+  // for holidays, and stale hours are the one error with a real cost here -
+  // turning up to a closed museum with a small child. Hours are always
+  // labelled as needing a check, and structured OSM data wins when it exists.
+  const GEMINI_MODEL = "gemini-2.0-flash";
+
+  function geminiEndpoint(key) {
+    return `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(
+      key
+    )}`;
+  }
+
+  async function callGemini(key, prompt, { grounded = false } = {}) {
+    const body = {
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: { temperature: 0.2 },
+    };
+    if (grounded) body.tools = [{ google_search: {} }];
+
+    const res = await fetch(geminiEndpoint(key), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      throw new Error(`gemini ${res.status}: ${detail.slice(0, 200)}`);
+    }
+    const data = await res.json();
+    const cand = data.candidates && data.candidates[0];
+    if (!cand) throw new Error("gemini returned no candidates");
+
+    const text = (cand.content && cand.content.parts ? cand.content.parts : [])
+      .map((p) => p.text || "")
+      .join("");
+
+    // Grounding metadata carries the pages the answer was based on, so the
+    // user can check anything that matters rather than taking it on trust.
+    const sources = [];
+    const gm = cand.groundingMetadata;
+    if (gm && Array.isArray(gm.groundingChunks)) {
+      gm.groundingChunks.forEach((chunk) => {
+        if (chunk.web && chunk.web.uri) {
+          sources.push({ title: chunk.web.title || chunk.web.uri, uri: chunk.web.uri });
+        }
+      });
+    }
+    return { text, sources };
+  }
+
+  // Models wrap JSON in prose or code fences often enough that this is worth
+  // doing properly rather than hoping for a clean parse.
+  function extractJson(text) {
+    if (!text) return null;
+    const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+    const raw = fenced ? fenced[1] : text;
+    const start = raw.search(/[[{]/);
+    if (start < 0) return null;
+    const lastArr = raw.lastIndexOf("]");
+    const lastObj = raw.lastIndexOf("}");
+    const end = Math.max(lastArr, lastObj);
+    if (end <= start) return null;
+    try {
+      return JSON.parse(raw.slice(start, end + 1));
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // Turns a vague ask ("quiet cafe near the castle for a tired toddler") into
+  // named candidate places. Only names come from the model - coordinates and
+  // address are then resolved against OSM, so nothing positional is invented.
+  async function searchWithGemini(query, key) {
+    const s = loadTripSettings();
+    const where = s.destination.trim() ? ` in ${s.destination.trim()}` : "";
+    const who = s.travellers.trim() ? `\nTravellers: ${s.travellers.trim()}` : "";
+
+    const prompt =
+      `Find up to 5 real, currently-open places matching this request${where}.` +
+      `${who}\n\nRequest: ${query}\n\n` +
+      `Use search to check they exist and are still trading. Reply with ONLY a JSON array, ` +
+      `each item: {"name": exact official name, "area": neighbourhood or street, ` +
+      `"why": one short sentence on why it fits}. No other text.`;
+
+    const { text, sources } = await callGemini(key, prompt, { grounded: true });
+    const parsed = extractJson(text);
+    if (!Array.isArray(parsed) || !parsed.length) throw new Error("gemini returned no usable places");
+
+    // Resolve each suggestion against OSM so the map pin and address are real
+    // rather than model-generated.
+    const resolved = await Promise.all(
+      parsed.slice(0, 5).map(async (item) => {
+        if (!item || !item.name) return null;
+        let geo = null;
+        try {
+          geo = await geocodePlace(item.name, item.area || null);
+        } catch (e) {
+          geo = null;
+        }
+        return {
+          name: item.name,
+          displayName: geo && geo.address ? geo.address : item.area || "",
+          lat: geo ? geo.lat : null,
+          lon: geo ? geo.lon : null,
+          type: geo ? geo.category : null,
+          category: geo ? geo.category : null,
+          website: geo ? geo.website : null,
+          phone: geo ? geo.phone : null,
+          openingHours: geo ? geo.openingHours : null,
+          address: geo ? geo.address : null,
+          description: item.why || "",
+          aiSuggested: true,
+          sources,
+        };
+      })
+    );
+    return resolved.filter(Boolean);
   }
 
   // ---------- Picks (bookmarks + custom places) ----------
@@ -504,6 +633,21 @@
               Stored only on this device.
             </p>
 
+            <label class="settings-label" for="setGeminiKey">Gemini API key</label>
+            <input class="settings-input" type="text" id="setGeminiKey" value="${esc(s.geminiKey)}"
+                   placeholder="Paste key for AI search & day planning" autocomplete="off" />
+            <p class="settings-hint">
+              Optional, free tier, no billing card needed. Enables "Plan my days" and
+              lets you search by description ("quiet cafe near the castle") when
+              OpenStreetMap finds nothing. Suggested opening hours always need
+              checking — verify before relying on them.
+            </p>
+
+            <label class="settings-label" for="setTravellers">Who's travelling</label>
+            <input class="settings-input" type="text" id="setTravellers" value="${esc(s.travellers)}"
+                   placeholder="e.g. family of 3, 4-year-old who walks" />
+            <p class="settings-hint">Used to tailor AI suggestions and day planning.</p>
+
             <button class="modal-btn modal-btn-primary" id="saveSettings">Save</button>
           </div>
         </div>
@@ -519,6 +663,8 @@
       saveTripSettings({
         destination: document.getElementById("setDestination").value,
         googleKey: document.getElementById("setGoogleKey").value.trim(),
+        geminiKey: document.getElementById("setGeminiKey").value.trim(),
+        travellers: document.getElementById("setTravellers").value,
       });
       closePlaceModal();
       showView(view.dataset.activeTab || "overview");
@@ -804,6 +950,77 @@
     savePlan(plan);
   }
 
+  // Asks Gemini to spread the saved picks across the trip's days. Only ever
+  // arranges places the user already chose - it doesn't invent new ones - so
+  // the worst case is an ordering the user then edits, not a fabricated place.
+  async function autoPlanDays() {
+    const s = loadTripSettings();
+    const key = s.geminiKey.trim();
+    if (!key) {
+      openSettings();
+      return;
+    }
+
+    const plan = loadPlan();
+    const picks = loadPicks();
+    if (!picks.length || !plan.days.length) return;
+
+    planBusy = true;
+    renderItinerary();
+
+    try {
+      const placeList = picks
+        .map((p) => `- ${p.name}${p.address ? ` (${p.address})` : ""}${p.category ? ` [${p.category}]` : ""}`)
+        .join("\n");
+      const dayList = plan.days.map((d, i) => `${i + 1}. ${d.label}`).join("\n");
+      const who = s.travellers.trim() ? `\nTravellers: ${s.travellers.trim()}` : "";
+
+      const prompt =
+        `Arrange these saved places into a day-by-day itinerary.${who}\n\n` +
+        `Days:\n${dayList}\n\nPlaces:\n${placeList}\n\n` +
+        `Rules: use ONLY the places listed; group places that are close together on the ` +
+        `same day to reduce travelling; put demanding activities earlier in the day; ` +
+        `leave a day lighter rather than cramming it; not every place has to be used.\n\n` +
+        `Reply with ONLY a JSON array, one entry per scheduled place: ` +
+        `{"day": day number from the list, "name": exact place name, "time": short label like "10:00" or "AM"}. ` +
+        `No other text.`;
+
+      const { text } = await callGemini(key, prompt);
+      const parsed = extractJson(text);
+      if (!Array.isArray(parsed)) throw new Error("gemini returned no usable plan");
+
+      // Match names back to real picks; anything unrecognised is dropped
+      // rather than trusted, so a hallucinated name can't enter the plan.
+      const byName = {};
+      picks.forEach((p) => (byName[p.name.toLowerCase()] = p));
+
+      const items = {};
+      parsed.forEach((entry) => {
+        if (!entry || !entry.name) return;
+        const pick = byName[String(entry.name).toLowerCase().trim()];
+        const dayIdx = Number(entry.day) - 1;
+        const day = plan.days[dayIdx];
+        if (!pick || !day) return;
+        if (!items[day.id]) items[day.id] = [];
+        if (items[day.id].some((it) => it.pickId === pick.id)) return;
+        items[day.id].push({ pickId: pick.id, time: String(entry.time || "").slice(0, 8) });
+      });
+
+      plan.items = items;
+      savePlan(plan);
+      planNote = "Suggested plan — edit anything that doesn't suit.";
+    } catch (e) {
+      console.warn("auto-plan failed:", e);
+      planNote = "Couldn't build a plan just now. Check the key in Settings, or try again.";
+    } finally {
+      planBusy = false;
+      renderItinerary();
+    }
+  }
+
+  let planBusy = false;
+  let planNote = "";
+
   function renderMyPlan() {
     const plan = loadPlan();
     const picks = loadPicks();
@@ -814,6 +1031,15 @@
 
     if (!picks.length) {
       html += `<div class="card"><p class="pick-status">Nothing saved yet. Bookmark places in Places/Eats, search in Picks, or share a place into the app from Google Maps - then schedule them here.</p></div>`;
+    } else {
+      html += `
+        <div class="card plan-ai-card">
+          <button class="plan-ai-btn" id="autoPlanBtn" ${planBusy ? "disabled" : ""}>
+            ${planBusy ? "Planning your days…" : "✨ Plan my days for me"}
+          </button>
+          ${planNote ? `<p class="pick-status">${esc(planNote)}</p>` : ""}
+        </div>
+      `;
     }
 
     plan.days.forEach((day) => {
@@ -876,6 +1102,9 @@
   }
 
   function wireMyPlan() {
+    const autoBtn = document.getElementById("autoPlanBtn");
+    if (autoBtn) autoBtn.addEventListener("click", autoPlanDays);
+
     view.querySelectorAll("[data-plan-add]").forEach((sel) => {
       sel.addEventListener("change", () => {
         if (!sel.value) return;
@@ -1448,15 +1677,39 @@
   // smaller businesses; OSM stays as the no-setup default and the fallback
   // for when a Google call fails, so search always works either way.
   async function searchPlaces(query) {
-    const key = loadTripSettings().googleKey.trim();
-    if (key) {
+    const s = loadTripSettings();
+    const googleKey = s.googleKey.trim();
+    const geminiKey = s.geminiKey.trim();
+
+    if (googleKey) {
       try {
-        return await searchGooglePlaces(query, key);
+        const results = await searchGooglePlaces(query, googleKey);
+        if (results.length) return results;
       } catch (e) {
-        console.warn("Google Places search failed, falling back to OSM:", e);
+        console.warn("Google Places search failed, falling back:", e);
       }
     }
-    return searchNominatim(query);
+
+    let osmResults = [];
+    try {
+      osmResults = await searchNominatim(query);
+    } catch (e) {
+      osmResults = [];
+    }
+    if (osmResults.length) return osmResults;
+
+    // OSM found nothing - this is the gap it's weakest at (small businesses,
+    // and anything phrased as a description rather than a name). Gemini with
+    // search grounding can name real candidates, which are then geocoded
+    // against OSM so their position and address are still real data.
+    if (geminiKey) {
+      try {
+        return await searchWithGemini(query, geminiKey);
+      } catch (e) {
+        console.warn("Gemini search failed:", e);
+      }
+    }
+    return osmResults;
   }
 
   // Places API (New) text search. Only the fields named below are requested -
@@ -1554,20 +1807,31 @@
 
   function initSearchResultsMap(results) {
     const el = document.getElementById("pickSearchMap");
-    if (!el || !results.length) return;
+    if (!el) return;
+
+    // AI-suggested results can arrive without coordinates when the follow-up
+    // geocode finds nothing, so only mappable ones are plotted - passing a
+    // null lat/lon to Leaflet throws and takes the whole render down. The
+    // original index is kept so a pin still scrolls to the right card.
+    const mappable = results
+      .map((r, i) => ({ r, i }))
+      .filter(({ r }) => r.lat != null && r.lon != null);
+    if (!mappable.length) return;
+
     const map = L.map(el, { scrollWheelZoom: false });
     pickMiniMaps.push(map);
     addTileLayer(map);
-    const markers = results.map((r, i) =>
+    const markers = mappable.map(({ r, i }) =>
       L.marker([r.lat, r.lon])
         .addTo(map)
         .bindTooltip(`${i + 1}. ${r.name}`, { permanent: false })
     );
-    const bounds = L.latLngBounds(results.map((r) => [r.lat, r.lon]));
+    const bounds = L.latLngBounds(mappable.map(({ r }) => [r.lat, r.lon]));
     map.fitBounds(bounds.pad(0.3));
-    markers.forEach((m, i) => {
+    markers.forEach((m, idx) => {
+      const originalIndex = mappable[idx].i;
       m.on("click", () => {
-        const card = view.querySelector(`[data-candidate="${i}"]`);
+        const card = view.querySelector(`[data-candidate="${originalIndex}"]`);
         if (card) card.scrollIntoView({ behavior: "smooth", block: "nearest" });
       });
     });
@@ -1630,12 +1894,16 @@
     pickSearch = { query: "", status: "idle", results: [] };
     renderPicks();
 
-    let wiki = null;
-    try {
-      wiki = await wikiEnrich(candidate.name);
-    } catch (e) {
-      // best-effort only
-    }
+    // A candidate can arrive without coordinates - an AI suggestion whose
+    // geocode came back empty, for instance - so retry the lookup here rather
+    // than leaving the pick permanently without a position (and so without a
+    // map or "explore nearby").
+    const needsGeo = candidate.lat == null || candidate.lon == null;
+    const [wiki, geo] = await Promise.all([
+      wikiEnrich(candidate.name).catch(() => null),
+      needsGeo ? geocodePlace(candidate.name, folder || null).catch(() => null) : Promise.resolve(null),
+    ]);
+
     const fresh = loadPicks();
     const target = fresh.find((p) => p.id === id);
     if (!target) return; // removed while enriching
@@ -1643,7 +1911,15 @@
       if (wiki.description) target.description = wiki.description;
       if (!target.website && wiki.website) target.website = wiki.website;
     }
-    target.enrichStatus = wiki ? "done" : "empty";
+    if (geo) {
+      target.lat = geo.lat;
+      target.lon = geo.lon;
+      if (!target.website && geo.website) target.website = geo.website;
+      if (!target.address && geo.address) target.address = geo.address;
+      if (!target.phone && geo.phone) target.phone = geo.phone;
+      if (!target.openingHours && geo.openingHours) target.openingHours = geo.openingHours;
+    }
+    target.enrichStatus = wiki || geo ? "done" : "empty";
     savePicks(fresh);
     if (view.dataset.activeTab === "picks") renderPicks();
   }
@@ -1672,18 +1948,31 @@
       if (!pickSearch.results.length) {
         html += `<div class="card"><p class="pick-status">No matches for "${esc(pickSearch.query)}" — try a shorter or more general name.</p></div>`;
       } else {
-        html += `
-          <div class="card" style="padding:0;overflow:hidden;">
-            <div id="pickSearchMap" class="search-map"></div>
-          </div>
-          <p class="search-hint">Tap the right match below (or its pin above) to add it.</p>
-        `;
+        const anyMappable = pickSearch.results.some((r) => r.lat != null && r.lon != null);
+        if (anyMappable) {
+          html += `
+            <div class="card" style="padding:0;overflow:hidden;">
+              <div id="pickSearchMap" class="search-map"></div>
+            </div>
+            <p class="search-hint">Tap the right match below (or its pin above) to add it.</p>
+          `;
+        } else {
+          html += `<p class="search-hint">Tap the right match below to add it.</p>`;
+        }
         pickSearch.results.forEach((r, i) => {
           html += `
             <div class="card candidate-card" data-candidate="${i}">
               <div style="flex:1;">
-                <div class="place-name">${i + 1}. ${esc(r.name)}</div>
+                <div class="place-name">${i + 1}. ${esc(r.name)}${
+                  r.aiSuggested ? ` <span class="ai-badge">AI</span>` : ""
+                }${r.rating != null ? ` <span class="candidate-rating">⭐ ${esc(String(r.rating))}</span>` : ""}</div>
                 <div class="place-notes">${esc(r.displayName)}</div>
+                ${r.aiSuggested && r.description ? `<div class="place-notes">${esc(r.description)}</div>` : ""}
+                ${
+                  r.aiSuggested && r.sources && r.sources.length
+                    ? `<div class="place-links"><a href="${esc(r.sources[0].uri)}" target="_blank" rel="noopener">🔗 source</a></div>`
+                    : ""
+                }
               </div>
               <button class="candidate-add" data-add-candidate="${i}">Add</button>
             </div>
