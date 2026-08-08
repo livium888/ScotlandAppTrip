@@ -220,19 +220,67 @@
   // and a fallback website, Wikidata + Wikipedia for a real description and
   // confirmed official website. Best-effort - failures just leave the pick
   // as-is rather than blocking anything.
+  // Looks a place up on OpenStreetMap and returns everything useful it holds:
+  // position, address, and whatever contact/opening details the mappers have
+  // added. Tries the most specific query first and widens on a miss, because
+  // a shared place isn't necessarily in Scotland (sharing "Manchester" is
+  // perfectly reasonable) - the old query pinned every lookup to Scotland and
+  // simply failed for anywhere else.
   async function geocodePlace(name, cityHint) {
-    const q = cityHint ? `${name}, ${cityHint}, Scotland` : `${name}, Scotland`;
-    const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&addressdetails=0&extratags=1&q=${encodeURIComponent(q)}`;
-    const res = await fetch(url, { headers: { Accept: "application/json" } });
-    if (!res.ok) throw new Error("nominatim error");
-    const data = await res.json();
-    if (!data.length) return null;
-    const r = data[0];
+    const queries = [];
+    if (cityHint) queries.push(`${name}, ${cityHint}`);
+    queries.push(`${name}, Scotland`);
+    queries.push(name);
+
+    for (const q of queries) {
+      const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&addressdetails=1&extratags=1&namedetails=1&q=${encodeURIComponent(
+        q
+      )}`;
+      let data;
+      try {
+        const res = await fetch(url, { headers: { Accept: "application/json" } });
+        if (!res.ok) continue;
+        data = await res.json();
+      } catch (e) {
+        continue;
+      }
+      if (data && data.length) return placeFromNominatim(data[0]);
+    }
+    return null;
+  }
+
+  // Pulls the fields worth showing out of a Nominatim result. extratags is
+  // where OSM keeps contact details; it's only populated when the request
+  // asked for extratags=1.
+  function placeFromNominatim(r) {
+    const tags = r.extratags || {};
+    const addr = r.address || {};
+    const addressLine = [
+      [addr.house_number, addr.road].filter(Boolean).join(" "),
+      addr.neighbourhood || addr.suburb,
+      addr.city || addr.town || addr.village,
+      addr.postcode,
+    ]
+      .filter(Boolean)
+      .join(", ");
+
     return {
       lat: parseFloat(r.lat),
       lon: parseFloat(r.lon),
-      website: (r.extratags && r.extratags.website) || null,
+      website: tags.website || tags["contact:website"] || tags.url || null,
+      phone: tags.phone || tags["contact:phone"] || null,
+      openingHours: tags.opening_hours || null,
+      address: addressLine || r.display_name || null,
+      category: prettyCategory(r.type || r.category),
+      wikipedia: tags.wikipedia || null,
     };
+  }
+
+  function prettyCategory(value) {
+    if (!value) return null;
+    const cleaned = String(value).replace(/_/g, " ").trim();
+    if (!cleaned) return null;
+    return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
   }
 
   async function wikiEnrich(name) {
@@ -295,6 +343,10 @@
       fresh.lon = geo.lon;
       if (!fresh.website && geo.website) fresh.website = geo.website;
       if (!fresh.city) fresh.city = nearestCity(geo.lat, geo.lon);
+      if (!fresh.address && geo.address) fresh.address = geo.address;
+      if (!fresh.phone && geo.phone) fresh.phone = geo.phone;
+      if (!fresh.openingHours && geo.openingHours) fresh.openingHours = geo.openingHours;
+      if ((!fresh.category || fresh.category === "Custom") && geo.category) fresh.category = geo.category;
     }
     if (wiki) {
       if (wiki.description) fresh.description = wiki.description;
@@ -362,8 +414,9 @@
   // Asks which folder a new pick should go in - existing folders as chips,
   // or type a new one to create it on the spot. onConfirm(folder) fires once
   // the user picks or creates one; the sheet closes either way.
-  function openFolderPicker(candidateName, suggestedFolder, onConfirm) {
+  function openFolderPicker(candidateName, suggestedFolder, onConfirm, options) {
     const folders = loadFolders();
+    const summary = (options && options.summary) || null;
 
     placeModal.innerHTML = `
       <div class="modal-backdrop" data-close="1">
@@ -372,6 +425,11 @@
           <button class="modal-close" data-close="1" aria-label="Close">✕</button>
           <div class="modal-body">
             <h2 class="modal-title">Add "${esc(candidateName)}" to…</h2>
+            ${
+              summary
+                ? `<div class="share-summary">${summary.map((row) => `<div class="share-summary-row">${esc(row)}</div>`).join("")}</div>`
+                : ""
+            }
             <div class="filter-row" id="folderChips">
               ${folders
                 .map(
@@ -997,6 +1055,9 @@
               ${p.city ? `<span class="pill" style="background:${cityColor(p.city)}">${esc(p.city)}</span>` : ""}${esc(p.category)}
             </div>
             ${descriptionHtml}
+            ${p.address ? `<div class="place-fact">📍 ${esc(p.address)}</div>` : ""}
+            ${p.openingHours ? `<div class="place-fact">🕒 ${esc(p.openingHours)}</div>` : ""}
+            ${p.phone ? `<div class="place-fact">📞 <a href="tel:${esc(p.phone)}">${esc(p.phone)}</a></div>` : ""}
             ${p.website ? `<div class="place-links"><a href="${esc(p.website)}" target="_blank" rel="noopener">🌐 Website</a></div>` : ""}
           </div>
           <button class="pick-remove" data-remove-pick="${esc(p.id)}" aria-label="Remove">✕</button>
@@ -1024,20 +1085,28 @@
   const pickMiniMaps = []; // Leaflet map instances from the last render, torn down before re-render
 
   async function searchNominatim(query) {
-    const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&addressdetails=1&q=${encodeURIComponent(
+    // extratags/namedetails have to be requested explicitly - without them
+    // the name and website below silently read undefined every time.
+    const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&addressdetails=1&extratags=1&namedetails=1&q=${encodeURIComponent(
       `${query}, Scotland`
     )}`;
     const res = await fetch(url, { headers: { Accept: "application/json" } });
     if (!res.ok) throw new Error("nominatim error");
     const data = await res.json();
-    return data.map((r) => ({
-      name: (r.namedetails && r.namedetails.name) || r.display_name.split(",")[0],
-      displayName: r.display_name,
-      lat: parseFloat(r.lat),
-      lon: parseFloat(r.lon),
-      type: r.type,
-      website: (r.extratags && r.extratags.website) || null,
-    }));
+    return data.map((r) => {
+      const details = placeFromNominatim(r);
+      return {
+        name: (r.namedetails && r.namedetails.name) || r.display_name.split(",")[0],
+        displayName: r.display_name,
+        lat: details.lat,
+        lon: details.lon,
+        type: r.type,
+        website: details.website,
+        phone: details.phone,
+        openingHours: details.openingHours,
+        address: details.address,
+      };
+    });
   }
 
   function destroyMiniMaps() {
@@ -1109,10 +1178,13 @@
       source: "custom",
       name: candidate.name,
       city: folder || nearestCity(candidate.lat, candidate.lon),
-      category: candidate.type || "Custom",
+      category: candidate.category || candidate.type || "Custom",
       notes: "",
-      description: "",
+      description: candidate.description || "",
       website: candidate.website || "",
+      address: candidate.address || "",
+      phone: candidate.phone || "",
+      openingHours: candidate.openingHours || "",
       mapsQuery,
       lat: candidate.lat,
       lon: candidate.lon,
@@ -1370,28 +1442,69 @@
   //  - with lat/lon: skip straight to "which folder does this go in".
   //  - without: fall back to the normal search-and-confirm flow so the map
   //    still confirms the right match.
-  function handleSharedPlace(payload) {
+  async function handleSharedPlace(payload) {
     if (!payload || !payload.name) return;
     showView("picks");
-    if (payload.lat != null && payload.lon != null) {
-      const candidate = {
-        name: payload.name,
-        lat: payload.lat,
-        lon: payload.lon,
-        // Deliberately not passing the raw share text as displayName: it
-        // becomes the Google Maps search query, and the raw text is a
-        // sentence with a URL in it ("Check out X https://...") which
-        // searches for nothing useful. Letting it fall back to
-        // "<name>, Scotland" gives a real place listing.
-      };
-      const suggested = nearestCity(payload.lat, payload.lon);
-      openFolderPicker(candidate.name, suggested, (folder) => confirmAddCandidate(candidate, folder));
-    } else {
-      pickSearch = { query: payload.name, status: "idle", results: [] };
-      renderPicks();
-      const input = document.getElementById("pickSearchInput");
-      if (input) input.value = payload.name;
+
+    // Show the place as "arriving" straight away - the lookups below take a
+    // second or two and a silent pause reads as nothing having happened.
+    pickSearch = { query: payload.name, status: "loading", results: [] };
+    renderPicks();
+
+    const candidate = {
+      name: payload.name,
+      lat: payload.lat != null ? payload.lat : null,
+      lon: payload.lon != null ? payload.lon : null,
+      description: payload.description || "",
+      // Deliberately not passing the raw share text as displayName: it
+      // becomes the Google Maps search query, and the raw text is a
+      // sentence with a URL in it ("Check out X https://...") which
+      // searches for nothing useful.
+    };
+
+    // Google gives a reliable name but, behind the consent wall, nothing
+    // else - so the rest of the profile is built from OpenStreetMap and
+    // Wikipedia, which are open and need no key.
+    const [geo, wiki] = await Promise.all([
+      geocodePlace(payload.name, null).catch(() => null),
+      wikiEnrich(payload.name).catch(() => null),
+    ]);
+
+    if (geo) {
+      if (candidate.lat == null) candidate.lat = geo.lat;
+      if (candidate.lon == null) candidate.lon = geo.lon;
+      candidate.website = geo.website || "";
+      candidate.phone = geo.phone || "";
+      candidate.openingHours = geo.openingHours || "";
+      candidate.address = geo.address || "";
+      candidate.category = geo.category || "";
     }
+    if (wiki) {
+      if (wiki.description) candidate.description = wiki.description;
+      if (!candidate.website && wiki.website) candidate.website = wiki.website;
+    }
+
+    pickSearch = { query: "", status: "idle", results: [] };
+    renderPicks();
+
+    const suggested = candidate.lat != null ? nearestCity(candidate.lat, candidate.lon) : null;
+    openFolderPicker(candidate.name, suggested, (folder) => confirmAddCandidate(candidate, folder), {
+      summary: sharedPlaceSummary(candidate),
+    });
+  }
+
+  // One-line-per-fact preview of what the lookups found, shown above the
+  // folder chips so it's clear what is about to be saved.
+  function sharedPlaceSummary(c) {
+    const rows = [];
+    if (c.category) rows.push(`🏷️ ${c.category}`);
+    if (c.address) rows.push(`📍 ${c.address}`);
+    if (c.openingHours) rows.push(`🕒 ${c.openingHours}`);
+    if (c.phone) rows.push(`📞 ${c.phone}`);
+    if (c.website) rows.push(`🌐 ${c.website}`);
+    if (c.description) rows.push(c.description);
+    if (!rows.length) rows.push("No extra details found - saved with just the name.");
+    return rows;
   }
 
   // notifyListeners on the native side uses retainUntilConsumed, so this
