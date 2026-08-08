@@ -1364,12 +1364,12 @@
   // ---------- Receiving a share from Google Maps ----------
   // Delivered by the native ShareReceiver plugin (MainActivity.java /
   // SharePlugin.java) when the app is opened via the share sheet from
-  // Google Maps. Two shapes of payload:
-  //  - {name, lat, lon, rawText}: got trusted coordinates straight from the
-  //    share link - skip straight to "which folder does this go in".
-  //  - {name, rawText} only: could only recover a name (e.g. a short link
-  //    that failed to resolve) - fall back to the normal search-and-confirm
-  //    flow so the map still confirms the right match.
+  // Google Maps. The native side follows the link and reads the page's Open
+  // Graph tags, so `name` is the real place title. Coordinates only come
+  // through when the resolved URL carried them:
+  //  - with lat/lon: skip straight to "which folder does this go in".
+  //  - without: fall back to the normal search-and-confirm flow so the map
+  //    still confirms the right match.
   function handleSharedPlace(payload) {
     if (!payload || !payload.name) return;
     showView("picks");
@@ -1378,7 +1378,11 @@
         name: payload.name,
         lat: payload.lat,
         lon: payload.lon,
-        displayName: payload.rawText,
+        // Deliberately not passing the raw share text as displayName: it
+        // becomes the Google Maps search query, and the raw text is a
+        // sentence with a URL in it ("Check out X https://...") which
+        // searches for nothing useful. Letting it fall back to
+        // "<name>, Scotland" gives a real place listing.
       };
       const suggested = nearestCity(payload.lat, payload.lon);
       openFolderPicker(candidate.name, suggested, (folder) => confirmAddCandidate(candidate, folder));
@@ -1397,9 +1401,9 @@
   if (shareReceiver) {
     shareReceiver.addListener("sharedPlace", handleSharedPlace);
   } else if (window.Capacitor) {
-    // TEMPORARY DIAGNOSTIC (share-debug-2) - remove once the share flow is
+    // TEMPORARY DIAGNOSTIC (share-debug-3) - remove once the share flow is
     // confirmed working end to end. Only fires on native (Capacitor present).
-    alert("share-debug-2: ShareReceiver plugin not found on window.Capacitor.Plugins");
+    alert("share-debug-3: ShareReceiver plugin not found on window.Capacitor.Plugins");
   }
 
   topbarTitle.textContent = TRIP.title;

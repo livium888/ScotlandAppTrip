@@ -1,7 +1,6 @@
 package com.livium888.scotlandtrip;
 
 import android.content.Intent;
-import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -10,32 +9,20 @@ import android.widget.Toast;
 import com.getcapacitor.BridgeActivity;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.PluginHandle;
-import java.net.HttpURLConnection;
-import java.net.URL;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 /**
  * Beyond Capacitor's default activity, this app registers as an Android
  * share target (see AndroidManifest.xml) so a place shared from Google Maps
  * ("Share" -> this app) can be picked up and added directly.
  *
- * Google Maps shares one of two shapes:
- *  - a long-form URL with the name and coordinates embedded in the path
- *    (".../maps/place/Name/@lat,lon,zoom") - parsed with no network call.
- *  - a short maps.app.goo.gl link, which is opaque until resolved. A
- *    WebView/JS fetch() can't follow that redirect due to CORS, but native
- *    HTTP code isn't bound by that browser rule, so it's resolved here.
+ * The link is followed and its Open Graph tags read natively (see
+ * MapsPlaceResolver): a WebView/JS fetch() can't do this itself because
+ * cross-origin redirects and page reads are blocked by CORS, but native HTTP
+ * isn't bound by that browser rule.
  */
 public class MainActivity extends BridgeActivity {
 
   private static final String TAG = "MapsShare";
-
-  private static final Pattern LONG_URL_PATTERN = Pattern.compile(
-    "google\\.[a-z.]+/maps/place/([^/?]+)/@(-?\\d+\\.\\d+),(-?\\d+\\.\\d+)"
-  );
-  private static final Pattern SHORT_URL_PATTERN = Pattern.compile("https?://maps\\.app\\.goo\\.gl/\\S+");
-  private static final Pattern ANY_URL_PATTERN = Pattern.compile("https?://\\S+");
 
   @Override
   protected void onCreate(Bundle savedInstanceState) {
@@ -60,20 +47,11 @@ public class MainActivity extends BridgeActivity {
     if (intent == null || !Intent.ACTION_SEND.equals(intent.getAction())) return;
 
     String type = intent.getType();
-    String sharedText = intent.getStringExtra(Intent.EXTRA_TEXT);
-
-    // TEMPORARY DIAGNOSTIC (share-debug-2) - remove once the share flow is
-    // confirmed working end to end. No device/cable needed to read this.
-    Toast.makeText(
-      this,
-      "share-debug-2: type=" + type + " hasText=" + (sharedText != null),
-      Toast.LENGTH_LONG
-    ).show();
-
-    // Was previously an exact "text/plain".equals(type) check, which would
-    // silently reject the share if the sender attaches parameters like
-    // "text/plain; charset=utf-8" - startsWith tolerates that.
+    // Matched with startsWith rather than equals: senders may attach
+    // parameters such as "text/plain; charset=utf-8".
     if (type == null || !type.startsWith("text/plain")) return;
+
+    String sharedText = intent.getStringExtra(Intent.EXTRA_TEXT);
     if (sharedText == null || sharedText.trim().isEmpty()) return;
 
     final String text = sharedText.trim();
@@ -81,100 +59,61 @@ public class MainActivity extends BridgeActivity {
   }
 
   private void resolveAndDeliver(String sharedText) {
-    String rawName = extractNonUrlLine(sharedText);
-    String urlForCoords = sharedText;
+    String url = MapsPlaceResolver.extractUrl(sharedText);
 
-    Matcher shortMatch = SHORT_URL_PATTERN.matcher(sharedText);
-    if (shortMatch.find()) {
-      String resolved = resolveRedirects(shortMatch.group(), 5);
-      if (resolved != null) urlForCoords = resolved;
+    if (url == null) {
+      // Nothing to follow - hand the raw text over so the web app can at
+      // least prefill its search box with it.
+      deliverSharedPlace(sharedText, sharedText, null);
+      return;
     }
 
-    String name = null;
-    Double lat = null;
-    Double lon = null;
-
-    Matcher longMatch = LONG_URL_PATTERN.matcher(urlForCoords);
-    if (longMatch.find()) {
-      try {
-        lat = Double.parseDouble(longMatch.group(2));
-        lon = Double.parseDouble(longMatch.group(3));
-        name = Uri.decode(longMatch.group(1)).replace('+', ' ');
-      } catch (Exception e) {
-        Log.w(TAG, "coordinate parse failed", e);
-      }
+    try {
+      deliverSharedPlace(null, sharedText, MapsPlaceResolver.resolve(url));
+    } catch (Exception e) {
+      // Timeouts, no connectivity, unexpected markup - fall back to the raw
+      // shared text rather than dropping the share on the floor.
+      Log.w(TAG, "place resolution failed for " + url, e);
+      deliverSharedPlace(sharedText, sharedText, null);
     }
-
-    if (name == null || name.isEmpty()) name = rawName;
-    deliverSharedPlace(name, lat, lon, sharedText);
   }
 
-  // Manually follows redirects (rather than letting HttpURLConnection auto-follow)
-  // so we can stop the moment we reach a resolved google maps URL.
-  private String resolveRedirects(String urlStr, int maxHops) {
-    String current = urlStr;
-    for (int i = 0; i < maxHops; i++) {
-      HttpURLConnection conn = null;
-      try {
-        conn = (HttpURLConnection) new URL(current).openConnection();
-        conn.setInstanceFollowRedirects(false);
-        conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Android)");
-        conn.setConnectTimeout(8000);
-        conn.setReadTimeout(8000);
-        int code = conn.getResponseCode();
-        if (code >= 300 && code < 400) {
-          String location = conn.getHeaderField("Location");
-          if (location == null) break;
-          current = location;
-        } else {
-          return current;
-        }
-      } catch (Exception e) {
-        Log.w(TAG, "redirect resolution failed at hop " + i, e);
-        return current;
-      } finally {
-        if (conn != null) conn.disconnect();
-      }
-    }
-    return current;
-  }
+  private void deliverSharedPlace(String fallbackName, String rawText, MapsPlaceResolver.Place place) {
+    String name = place != null && place.title != null ? place.title : fallbackName;
 
-  private String extractNonUrlLine(String text) {
-    for (String line : text.split("\\r?\\n")) {
-      String trimmed = line.trim();
-      if (!trimmed.isEmpty() && !ANY_URL_PATTERN.matcher(trimmed).find()) {
-        return trimmed;
-      }
-    }
-    return null;
-  }
-
-  // Delivered through the ShareReceiver Capacitor plugin (retainUntilConsumed
-  // notifyListeners) rather than a raw evaluateJavascript() call. On a cold
-  // start via the share sheet, the WebView is still loading index.html/app.js
-  // at this point, so a bare JS injection here can land on a blank page and
-  // be silently discarded before the real page - and its listener - exist.
-  private void deliverSharedPlace(String name, Double lat, Double lon, String rawText) {
     JSObject payload = new JSObject();
     payload.put("name", name);
     payload.put("rawText", rawText);
-    if (lat != null && lon != null) {
-      payload.put("lat", lat);
-      payload.put("lon", lon);
-    }
-    new Handler(Looper.getMainLooper()).post(() -> {
-      try {
-        PluginHandle handle = getBridge().getPlugin("ShareReceiver");
-        // TEMPORARY DIAGNOSTIC (share-debug-2) - remove once the share flow
-        // is confirmed working end to end.
-        Toast.makeText(this, "share-debug-2: delivering, pluginFound=" + (handle != null), Toast.LENGTH_LONG).show();
-        if (handle != null) {
-          ((SharePlugin) handle.getInstance()).deliverSharedPlace(payload);
-        }
-      } catch (Exception e) {
-        Log.w(TAG, "deliverSharedPlace failed", e);
-        Toast.makeText(this, "share-debug-2: delivery failed - " + e, Toast.LENGTH_LONG).show();
+    if (place != null) {
+      if (place.description != null) payload.put("description", place.description);
+      if (place.imageUrl != null) payload.put("imageUrl", place.imageUrl);
+      if (place.latitude != null && place.longitude != null) {
+        payload.put("lat", place.latitude);
+        payload.put("lon", place.longitude);
       }
-    });
+      if (place.resolvedUrl != null) payload.put("resolvedUrl", place.resolvedUrl);
+    }
+
+    final String diagnostic =
+      "share-debug-3: name=" +
+      name +
+      " coords=" +
+      (place != null && place.latitude != null ? place.latitude + "," + place.longitude : "none");
+
+    new Handler(Looper.getMainLooper())
+      .post(() -> {
+        // TEMPORARY DIAGNOSTIC (share-debug-3) - remove once the share flow
+        // is confirmed working end to end.
+        Toast.makeText(this, diagnostic, Toast.LENGTH_LONG).show();
+        try {
+          PluginHandle handle = getBridge().getPlugin("ShareReceiver");
+          if (handle != null) {
+            ((SharePlugin) handle.getInstance()).deliverSharedPlace(payload);
+          }
+        } catch (Exception e) {
+          Log.w(TAG, "deliverSharedPlace failed", e);
+          Toast.makeText(this, "share-debug-3: delivery failed - " + e, Toast.LENGTH_LONG).show();
+        }
+      });
   }
 }
