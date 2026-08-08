@@ -100,6 +100,9 @@
       destination: stored.destination !== undefined ? stored.destination : DEFAULT_DESTINATION,
       googleKey: stored.googleKey || "",
       geminiKey: stored.geminiKey || "",
+      // Discovered model name, cached so a working key isn't re-probed on
+      // every call. Cleared automatically if the model stops resolving.
+      geminiModel: stored.geminiModel || "",
       // Free text about who is travelling, so AI suggestions are tailored
       // rather than generic ("family of 3, 4-year-old who walks, no stroller").
       travellers: stored.travellers !== undefined ? stored.travellers : TRIP.traveler || "",
@@ -129,31 +132,148 @@
   // for holidays, and stale hours are the one error with a real cost here -
   // turning up to a closed museum with a small child. Hours are always
   // labelled as needing a check, and structured OSM data wins when it exists.
-  const GEMINI_MODEL = "gemini-2.0-flash";
+  const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta";
 
-  function geminiEndpoint(key) {
-    return `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(
-      key
-    )}`;
+  // Model names come and go, and a name this app hardcoded can simply stop
+  // existing for a given project - which surfaces as a 404 that looks
+  // identical to "your key is broken". So the model is discovered from the
+  // account rather than assumed, and the choice cached in settings.
+  const GEMINI_MODEL_PREFERENCE = ["flash-latest", "2.5-flash", "2.0-flash", "flash", "pro"];
+
+  async function geminiListModels(key) {
+    const res = await fetch(`${GEMINI_BASE}/models?key=${encodeURIComponent(key)}`);
+    const text = await res.text();
+    let data = null;
+    try {
+      data = JSON.parse(text);
+    } catch (e) {
+      data = null;
+    }
+    if (!res.ok) {
+      const err = new Error(describeGeminiError(res.status, data, text));
+      err.status = res.status;
+      throw err;
+    }
+    return (data && data.models ? data.models : []).filter(
+      (m) => (m.supportedGenerationMethods || []).indexOf("generateContent") >= 0
+    );
+  }
+
+  // Turns Google's error payloads into something worth showing a user, since
+  // the raw JSON is long and the useful part is buried in it.
+  function describeGeminiError(status, data, rawText) {
+    const err = (data && data.error) || {};
+    const msg = err.message || (rawText || "").slice(0, 300) || "no detail";
+    const reason =
+      (err.details || [])
+        .map((d) => d.reason || "")
+        .filter(Boolean)
+        .join(", ") || err.status || "";
+
+    if (status === 400 && /API key not valid|API_KEY_INVALID/i.test(msg + reason)) {
+      return `Key rejected by Google (400 API_KEY_INVALID). Check it was copied whole, and that it's a Gemini key from aistudio.google.com — a Maps/Places key won't work here.\n\n${msg}`;
+    }
+    if (status === 403 && /SERVICE_DISABLED|has not been used in project|is disabled/i.test(msg + reason)) {
+      return `The Generative Language API isn't enabled on that key's project (403 SERVICE_DISABLED). Open the link in Google's message below and enable it, then wait a minute.\n\n${msg}`;
+    }
+    if (status === 403 && /referer|referrer|API_KEY_HTTP_REFERRER|blocked/i.test(msg + reason)) {
+      return `The key has website (HTTP referrer) restrictions, and requests from this app don't send a matching referrer (403). In Google Cloud → Credentials, set Application restrictions to "None" for testing, or add an Android app restriction.\n\n${msg}`;
+    }
+    if (status === 403) {
+      return `Google refused the key (403). Often this is API restrictions on the key limiting it to other APIs.\n\n${msg}`;
+    }
+    if (status === 404) {
+      return `Model not found (404) — the model this app asked for isn't available to your key.\n\n${msg}`;
+    }
+    if (status === 429) {
+      return `Rate limit or quota exceeded (429). Free tier limits are per-minute as well as per-day, so waiting a minute often clears it.\n\n${msg}`;
+    }
+    return `Gemini returned ${status}.\n\n${msg}`;
+  }
+
+  // Verifies the key end to end and reports precisely what happened. Used by
+  // the Settings "Test key" button so a failure is visible on the device
+  // rather than buried in a console nobody can read on a phone.
+  async function testGeminiKey(key) {
+    if (!key) return { ok: false, message: "No key entered." };
+    let models;
+    try {
+      models = await geminiListModels(key);
+    } catch (e) {
+      return { ok: false, message: e.message || String(e) };
+    }
+    if (!models.length) {
+      return { ok: false, message: "The key works, but no models on it support generateContent." };
+    }
+    const chosen = chooseGeminiModel(models);
+    saveTripSettings({ geminiModel: chosen });
+
+    try {
+      await callGemini(key, "Reply with the single word: ok");
+    } catch (e) {
+      return {
+        ok: false,
+        message: `Key is valid and ${models.length} models are visible, but the test message failed.\n\n${e.message || e}`,
+      };
+    }
+    return {
+      ok: true,
+      message: `Working. Using ${chosen.replace(/^models\//, "")}. ${models.length} models available on this key.`,
+    };
+  }
+
+  function chooseGeminiModel(models) {
+    const names = models.map((m) => m.name);
+    for (const pref of GEMINI_MODEL_PREFERENCE) {
+      const hit = names.find((n) => n.indexOf(pref) >= 0);
+      if (hit) return hit;
+    }
+    return names[0];
+  }
+
+  // Returns the cached model, discovering one if this key hasn't been used
+  // yet, so a first run works without the user having to press "Test key".
+  async function resolveGeminiModel(key) {
+    const cached = loadTripSettings().geminiModel;
+    if (cached) return cached;
+    const models = await geminiListModels(key);
+    if (!models.length) throw new Error("No Gemini models on this key support generateContent.");
+    const chosen = chooseGeminiModel(models);
+    saveTripSettings({ geminiModel: chosen });
+    return chosen;
   }
 
   async function callGemini(key, prompt, { grounded = false } = {}) {
+    const model = await resolveGeminiModel(key);
+    // Discovered names already include the "models/" prefix.
+    const path = model.indexOf("models/") === 0 ? model : `models/${model}`;
     const body = {
       contents: [{ parts: [{ text: prompt }] }],
       generationConfig: { temperature: 0.2 },
     };
     if (grounded) body.tools = [{ google_search: {} }];
 
-    const res = await fetch(geminiEndpoint(key), {
+    const res = await fetch(`${GEMINI_BASE}/${path}:generateContent?key=${encodeURIComponent(key)}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
-    if (!res.ok) {
-      const detail = await res.text().catch(() => "");
-      throw new Error(`gemini ${res.status}: ${detail.slice(0, 200)}`);
+    const rawText = await res.text();
+    let data = null;
+    try {
+      data = JSON.parse(rawText);
+    } catch (e) {
+      data = null;
     }
-    const data = await res.json();
+    if (!res.ok) {
+      // A cached model name can go stale; clear it so the next attempt
+      // rediscovers rather than failing the same way forever.
+      if (res.status === 404) saveTripSettings({ geminiModel: "" });
+      const err = new Error(describeGeminiError(res.status, data, rawText));
+      err.status = res.status;
+      throw err;
+    }
+    if (!data) throw new Error("Gemini returned a response that wasn't JSON.");
     const cand = data.candidates && data.candidates[0];
     if (!cand) throw new Error("gemini returned no candidates");
 
@@ -643,6 +763,9 @@
               checking — verify before relying on them.
             </p>
 
+            <button class="modal-btn" id="testGeminiBtn" style="margin-top:10px;">Test Gemini key</button>
+            <pre class="settings-result" id="geminiTestResult" hidden></pre>
+
             <label class="settings-label" for="setTravellers">Who's travelling</label>
             <input class="settings-input" type="text" id="setTravellers" value="${esc(s.travellers)}"
                    placeholder="e.g. family of 3, 4-year-old who walks" />
@@ -659,6 +782,23 @@
         if (e.target === el) closePlaceModal();
       });
     });
+    const testBtn = document.getElementById("testGeminiBtn");
+    const testOut = document.getElementById("geminiTestResult");
+    testBtn.addEventListener("click", async () => {
+      const key = document.getElementById("setGeminiKey").value.trim();
+      // Saved first so the test uses the key actually being tried, and a
+      // rediscovered model is kept even if the user closes the sheet.
+      saveTripSettings({ geminiKey: key, geminiModel: "" });
+      testOut.hidden = false;
+      testOut.className = "settings-result";
+      testOut.textContent = "Testing…";
+      testBtn.disabled = true;
+      const result = await testGeminiKey(key);
+      testBtn.disabled = false;
+      testOut.className = "settings-result " + (result.ok ? "ok" : "bad");
+      testOut.textContent = result.message;
+    });
+
     document.getElementById("saveSettings").addEventListener("click", () => {
       saveTripSettings({
         destination: document.getElementById("setDestination").value,
@@ -1011,7 +1151,9 @@
       planNote = "Suggested plan — edit anything that doesn't suit.";
     } catch (e) {
       console.warn("auto-plan failed:", e);
-      planNote = "Couldn't build a plan just now. Check the key in Settings, or try again.";
+      // Show what Google actually said - a generic "try again" gives the user
+      // nothing to act on, and there is no console to read on a phone.
+      planNote = `Couldn't build a plan.\n\n${e && e.message ? e.message : e}`;
     } finally {
       planBusy = false;
       renderItinerary();
@@ -1457,11 +1599,244 @@
     { key: "cafe", label: "Cafes", icon: "☕", tag: "amenity", value: "cafe" },
     { key: "parking", label: "Car parks", icon: "🅿️", tag: "amenity", value: "parking" },
     { key: "museum", label: "Museums", icon: "🏛️", tag: "tourism", value: "museum" },
+    { key: "attraction", label: "Attractions", icon: "🎡", tag: "tourism", value: "attraction" },
     { key: "playground", label: "Playgrounds", icon: "🛝", tag: "leisure", value: "playground" },
+    { key: "park", label: "Parks", icon: "🌳", tag: "leisure", value: "park" },
     { key: "toilets", label: "Toilets", icon: "🚻", tag: "amenity", value: "toilets" },
     { key: "pharmacy", label: "Pharmacies", icon: "💊", tag: "amenity", value: "pharmacy" },
     { key: "supermarket", label: "Supermarkets", icon: "🛒", tag: "shop", value: "supermarket" },
   ];
+
+  // ---------- Explore: pick a centre, then browse by category ----------
+  // The per-pick "explore nearby" only works from somewhere already saved.
+  // This lets any point be the centre - a saved place, a typed location, or
+  // where you actually are - which is what you want when deciding where to
+  // base yourself for an afternoon.
+  let explore = {
+    open: false,
+    centre: null, // { name, lat, lon }
+    category: "",
+    radius: 1500,
+    status: "idle", // idle | locating | loading | done | error
+    results: [],
+    error: "",
+  };
+
+  async function setExploreCentreFromSearch(query) {
+    explore.status = "locating";
+    explore.error = "";
+    renderPicks();
+    try {
+      const geo = await geocodePlace(query, null);
+      if (!geo) throw new Error(`Couldn't find "${query}".`);
+      explore.centre = { name: query, lat: geo.lat, lon: geo.lon };
+      explore.status = "idle";
+      if (explore.category) return runExplore();
+    } catch (e) {
+      explore.status = "error";
+      explore.error = e && e.message ? e.message : String(e);
+    }
+    renderPicks();
+  }
+
+  function setExploreCentreFromPick(pickId) {
+    const p = loadPicks().find((x) => x.id === pickId);
+    if (!p || p.lat == null) return;
+    explore.centre = { name: p.name, lat: p.lat, lon: p.lon };
+    explore.error = "";
+    if (explore.category) return runExplore();
+    renderPicks();
+  }
+
+  async function setExploreCentreFromGps() {
+    if (!navigator.geolocation) {
+      explore.status = "error";
+      explore.error = "This device didn't offer location access.";
+      renderPicks();
+      return;
+    }
+    explore.status = "locating";
+    explore.error = "";
+    renderPicks();
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        explore.centre = { name: "Where I am", lat: pos.coords.latitude, lon: pos.coords.longitude };
+        explore.status = "idle";
+        if (explore.category) runExplore();
+        else renderPicks();
+      },
+      (err) => {
+        explore.status = "error";
+        explore.error = `Couldn't get your location: ${err.message}`;
+        renderPicks();
+      },
+      { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 }
+    );
+  }
+
+  async function runExplore() {
+    if (!explore.centre || !explore.category) return;
+    explore.status = "loading";
+    explore.error = "";
+    renderPicks();
+    try {
+      const results = await overpassNearby(
+        explore.centre.lat,
+        explore.centre.lon,
+        NEARBY_CATEGORIES.find((c) => c.key === explore.category),
+        explore.radius
+      );
+      explore.results = results;
+      explore.status = "done";
+    } catch (e) {
+      explore.status = "error";
+      explore.error = e && e.message ? e.message : String(e);
+    }
+    renderPicks();
+  }
+
+  function renderExplore() {
+    const cats = NEARBY_CATEGORIES.map(
+      (c) =>
+        `<button class="filter-chip${explore.category === c.key ? " active" : ""}" data-explore-cat="${c.key}">${
+          c.icon
+        } ${esc(c.label)}</button>`
+    ).join("");
+
+    const pickOptions = loadPicks()
+      .filter((p) => p.lat != null)
+      .map((p) => `<option value="${esc(p.id)}">${esc(p.name)}</option>`)
+      .join("");
+
+    let body = `
+      <form class="search-bar" id="exploreSearchForm" style="margin-bottom:8px;">
+        <input type="text" id="exploreSearchInput" placeholder="Search a place or area…" autocomplete="off" />
+        <button type="submit" aria-label="Set centre">🔍</button>
+      </form>
+      <div class="explore-centre-row">
+        <button class="move-chip" id="exploreGpsBtn">📍 Where I am</button>
+        ${pickOptions ? `<select id="exploreFromPick"><option value="">From a saved place…</option>${pickOptions}</select>` : ""}
+      </div>
+    `;
+
+    if (explore.centre) {
+      body += `<p class="explore-centre">Around <b>${esc(explore.centre.name)}</b></p>`;
+      body += `<div class="filter-row">${cats}</div>`;
+      body += `
+        <div class="explore-radius">
+          <label for="exploreRadius">Within</label>
+          <select id="exploreRadius">
+            ${[500, 1000, 1500, 3000, 5000]
+              .map(
+                (m) =>
+                  `<option value="${m}"${explore.radius === m ? " selected" : ""}>${
+                    m < 1000 ? m + " m" : m / 1000 + " km"
+                  }</option>`
+              )
+              .join("")}
+          </select>
+        </div>
+      `;
+    } else {
+      body += `<p class="pick-status">Choose a starting point above, then pick a category.</p>`;
+    }
+
+    if (explore.status === "locating") body += `<p class="pick-status">Finding that location…</p>`;
+    if (explore.status === "loading") body += `<p class="pick-status">Looking for ${esc(catLabel(explore.category))}…</p>`;
+    if (explore.status === "error") body += `<pre class="settings-result bad">${esc(explore.error)}</pre>`;
+
+    if (explore.status === "done") {
+      if (!explore.results.length) {
+        body += `<p class="pick-status">Nothing found in range — try a wider radius.</p>`;
+      } else {
+        body += `<div class="explore-results">`;
+        explore.results.forEach((r, i) => {
+          const km = haversineKm(explore.centre.lat, explore.centre.lon, r.lat, r.lon);
+          body += `
+            <div class="candidate-card explore-result">
+              <div style="flex:1;">
+                <div class="place-name">${esc(r.name)}</div>
+                <div class="place-notes">${km < 1 ? Math.round(km * 1000) + " m" : km.toFixed(1) + " km"} away${
+                  r.openingHours ? ` · ${esc(r.openingHours)}` : ""
+                }</div>
+              </div>
+              <button class="candidate-add" data-explore-add="${i}">+</button>
+            </div>
+          `;
+        });
+        body += `</div>`;
+      }
+    }
+
+    return `
+      <div class="card">
+        <div class="explore-head" id="exploreToggle">
+          <b>🧭 Explore around a place</b>
+          <span class="chevron">${explore.open ? "▼" : "▶"}</span>
+        </div>
+        ${explore.open ? body : ""}
+      </div>
+    `;
+  }
+
+  function wireExplore() {
+    const toggle = document.getElementById("exploreToggle");
+    if (toggle) {
+      toggle.addEventListener("click", () => {
+        explore.open = !explore.open;
+        renderPicks();
+      });
+    }
+    if (!explore.open) return;
+
+    const form = document.getElementById("exploreSearchForm");
+    if (form) {
+      form.addEventListener("submit", (e) => {
+        e.preventDefault();
+        const q = document.getElementById("exploreSearchInput").value.trim();
+        if (q) setExploreCentreFromSearch(q);
+      });
+    }
+    const gps = document.getElementById("exploreGpsBtn");
+    if (gps) gps.addEventListener("click", setExploreCentreFromGps);
+
+    const fromPick = document.getElementById("exploreFromPick");
+    if (fromPick) {
+      fromPick.addEventListener("change", () => {
+        if (fromPick.value) setExploreCentreFromPick(fromPick.value);
+      });
+    }
+    const radius = document.getElementById("exploreRadius");
+    if (radius) {
+      radius.addEventListener("change", () => {
+        explore.radius = Number(radius.value);
+        if (explore.category) runExplore();
+      });
+    }
+    view.querySelectorAll("[data-explore-cat]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        explore.category = btn.getAttribute("data-explore-cat");
+        runExplore();
+      });
+    });
+    view.querySelectorAll("[data-explore-add]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const r = explore.results[Number(btn.getAttribute("data-explore-add"))];
+        if (!r) return;
+        const candidate = {
+          name: r.name,
+          lat: r.lat,
+          lon: r.lon,
+          website: r.website || "",
+          openingHours: r.openingHours || "",
+          category: catLabel(explore.category),
+        };
+        openFolderPicker(candidate.name, nearestCity(r.lat, r.lon), (folder) =>
+          confirmAddCandidate(candidate, folder)
+        );
+      });
+    });
+  }
 
   function catLabel(key) {
     const c = NEARBY_CATEGORIES.find((x) => x.key === key);
@@ -1676,7 +2051,10 @@
   // Google is used because OSM's community data simply doesn't have many
   // smaller businesses; OSM stays as the no-setup default and the fallback
   // for when a Google call fails, so search always works either way.
+  let lastSearchError = "";
+
   async function searchPlaces(query) {
+    lastSearchError = "";
     const s = loadTripSettings();
     const googleKey = s.googleKey.trim();
     const geminiKey = s.geminiKey.trim();
@@ -1687,6 +2065,7 @@
         if (results.length) return results;
       } catch (e) {
         console.warn("Google Places search failed, falling back:", e);
+        lastSearchError = e && e.message ? e.message : String(e);
       }
     }
 
@@ -1707,6 +2086,9 @@
         return await searchWithGemini(query, geminiKey);
       } catch (e) {
         console.warn("Gemini search failed:", e);
+        // Surfaced in the results area rather than swallowed - a silent
+        // "no results" is indistinguishable from a broken key.
+        lastSearchError = e && e.message ? e.message : String(e);
       }
     }
     return osmResults;
@@ -1938,15 +2320,20 @@
         )}" />
         <button type="submit" aria-label="Search">🔍</button>
       </form>
+      ${renderExplore()}
     `;
 
     if (pickSearch.status === "loading") {
       html += `<div class="card"><p class="pick-status">Searching OpenStreetMap…</p></div>`;
     } else if (pickSearch.status === "error") {
-      html += `<div class="card"><p class="pick-status">Search failed — check your connection and try again.</p></div>`;
+      html += `<div class="card"><p class="pick-status">Search failed — check your connection and try again.</p>${
+        lastSearchError ? `<pre class="settings-result bad">${esc(lastSearchError)}</pre>` : ""
+      }</div>`;
     } else if (pickSearch.status === "done") {
       if (!pickSearch.results.length) {
-        html += `<div class="card"><p class="pick-status">No matches for "${esc(pickSearch.query)}" — try a shorter or more general name.</p></div>`;
+        html += `<div class="card"><p class="pick-status">No matches for "${esc(pickSearch.query)}" — try a shorter or more general name.</p>${
+          lastSearchError ? `<pre class="settings-result bad">${esc(lastSearchError)}</pre>` : ""
+        }</div>`;
       } else {
         const anyMappable = pickSearch.results.some((r) => r.lat != null && r.lon != null);
         if (anyMappable) {
@@ -2012,6 +2399,7 @@
 
     destroyMiniMaps();
     view.innerHTML = html;
+    wireExplore();
 
     const searchForm = document.getElementById("pickSearchForm");
     if (searchForm) {
