@@ -36,6 +36,15 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Run before building the APK so a regression fails here rather than
+      # reaching the phone. Every bug this app has had was a runtime one that
+      # only a real browser would catch.
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Run browser tests
+        run: npm test
+
       - name: Sync Capacitor Android project
         run: npx cap sync android
 

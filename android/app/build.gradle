@@ -16,7 +16,28 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    // A fixed debug keystore, committed to the repo. Without one, Gradle
+    // generates a fresh key on every machine - and CI runners start empty, so
+    // every build was signed with a different key. Android refuses to install
+    // an APK over one signed by a different key, which forced an uninstall
+    // for each update, and uninstalling wipes the app's localStorage - taking
+    // every saved pick, folder and plan with it.
+    //
+    // Debug keystores are not secrets: the one shipped in the Android SDK is
+    // identical on every developer's machine, with this same password. A
+    // release build for a store would need a real key kept private.
+    signingConfigs {
+        debug {
+            storeFile file('../keystore/debug.keystore')
+            storePassword 'android'
+            keyAlias 'androiddebugkey'
+            keyPassword 'android'
+        }
+    }
     buildTypes {
+        debug {
+            signingConfig signingConfigs.debug
+        }
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'

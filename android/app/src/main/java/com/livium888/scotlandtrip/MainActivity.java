@@ -23,8 +23,8 @@ public class MainActivity extends BridgeActivity {
 
   private static final String TAG = "MapsShare";
 
-  /** Temporary: shows what was parsed. Set false to silence. */
-  private static final boolean SHARE_DIAGNOSTICS = true;
+  /** Set true to show a dialog of exactly what a share was parsed into. */
+  private static final boolean SHARE_DIAGNOSTICS = false;
 
   @Override
   protected void onCreate(Bundle savedInstanceState) {

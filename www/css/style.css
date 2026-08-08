@@ -773,3 +773,113 @@ body {
 }
 .explore-results { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
 .explore-result { margin-bottom: 0; }
+
+/* ---------- Settings extras ---------- */
+.settings-divider { height: 1px; background: var(--line); margin: 18px 0 4px; }
+.settings-btn-row { display: flex; gap: 8px; margin-top: 8px; }
+.settings-btn-row .modal-btn { flex: 1; text-align: center; }
+
+/* ---------- Plan warnings, walking legs, booked ---------- */
+.plan-leg {
+  font-size: 11.5px;
+  color: var(--ink-soft);
+  padding: 2px 4px 2px 12px;
+  border-left: 2px dashed var(--line);
+  margin-left: 22px;
+}
+/* A long walk with a small child is the thing worth noticing. */
+.plan-leg.far { color: #8a5a1f; border-left-color: var(--mustard); font-weight: 600; }
+.plan-warn {
+  font-size: 11.5px;
+  color: #8c2f2f;
+  background: rgba(160, 50, 50, 0.09);
+  border-radius: 7px;
+  padding: 5px 7px;
+  margin-top: 5px;
+  line-height: 1.4;
+}
+.booked-badge {
+  font-size: 9.5px;
+  font-weight: 700;
+  background: var(--teal);
+  color: #fff;
+  padding: 2px 6px;
+  border-radius: 999px;
+  vertical-align: middle;
+}
+.pick-note-row { display: flex; gap: 8px; margin-top: 10px; align-items: center; }
+.booked-toggle {
+  flex-shrink: 0;
+  font-size: 11.5px;
+  font-weight: 700;
+  padding: 7px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--paper);
+  color: var(--ink-soft);
+  font-family: inherit;
+  min-height: 34px;
+}
+.booked-toggle.on { background: var(--teal); border-color: var(--teal); color: #fff; }
+.pick-note {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  font-size: 12.5px;
+  background: #fff;
+  color: var(--ink);
+  font-family: inherit;
+}
+
+/* ---------- Accessibility & touch targets ----------
+   Interactive controls get a 44px minimum so they're reliably tappable
+   one-handed, and a visible focus ring for keyboard/switch access. */
+button, select, input[type="text"], input[type="file"] { font-family: inherit; }
+.tab, .modal-btn, .filter-chip, .move-chip, .candidate-add, .pick-remove {
+  min-height: 44px;
+}
+.candidate-add, .pick-remove { min-width: 44px; }
+:focus-visible {
+  outline: 2px solid var(--teal);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
+
+/* ---------- Dark mode ----------
+   Follows the system setting. Worth having for a trip app: most planning
+   happens in the evening, and a white screen at 6am in a shared room with a
+   sleeping 4-year-old is antisocial. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #14171c;
+    --card: #1c2027;
+    --ink: #e8eaed;
+    --ink-soft: #a3abb8;
+    --line: #2c323b;
+    --navy: #24486e;
+    --navy-dark: #16283f;
+    --teal: #4c9d8b;
+    --thistle: #8f6db3;
+  }
+  /* Surfaces that were hardcoded white in the light theme. */
+  .tabbar { background: var(--card); }
+  .settings-input,
+  .pick-note,
+  .plan-time,
+  .plan-add-row select,
+  .explore-centre-row select,
+  .explore-radius select {
+    background: #232830;
+    color: var(--ink);
+    border-color: var(--line);
+  }
+  .tab.active { color: #7fb0e0; }
+  .item-tag, .day-share { background: #232830; }
+  .day-share { color: #8fc0f0; }
+  .settings-result { background: rgba(255, 255, 255, 0.06); }
+}

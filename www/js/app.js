@@ -511,6 +511,17 @@
     savePicks(loadPicks().filter((p) => p.id !== id));
   }
 
+  // Small per-pick edits: a personal note ("buggy access round the back") and
+  // whether it's actually booked - which matters when the trip lands in
+  // festival season and half the plan needs reserving in advance.
+  function updatePick(id, patch) {
+    const picks = loadPicks();
+    const p = picks.find((x) => x.id === id);
+    if (!p) return;
+    Object.assign(p, patch);
+    savePicks(picks);
+  }
+
   // Manually overrides the auto-assigned (nearest-city) grouping - e.g. to
   // pull something out of Edinburgh into a general "Other" bucket instead.
   function setPickCity(id, city) {
@@ -729,6 +740,88 @@
     placeModal.classList.remove("open");
   }
 
+  // ---------- Backup ----------
+  // Everything lives in this device's localStorage, which an uninstall, a
+  // "clear data", or a lost phone erases with no recovery. This writes the
+  // whole trip out as one file that can be saved, sent to someone else, or
+  // restored later.
+  // A function, not a constant: PLAN_KEY is declared further down the file,
+  // so reading it while this module is still evaluating would hit the
+  // temporal dead zone and throw before the app ever renders.
+  function backupKeys() {
+    return [PICKS_KEY, FOLDERS_KEY, PLAN_KEY, TRIP_KEY, STORAGE_KEY];
+  }
+
+  function buildBackup() {
+    const data = {};
+    backupKeys().forEach((k) => {
+      const v = localStorage.getItem(k);
+      if (v !== null) data[k] = v;
+    });
+    return JSON.stringify(
+      { format: "scotland-trip-backup", version: 1, exportedAt: new Date().toISOString(), data },
+      null,
+      2
+    );
+  }
+
+  function backupFilename() {
+    const date = new Date().toISOString().slice(0, 10);
+    const slug = (loadTripSettings().title || "trip").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+    return `${slug || "trip"}-backup-${date}.json`;
+  }
+
+  async function exportBackup() {
+    const json = buildBackup();
+    // A Blob download is the reliable route in a WebView; the share sheet is
+    // offered too since sending it to yourself is the easiest way to get a
+    // copy off the device.
+    try {
+      const blob = new Blob([json], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = backupFilename();
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      return { ok: true, message: `Saved ${backupFilename()} to your downloads.` };
+    } catch (e) {
+      return { ok: false, message: `Couldn't save the file: ${e.message || e}` };
+    }
+  }
+
+  function countBackup(parsed) {
+    try {
+      const picks = JSON.parse(parsed.data[PICKS_KEY] || "[]");
+      const folders = JSON.parse(parsed.data[FOLDERS_KEY] || "[]");
+      const plan = JSON.parse(parsed.data[PLAN_KEY] || "{}");
+      const planned = Object.values(plan.items || {}).reduce((n, list) => n + list.length, 0);
+      return `${picks.length} places, ${folders.length} folders, ${planned} planned items`;
+    } catch (e) {
+      return "contents unreadable";
+    }
+  }
+
+  function importBackup(text) {
+    let parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch (e) {
+      return { ok: false, message: "That file isn't valid JSON." };
+    }
+    if (!parsed || parsed.format !== "scotland-trip-backup" || !parsed.data) {
+      return { ok: false, message: "That doesn't look like a trip backup file." };
+    }
+    // Replaces rather than merges - merging two sets of picks silently
+    // duplicates them, and a restore is almost always "put it back how it was".
+    backupKeys().forEach((k) => {
+      if (parsed.data[k] !== undefined) localStorage.setItem(k, parsed.data[k]);
+    });
+    return { ok: true, message: `Restored ${countBackup(parsed)}.` };
+  }
+
   function openSettings() {
     const s = loadTripSettings();
     placeModal.innerHTML = `
@@ -771,6 +864,19 @@
                    placeholder="e.g. family of 3, 4-year-old who walks" />
             <p class="settings-hint">Used to tailor AI suggestions and day planning.</p>
 
+            <div class="settings-divider"></div>
+            <label class="settings-label">Backup</label>
+            <p class="settings-hint">
+              Everything is stored only on this phone. Export a copy you can keep or send
+              to another device — a reinstall or a lost phone loses the lot otherwise.
+            </p>
+            <div class="settings-btn-row">
+              <button class="modal-btn" id="exportBackupBtn">⬇ Export</button>
+              <button class="modal-btn" id="importBackupBtn">⬆ Import</button>
+            </div>
+            <input type="file" id="importBackupFile" accept="application/json,.json" hidden />
+            <pre class="settings-result" id="backupResult" hidden></pre>
+
             <button class="modal-btn modal-btn-primary" id="saveSettings">Save</button>
           </div>
         </div>
@@ -782,6 +888,37 @@
         if (e.target === el) closePlaceModal();
       });
     });
+    const backupOut = document.getElementById("backupResult");
+    const showBackupResult = (result) => {
+      backupOut.hidden = false;
+      backupOut.className = "settings-result " + (result.ok ? "ok" : "bad");
+      backupOut.textContent = result.message;
+    };
+
+    document.getElementById("exportBackupBtn").addEventListener("click", async () => {
+      showBackupResult(await exportBackup());
+    });
+
+    const fileInput = document.getElementById("importBackupFile");
+    document.getElementById("importBackupBtn").addEventListener("click", () => fileInput.click());
+    fileInput.addEventListener("change", () => {
+      const file = fileInput.files && fileInput.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = importBackup(String(reader.result));
+        showBackupResult(result);
+        if (result.ok) {
+          // Re-render from the restored data rather than leaving the old
+          // state on screen.
+          topbarTitle.textContent = loadTripSettings().title;
+          showView(view.dataset.activeTab || "overview");
+        }
+      };
+      reader.onerror = () => showBackupResult({ ok: false, message: "Couldn't read that file." });
+      reader.readAsText(file);
+    });
+
     const testBtn = document.getElementById("testGeminiBtn");
     const testOut = document.getElementById("geminiTestResult");
     testBtn.addEventListener("click", async () => {
@@ -1163,6 +1300,75 @@
   let planBusy = false;
   let planNote = "";
 
+  // Reads the day-of-week out of a day label like "Day 3 · Fri 21 Aug".
+  const DAY_NAMES = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
+
+  function dayCodeFromLabel(label) {
+    const m = String(label || "").match(/\b(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\b/i);
+    if (!m) return null;
+    const map = { sun: "Su", mon: "Mo", tue: "Tu", wed: "We", thu: "Th", fri: "Fr", sat: "Sa" };
+    return map[m[1].slice(0, 3).toLowerCase()] || null;
+  }
+
+  // A deliberately conservative reading of OSM opening_hours: it only reports
+  // a closure when the string clearly lists days and this day isn't among
+  // them. Anything with holiday rules, seasonal ranges or syntax it doesn't
+  // recognise is left alone, because a wrong "closed" warning is worse than
+  // none - it would send you somewhere else for no reason.
+  function closedOnDay(openingHours, dayCode) {
+    if (!openingHours || !dayCode) return false;
+    const hours = openingHours.trim();
+    if (/24\/7/i.test(hours)) return false;
+    // Unsupported syntax - don't guess.
+    if (/PH|SH|easter|summer|winter|"/i.test(hours)) return false;
+
+    if (new RegExp(`\\b${dayCode}\\b[^;]*\\boff\\b`, "i").test(hours)) return true;
+
+    // Collect every day the string mentions, expanding ranges like "Mo-Fr".
+    const mentioned = new Set();
+    let sawDaySpec = false;
+    hours.split(";").forEach((rule) => {
+      if (/\boff\b/i.test(rule)) return;
+      const dayPart = (rule.match(/^[\sA-Za-z,\-]+/) || [""])[0];
+      const rangeRe = /(Mo|Tu|We|Th|Fr|Sa|Su)\s*-\s*(Mo|Tu|We|Th|Fr|Sa|Su)/gi;
+      let m;
+      while ((m = rangeRe.exec(dayPart))) {
+        sawDaySpec = true;
+        let i = DAY_NAMES.indexOf(m[1].slice(0, 2).replace(/^./, (c) => c.toUpperCase()));
+        const end = DAY_NAMES.indexOf(m[2].slice(0, 2).replace(/^./, (c) => c.toUpperCase()));
+        if (i < 0 || end < 0) continue;
+        for (let guard = 0; guard < 8; guard++) {
+          mentioned.add(DAY_NAMES[i]);
+          if (i === end) break;
+          i = (i + 1) % 7;
+        }
+      }
+      const singleRe = /\b(Mo|Tu|We|Th|Fr|Sa|Su)\b/gi;
+      const withoutRanges = dayPart.replace(rangeRe, " ");
+      while ((m = singleRe.exec(withoutRanges))) {
+        sawDaySpec = true;
+        mentioned.add(m[1].slice(0, 2).replace(/^./, (c) => c.toUpperCase()));
+      }
+    });
+
+    if (!sawDaySpec) return false; // e.g. "09:00-17:00" - applies every day
+    return !mentioned.has(dayCode);
+  }
+
+  // Rough walking time between two stops. Deliberately straight-line distance
+  // with a detour factor rather than a routing API - it needs no key, works
+  // offline, and the point is to flag "that's a long way with a small child",
+  // not to give turn-by-turn timings.
+  const WALK_KMH = 3.5; // slower than an adult's pace, this is with a 4-year-old
+  const DETOUR_FACTOR = 1.3; // streets aren't straight lines
+
+  function walkLeg(a, b) {
+    if (!a || !b || a.lat == null || b.lat == null) return null;
+    const km = haversineKm(a.lat, a.lon, b.lat, b.lon) * DETOUR_FACTOR;
+    const mins = Math.round((km / WALK_KMH) * 60);
+    return { km, mins };
+  }
+
   function renderMyPlan() {
     const plan = loadPlan();
     const picks = loadPicks();
@@ -1197,16 +1403,36 @@
       if (!items.length) {
         html += `<p class="pick-status">Nothing planned for this day yet.</p>`;
       }
+      const dayCode = dayCodeFromLabel(day.label);
       items.forEach((it, idx) => {
         const p = byId[it.pickId];
         if (!p) return; // pick was deleted - skip, tidied up on next save
+
+        // Walking leg from the previous stop, so a day that looks tidy but
+        // involves three miles of walking is visible before you're doing it.
+        const prev = idx > 0 ? byId[items[idx - 1].pickId] : null;
+        const leg = walkLeg(prev, p);
+        if (leg && leg.mins >= 5) {
+          html += `<div class="plan-leg${leg.mins >= 25 ? " far" : ""}">🚶 ${leg.mins} min · ${
+            leg.km < 1 ? Math.round(leg.km * 1000) + " m" : leg.km.toFixed(1) + " km"
+          } from previous stop</div>`;
+        }
+
+        const mayBeClosed = closedOnDay(p.openingHours, dayCode);
         html += `
           <div class="plan-item">
             <input class="plan-time" type="text" inputmode="text" placeholder="time"
                    value="${esc(it.time || "")}" data-plan-time="${esc(day.id)}|${esc(it.pickId)}" />
             <div class="plan-item-main">
-              <div class="plan-item-name">${esc(p.name)}</div>
+              <div class="plan-item-name">${esc(p.name)}${
+                p.booked ? ` <span class="booked-badge">booked</span>` : ""
+              }</div>
               ${p.address ? `<div class="plan-item-sub">${esc(p.address)}</div>` : ""}
+              ${
+                mayBeClosed
+                  ? `<div class="plan-warn">⚠ May be closed this day — hours say "${esc(p.openingHours)}". Check before going.</div>`
+                  : ""
+              }
             </div>
             <div class="plan-item-actions">
               <button data-plan-move="${esc(day.id)}|${esc(it.pickId)}|-1" ${idx === 0 ? "disabled" : ""} aria-label="Move up">↑</button>
@@ -2027,6 +2253,13 @@
               }</button>`
             : ""
         }
+        <div class="pick-note-row">
+          <button class="booked-toggle${p.booked ? " on" : ""}" data-toggle-booked="${esc(p.id)}">
+            ${p.booked ? "✓ Booked" : "Mark booked"}
+          </button>
+          <input class="pick-note" type="text" placeholder="Your note (e.g. book ahead, buggy round the back)…"
+                 value="${esc(p.note || "")}" data-pick-note="${esc(p.id)}" />
+        </div>
         <div class="move-row">
           <span class="move-label">Folder:</span>
           ${folders
@@ -2442,6 +2675,22 @@
       btn.addEventListener("click", () => openExternal(btn.getAttribute("data-open-maps")));
     });
 
+    view.querySelectorAll("[data-toggle-booked]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const id = btn.getAttribute("data-toggle-booked");
+        const p = loadPicks().find((x) => x.id === id);
+        updatePick(id, { booked: !(p && p.booked) });
+        renderPicks();
+      });
+    });
+
+    view.querySelectorAll("[data-pick-note]").forEach((input) => {
+      // Saved on blur so a re-render can't interrupt typing.
+      input.addEventListener("blur", () => {
+        updatePick(input.getAttribute("data-pick-note"), { note: input.value.trim() });
+      });
+    });
+
     view.querySelectorAll("[data-nearby-toggle]").forEach((btn) => {
       btn.addEventListener("click", () => {
         getNearby(btn.getAttribute("data-nearby-toggle")).open ^= true;
@@ -2536,7 +2785,21 @@
     const v = VIEWS[name];
     if (!v) return;
     view.dataset.activeTab = name;
-    v.render();
+    // A throw inside a render used to leave the screen blank with no way back
+    // - a real risk mid-trip, where the app failing is worse than any single
+    // feature failing. Catch it, say so, and keep the tab bar usable.
+    try {
+      v.render();
+    } catch (e) {
+      console.error(`render failed for "${name}":`, e);
+      view.innerHTML = `
+        <div class="card">
+          <h2>Something went wrong on this screen</h2>
+          <p>The rest of the app still works — switch tabs and come back. Your saved data is untouched.</p>
+          <pre class="settings-result bad">${esc(String((e && e.stack) || e))}</pre>
+        </div>
+      `;
+    }
     topbarSub.textContent = v.sub;
     tabbar.querySelectorAll(".tab").forEach((t) => {
       t.classList.toggle("active", t.getAttribute("data-view") === name);
