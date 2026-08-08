@@ -55,7 +55,7 @@
     // Deliberately never falls back to p.city (the folder) - that's pure
     // organisation, not geography, and baking it into the search text can
     // send Maps looking in the wrong place entirely.
-    return p.mapsQuery || `${p.name}, Scotland`;
+    return p.mapsQuery || scopedQuery(p.name);
   }
 
   function findPlace(name) {
@@ -77,6 +77,42 @@
       if (!raw.trim()) return;
       goToMapsSearch(buildQuery ? buildQuery(raw) : raw);
     });
+  }
+
+  // ---------- Trip settings ----------
+  // Everything location-specific lives here rather than being baked into the
+  // code. The bundled Scotland itinerary is just the default content; the
+  // destination below is what search, geocoding and folders actually key off,
+  // so pointing the app at anywhere else is a matter of editing it.
+  const TRIP_KEY = "trip-settings-v1";
+
+  function loadTripSettings() {
+    let stored = {};
+    try {
+      stored = JSON.parse(localStorage.getItem(TRIP_KEY)) || {};
+    } catch (e) {
+      stored = {};
+    }
+    return {
+      title: stored.title || TRIP.title,
+      // A region name used to bias place lookups ("Scotland", "Greater
+      // Manchester", ""). Empty means search the whole world.
+      destination: stored.destination !== undefined ? stored.destination : DEFAULT_DESTINATION,
+      googleKey: stored.googleKey || "",
+    };
+  }
+
+  function saveTripSettings(patch) {
+    const next = Object.assign(loadTripSettings(), patch);
+    localStorage.setItem(TRIP_KEY, JSON.stringify(next));
+    return next;
+  }
+
+  // Appends the trip's region to a lookup so "Museum" finds the one you mean,
+  // while staying empty-safe so a trip with no region set searches globally.
+  function scopedQuery(text) {
+    const dest = loadTripSettings().destination.trim();
+    return dest ? `${text}, ${dest}` : text;
   }
 
   // ---------- Picks (bookmarks + custom places) ----------
@@ -143,7 +179,14 @@
     return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   }
 
+  // How far a place can be from a known city anchor and still be filed under
+  // it. Without a limit the "nearest" city is returned no matter how absurd -
+  // somewhere in Manchester would be filed under Glasgow simply because it is
+  // the least-distant of the three Scottish anchors.
+  const CITY_MATCH_KM = 40;
+
   function nearestCity(lat, lon) {
+    if (lat == null || lon == null) return null;
     let best = null;
     let bestDist = Infinity;
     Object.keys(CITY_COORDS).forEach((city) => {
@@ -154,7 +197,9 @@
         best = city;
       }
     });
-    return best;
+    // Too far from anywhere we know about - let the caller ask instead of
+    // silently filing it somewhere wrong.
+    return bestDist <= CITY_MATCH_KM ? best : null;
   }
 
   function togglePick(source, item) {
@@ -253,7 +298,7 @@
   async function geocodePlace(name, cityHint) {
     const queries = [];
     if (cityHint) queries.push(`${name}, ${cityHint}`);
-    queries.push(`${name}, Scotland`);
+    queries.push(scopedQuery(name));
     queries.push(name);
 
     for (const q of queries) {
@@ -433,6 +478,51 @@
 
   function closePlaceModal() {
     placeModal.classList.remove("open");
+  }
+
+  function openSettings() {
+    const s = loadTripSettings();
+    placeModal.innerHTML = `
+      <div class="modal-backdrop" data-close="1">
+        <div class="modal-sheet" role="dialog" aria-label="Settings">
+          <div class="modal-handle"></div>
+          <button class="modal-close" data-close="1" aria-label="Close">✕</button>
+          <div class="modal-body">
+            <h2 class="modal-title">Settings</h2>
+
+            <label class="settings-label" for="setDestination">Search region</label>
+            <input class="settings-input" type="text" id="setDestination" value="${esc(s.destination)}"
+                   placeholder="e.g. Scotland — blank to search worldwide" />
+            <p class="settings-hint">Added to searches so "museum" finds one near your trip. Leave blank to search anywhere.</p>
+
+            <label class="settings-label" for="setGoogleKey">Google Places API key</label>
+            <input class="settings-input" type="text" id="setGoogleKey" value="${esc(s.googleKey)}"
+                   placeholder="Paste a key to search with Google" autocomplete="off" />
+            <p class="settings-hint">
+              Optional. Without it search uses OpenStreetMap, which misses many smaller
+              businesses. With it, search uses Google and results carry ratings.
+              Stored only on this device.
+            </p>
+
+            <button class="modal-btn modal-btn-primary" id="saveSettings">Save</button>
+          </div>
+        </div>
+      </div>
+    `;
+    placeModal.classList.add("open");
+    placeModal.querySelectorAll("[data-close]").forEach((el) => {
+      el.addEventListener("click", (e) => {
+        if (e.target === el) closePlaceModal();
+      });
+    });
+    document.getElementById("saveSettings").addEventListener("click", () => {
+      saveTripSettings({
+        destination: document.getElementById("setDestination").value,
+        googleKey: document.getElementById("setGoogleKey").value.trim(),
+      });
+      closePlaceModal();
+      showView(view.dataset.activeTab || "overview");
+    });
   }
 
   // Asks which folder a new pick should go in - existing folders as chips,
@@ -632,7 +722,237 @@
     }
   }
 
+  // ---------- Personal itinerary planner ----------
+  // The bundled DAYS are a suggested plan and stay read-only; this is the
+  // user's own schedule, built from whatever they've saved in Picks. Days are
+  // seeded from the bundled trip but are editable, so a different trip
+  // entirely is a matter of renaming/adding days.
+  const PLAN_KEY = "trip-plan-v1";
+
+  let planMode = "suggested"; // "suggested" | "mine"
+
+  function loadPlan() {
+    let stored = null;
+    try {
+      stored = JSON.parse(localStorage.getItem(PLAN_KEY));
+    } catch (e) {
+      stored = null;
+    }
+    if (stored && Array.isArray(stored.days)) return stored;
+    return {
+      days: DAYS.map((d, i) => ({ id: `d${i}`, label: `${d.day} · ${d.date}` })),
+      items: {},
+    };
+  }
+
+  function savePlan(plan) {
+    localStorage.setItem(PLAN_KEY, JSON.stringify(plan));
+  }
+
+  function planItems(plan, dayId) {
+    return plan.items[dayId] || [];
+  }
+
+  function addToPlan(dayId, pickId) {
+    const plan = loadPlan();
+    const list = planItems(plan, dayId).slice();
+    if (list.some((it) => it.pickId === pickId)) return;
+    list.push({ pickId, time: "" });
+    plan.items[dayId] = list;
+    savePlan(plan);
+  }
+
+  function removeFromPlan(dayId, pickId) {
+    const plan = loadPlan();
+    plan.items[dayId] = planItems(plan, dayId).filter((it) => it.pickId !== pickId);
+    savePlan(plan);
+  }
+
+  function movePlanItem(dayId, pickId, delta) {
+    const plan = loadPlan();
+    const list = planItems(plan, dayId).slice();
+    const i = list.findIndex((it) => it.pickId === pickId);
+    const j = i + delta;
+    if (i < 0 || j < 0 || j >= list.length) return;
+    [list[i], list[j]] = [list[j], list[i]];
+    plan.items[dayId] = list;
+    savePlan(plan);
+  }
+
+  function setPlanItemTime(dayId, pickId, time) {
+    const plan = loadPlan();
+    const list = planItems(plan, dayId).slice();
+    const item = list.find((it) => it.pickId === pickId);
+    if (!item) return;
+    item.time = time;
+    plan.items[dayId] = list;
+    savePlan(plan);
+  }
+
+  function addPlanDay(label) {
+    const trimmed = (label || "").trim();
+    if (!trimmed) return;
+    const plan = loadPlan();
+    plan.days.push({ id: `d${Date.now()}`, label: trimmed });
+    savePlan(plan);
+  }
+
+  function removePlanDay(dayId) {
+    const plan = loadPlan();
+    plan.days = plan.days.filter((d) => d.id !== dayId);
+    delete plan.items[dayId];
+    savePlan(plan);
+  }
+
+  function renderMyPlan() {
+    const plan = loadPlan();
+    const picks = loadPicks();
+    const byId = {};
+    picks.forEach((p) => (byId[p.id] = p));
+
+    let html = "";
+
+    if (!picks.length) {
+      html += `<div class="card"><p class="pick-status">Nothing saved yet. Bookmark places in Places/Eats, search in Picks, or share a place into the app from Google Maps - then schedule them here.</p></div>`;
+    }
+
+    plan.days.forEach((day) => {
+      const items = planItems(plan, day.id);
+      html += `
+        <div class="card day-card">
+          <div class="plan-day-head">
+            <span class="day-title">${esc(day.label)}</span>
+            <button class="plan-day-remove" data-remove-day="${esc(day.id)}" aria-label="Remove day">✕</button>
+          </div>
+          <div class="plan-items">
+      `;
+      if (!items.length) {
+        html += `<p class="pick-status">Nothing planned for this day yet.</p>`;
+      }
+      items.forEach((it, idx) => {
+        const p = byId[it.pickId];
+        if (!p) return; // pick was deleted - skip, tidied up on next save
+        html += `
+          <div class="plan-item">
+            <input class="plan-time" type="text" inputmode="text" placeholder="time"
+                   value="${esc(it.time || "")}" data-plan-time="${esc(day.id)}|${esc(it.pickId)}" />
+            <div class="plan-item-main">
+              <div class="plan-item-name">${esc(p.name)}</div>
+              ${p.address ? `<div class="plan-item-sub">${esc(p.address)}</div>` : ""}
+            </div>
+            <div class="plan-item-actions">
+              <button data-plan-move="${esc(day.id)}|${esc(it.pickId)}|-1" ${idx === 0 ? "disabled" : ""} aria-label="Move up">↑</button>
+              <button data-plan-move="${esc(day.id)}|${esc(it.pickId)}|1" ${
+                idx === items.length - 1 ? "disabled" : ""
+              } aria-label="Move down">↓</button>
+              <button data-plan-remove="${esc(day.id)}|${esc(it.pickId)}" aria-label="Remove">✕</button>
+            </div>
+          </div>
+        `;
+      });
+      html += `</div>`;
+
+      const unplanned = picks.filter((p) => !items.some((it) => it.pickId === p.id));
+      if (unplanned.length) {
+        html += `
+          <div class="plan-add-row">
+            <select data-plan-add="${esc(day.id)}">
+              <option value="">+ Add a saved place…</option>
+              ${unplanned.map((p) => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join("")}
+            </select>
+          </div>
+        `;
+      }
+      html += `</div>`;
+    });
+
+    html += `
+      <form class="search-bar" id="addDayForm" style="margin-top:4px;">
+        <input type="text" id="addDayInput" placeholder="Add a day (e.g. Sat 22 Aug)…" autocomplete="off" />
+        <button type="submit" aria-label="Add day">+</button>
+      </form>
+    `;
+    return html;
+  }
+
+  function wireMyPlan() {
+    view.querySelectorAll("[data-plan-add]").forEach((sel) => {
+      sel.addEventListener("change", () => {
+        if (!sel.value) return;
+        addToPlan(sel.getAttribute("data-plan-add"), sel.value);
+        renderItinerary();
+      });
+    });
+    view.querySelectorAll("[data-plan-remove]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const [dayId, pickId] = btn.getAttribute("data-plan-remove").split("|");
+        removeFromPlan(dayId, pickId);
+        renderItinerary();
+      });
+    });
+    view.querySelectorAll("[data-plan-move]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const [dayId, pickId, delta] = btn.getAttribute("data-plan-move").split("|");
+        movePlanItem(dayId, pickId, Number(delta));
+        renderItinerary();
+      });
+    });
+    view.querySelectorAll("[data-plan-time]").forEach((input) => {
+      // Saved on blur rather than on every keystroke so a re-render can't
+      // steal focus mid-typing.
+      input.addEventListener("blur", () => {
+        const [dayId, pickId] = input.getAttribute("data-plan-time").split("|");
+        setPlanItemTime(dayId, pickId, input.value.trim());
+      });
+    });
+    view.querySelectorAll("[data-remove-day]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        removePlanDay(btn.getAttribute("data-remove-day"));
+        renderItinerary();
+      });
+    });
+    const form = document.getElementById("addDayForm");
+    if (form) {
+      form.addEventListener("submit", (e) => {
+        e.preventDefault();
+        const input = document.getElementById("addDayInput");
+        addPlanDay(input.value);
+        input.value = "";
+        renderItinerary();
+      });
+    }
+  }
+
   function renderItinerary() {
+    const toggle = `
+      <div class="filter-row plan-toggle">
+        <button class="filter-chip${planMode === "suggested" ? " active" : ""}" data-plan-mode="suggested">Suggested</button>
+        <button class="filter-chip${planMode === "mine" ? " active" : ""}" data-plan-mode="mine">My plan</button>
+      </div>
+    `;
+
+    if (planMode === "mine") {
+      view.innerHTML = toggle + renderMyPlan();
+      wirePlanToggle();
+      wireMyPlan();
+      return;
+    }
+
+    view.innerHTML = toggle + renderSuggestedItinerary();
+    wirePlanToggle();
+    wireSuggestedItinerary();
+  }
+
+  function wirePlanToggle() {
+    view.querySelectorAll("[data-plan-mode]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        planMode = btn.getAttribute("data-plan-mode");
+        renderItinerary();
+      });
+    });
+  }
+
+  function renderSuggestedItinerary() {
     let html = "";
     DAYS.forEach((d, i) => {
       html += `
@@ -668,8 +988,10 @@
         </div>
       `;
     });
-    view.innerHTML = html;
+    return html;
+  }
 
+  function wireSuggestedItinerary() {
     view.querySelectorAll("[data-toggle]").forEach((el) => {
       el.addEventListener("click", () => {
         el.closest(".day-card").classList.toggle("open");
@@ -1078,6 +1400,13 @@
             <div class="place-meta">
               ${p.city ? `<span class="pill" style="background:${cityColor(p.city)}">${esc(p.city)}</span>` : ""}${esc(p.category)}
             </div>
+            ${
+              p.rating != null
+                ? `<div class="place-fact">⭐ ${esc(String(p.rating))}${
+                    p.ratingCount ? ` · ${esc(String(p.ratingCount))} reviews` : ""
+                  }</div>`
+                : ""
+            }
             ${descriptionHtml}
             ${p.address ? `<div class="place-fact">📍 ${esc(p.address)}</div>` : ""}
             ${p.openingHours ? `<div class="place-fact">🕒 ${esc(p.openingHours)}</div>` : ""}
@@ -1114,11 +1443,83 @@
   let pickSearch = { query: "", status: "idle", results: [] }; // idle | loading | done | error
   const pickMiniMaps = []; // Leaflet map instances from the last render, torn down before re-render
 
+  // Searches Google Places when a key is configured, otherwise OpenStreetMap.
+  // Google is used because OSM's community data simply doesn't have many
+  // smaller businesses; OSM stays as the no-setup default and the fallback
+  // for when a Google call fails, so search always works either way.
+  async function searchPlaces(query) {
+    const key = loadTripSettings().googleKey.trim();
+    if (key) {
+      try {
+        return await searchGooglePlaces(query, key);
+      } catch (e) {
+        console.warn("Google Places search failed, falling back to OSM:", e);
+      }
+    }
+    return searchNominatim(query);
+  }
+
+  // Places API (New) text search. Only the fields named below are requested -
+  // billing is per field-mask tier, so asking for less keeps it in the
+  // cheapest bracket rather than being charged for data we don't display.
+  async function searchGooglePlaces(query, key) {
+    const res = await fetch("https://places.googleapis.com/v1/places:searchText", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": key,
+        "X-Goog-FieldMask": [
+          "places.id",
+          "places.displayName",
+          "places.formattedAddress",
+          "places.location",
+          "places.primaryTypeDisplayName",
+          "places.websiteUri",
+          "places.nationalPhoneNumber",
+          "places.rating",
+          "places.userRatingCount",
+          "places.currentOpeningHours.weekdayDescriptions",
+          "places.editorialSummary",
+        ].join(","),
+      },
+      body: JSON.stringify({ textQuery: scopedQuery(query), maxResultCount: 5 }),
+    });
+
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      throw new Error(`google places ${res.status}: ${detail.slice(0, 200)}`);
+    }
+
+    const data = await res.json();
+    return (data.places || []).map((p) => ({
+      name: (p.displayName && p.displayName.text) || query,
+      displayName: p.formattedAddress || "",
+      lat: p.location && p.location.latitude,
+      lon: p.location && p.location.longitude,
+      type: p.primaryTypeDisplayName && p.primaryTypeDisplayName.text,
+      category: p.primaryTypeDisplayName && p.primaryTypeDisplayName.text,
+      website: p.websiteUri || null,
+      phone: p.nationalPhoneNumber || null,
+      openingHours:
+        p.currentOpeningHours && p.currentOpeningHours.weekdayDescriptions
+          ? p.currentOpeningHours.weekdayDescriptions.join(" · ")
+          : null,
+      address: p.formattedAddress || null,
+      description: (p.editorialSummary && p.editorialSummary.text) || "",
+      rating: typeof p.rating === "number" ? p.rating : null,
+      ratingCount: typeof p.userRatingCount === "number" ? p.userRatingCount : null,
+      // Google's own id gives an exact link to the place, same idea as the
+      // CID recovered from a share.
+      googleUrl: p.id ? `https://www.google.com/maps/place/?q=place_id:${p.id}` : "",
+      source: "google",
+    }));
+  }
+
   async function searchNominatim(query) {
     // extratags/namedetails have to be requested explicitly - without them
     // the name and website below silently read undefined every time.
     const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&addressdetails=1&extratags=1&namedetails=1&q=${encodeURIComponent(
-      `${query}, Scotland`
+      scopedQuery(query)
     )}`;
     const res = await fetch(url, { headers: { Accept: "application/json" } });
     if (!res.ok) throw new Error("nominatim error");
@@ -1202,7 +1603,7 @@
     // Maps query is built from real geographic data (Nominatim's full
     // address, when we have it) - never from the folder, which is just the
     // user's own organisation and may have nothing to do with geography.
-    const mapsQuery = candidate.displayName || `${candidate.name}, Scotland`;
+    const mapsQuery = candidate.displayName || scopedQuery(candidate.name);
     const pick = {
       id,
       source: "custom",
@@ -1216,6 +1617,8 @@
       phone: candidate.phone || "",
       openingHours: candidate.openingHours || "",
       googleUrl: candidate.googleUrl || "",
+      rating: candidate.rating != null ? candidate.rating : null,
+      ratingCount: candidate.ratingCount != null ? candidate.ratingCount : null,
       mapsQuery,
       lat: candidate.lat,
       lon: candidate.lon,
@@ -1330,7 +1733,7 @@
         pickSearch = { query: q, status: "loading", results: [] };
         renderPicks();
         try {
-          const results = await searchNominatim(q);
+          const results = await searchPlaces(q);
           pickSearch = { query: q, status: "done", results };
         } catch (err) {
           pickSearch = { query: q, status: "error", results: [] };
@@ -1556,6 +1959,9 @@
     alert("share-debug-3: ShareReceiver plugin not found on window.Capacitor.Plugins");
   }
 
-  topbarTitle.textContent = TRIP.title;
+  const settingsBtn = document.getElementById("settingsBtn");
+  if (settingsBtn) settingsBtn.addEventListener("click", openSettings);
+
+  topbarTitle.textContent = loadTripSettings().title;
   showView("overview");
 })();

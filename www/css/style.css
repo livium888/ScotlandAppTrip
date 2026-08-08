@@ -37,7 +37,23 @@ body {
   color: #fff;
   padding: calc(14px + var(--safe-top)) 20px 14px;
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
+.topbar-text { flex: 1; min-width: 0; }
+.topbar-settings {
+  flex-shrink: 0;
+  background: rgba(255, 255, 255, 0.14);
+  border: none;
+  color: #fff;
+  font-size: 18px;
+  line-height: 1;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+}
+.topbar-settings:active { opacity: 0.6; }
 
 .topbar-title {
   font-size: 20px;
@@ -587,3 +603,93 @@ body {
 .packing-list li::before { content: "☐"; color: var(--teal); font-size: 15px; flex-shrink: 0; }
 .packing-list li.checked { color: var(--ink-soft); text-decoration: line-through; }
 .packing-list li.checked::before { content: "☑"; color: var(--mustard); }
+
+/* ---------- Settings sheet ---------- */
+.settings-label {
+  display: block;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--ink);
+  margin: 14px 0 5px;
+}
+.settings-input {
+  width: 100%;
+  padding: 11px 12px;
+  border: 1px solid rgba(0, 0, 0, 0.14);
+  border-radius: 10px;
+  font-size: 14px;
+  background: #fff;
+  color: var(--ink);
+}
+.settings-hint {
+  font-size: 11.5px;
+  color: var(--ink-soft);
+  line-height: 1.45;
+  margin-top: 6px;
+}
+#saveSettings { margin-top: 18px; width: 100%; text-align: center; }
+
+/* ---------- Personal itinerary planner ---------- */
+.plan-toggle { margin-bottom: 4px; }
+.plan-day-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.plan-day-remove {
+  background: none;
+  border: none;
+  color: var(--ink-soft);
+  font-size: 15px;
+  padding: 4px 6px;
+  flex-shrink: 0;
+}
+.plan-items { display: flex; flex-direction: column; gap: 8px; }
+.plan-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 9px;
+  background: rgba(0, 0, 0, 0.035);
+  border-radius: 10px;
+}
+.plan-time {
+  width: 60px;
+  flex-shrink: 0;
+  padding: 6px 7px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 8px;
+  font-size: 12px;
+  background: #fff;
+  color: var(--ink);
+}
+.plan-item-main { flex: 1; min-width: 0; }
+.plan-item-name { font-size: 13.5px; font-weight: 700; color: var(--ink); }
+.plan-item-sub {
+  font-size: 11.5px;
+  color: var(--ink-soft);
+  margin-top: 2px;
+  line-height: 1.35;
+}
+.plan-item-actions { display: flex; gap: 2px; flex-shrink: 0; }
+.plan-item-actions button {
+  background: none;
+  border: none;
+  color: var(--ink-soft);
+  font-size: 14px;
+  padding: 4px 5px;
+  border-radius: 6px;
+}
+.plan-item-actions button:disabled { opacity: 0.25; }
+.plan-add-row { margin-top: 10px; }
+.plan-add-row select {
+  width: 100%;
+  padding: 10px 11px;
+  border: 1px solid rgba(0, 0, 0, 0.14);
+  border-radius: 10px;
+  font-size: 13px;
+  background: #fff;
+  color: var(--ink);
+}

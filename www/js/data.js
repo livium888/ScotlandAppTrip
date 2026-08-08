@@ -9,6 +9,10 @@ const TRIP = {
   traveler: "Family of 3, child age 4 (walks — no stroller)",
 };
 
+// The region appended to place lookups by default. Editable in Settings -
+// blank it to search worldwide. Only a default, not a hard assumption.
+const DEFAULT_DESTINATION = "Scotland";
+
 const CITY_COLORS = {
   Edinburgh: "#2f5d8c",
   Stirling: "#7a5c3e",
