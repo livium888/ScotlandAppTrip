@@ -101,6 +101,7 @@ public class MainActivity extends BridgeActivity {
         payload.put("lon", place.longitude);
       }
       if (place.resolvedUrl != null) payload.put("resolvedUrl", place.resolvedUrl);
+      if (place.googleUrl != null) payload.put("googleUrl", place.googleUrl);
     }
 
     final String report = buildDiagnosticReport(name, nameFromShare, nameFromUrl, rawText, subject, place);
@@ -140,6 +141,8 @@ public class MainActivity extends BridgeActivity {
       sb
         .append("COORDS: ")
         .append(place.latitude == null ? "none" : place.latitude + "," + place.longitude)
+        .append("\n\nGOOGLE LINK: ")
+        .append(place.googleUrl == null ? "none" : place.googleUrl)
         .append("\n\nRESOLVED URL:\n")
         .append(place.resolvedUrl)
         .append("\n\nscrape: ")

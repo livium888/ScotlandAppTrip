@@ -45,6 +45,11 @@ final class MapsPlaceResolver {
   private static final Pattern QUERY_COORD_PATTERN = Pattern.compile("[?&](?:q|ll|center|daddr)=(-?\\d+\\.\\d+),(-?\\d+\\.\\d+)");
   // "/maps/place/The+Name/" - the name Google itself put in the resolved URL.
   private static final Pattern PLACE_NAME_PATTERN = Pattern.compile("/maps/place/([^/@?]+)");
+  // Google's own id for the place, as "!1s0x<feature>:0x<cid>" in the data
+  // blob or "ftid=0x<feature>:0x<cid>" in the query. The second half is the
+  // CID, which addresses the exact place - no name guessing.
+  private static final Pattern CID_PATTERN = Pattern.compile("(?:!1s|ftid=)0x[0-9a-fA-F]+:0x([0-9a-fA-F]+)");
+  private static final Pattern EXISTING_CID_PATTERN = Pattern.compile("[?&]cid=(\\d+)");
 
   // Titles that mean "you got an interstitial, not a place".
   private static final Pattern INTERSTITIAL_TITLE = Pattern.compile(
@@ -59,6 +64,8 @@ final class MapsPlaceResolver {
     Double longitude;
     String originalUrl;
     String resolvedUrl;
+    /** Canonical "?cid=" link to this exact place on Google Maps, if known. */
+    String googleUrl;
     /** Set when the page fetch was blocked/consent-walled - for diagnostics. */
     String scrapeNote;
   }
@@ -100,8 +107,42 @@ final class MapsPlaceResolver {
 
     applyCoordinates(place);
     applyNameFromUrl(place);
+    applyGoogleUrl(place);
     tryScrapeMetadata(place);
     return place;
+  }
+
+  /**
+   * Builds the canonical "maps?cid=" link, which opens the exact place Google
+   * had in mind rather than a name search that can land on the wrong one.
+   *
+   * The CID is an unsigned 64-bit value and routinely exceeds Long.MAX_VALUE,
+   * so it has to be parsed and printed unsigned - signed parsing throws on
+   * roughly half of all real ids.
+   */
+  private static void applyGoogleUrl(Place place) {
+    for (String candidate : new String[] { place.resolvedUrl, place.originalUrl }) {
+      if (candidate == null) continue;
+
+      Matcher existing = EXISTING_CID_PATTERN.matcher(candidate);
+      if (existing.find()) {
+        place.googleUrl = "https://www.google.com/maps?cid=" + existing.group(1);
+        return;
+      }
+
+      Matcher m = CID_PATTERN.matcher(candidate);
+      if (m.find()) {
+        try {
+          long cid = Long.parseUnsignedLong(m.group(1), 16);
+          if (cid != 0) {
+            place.googleUrl = "https://www.google.com/maps?cid=" + Long.toUnsignedString(cid);
+            return;
+          }
+        } catch (NumberFormatException ignored) {
+          // malformed id - fall through, the name search still works
+        }
+      }
+    }
   }
 
   /**

@@ -24,6 +24,30 @@
       : null;
   }
 
+  // A place shared from Google Maps carries Google's own id for it, which we
+  // turn into a "?cid=" link. That addresses the exact place, so prefer it
+  // over a name search - the search can and does land on the wrong "Manchester".
+  function pickGoogleUrl(p) {
+    return p.googleUrl || mapsUrlFor(pickMapsQuery(p));
+  }
+
+  // Opens a link in an in-app Chrome Custom Tab when running natively. A
+  // Custom Tab is real Chrome, so it reuses the browser's cookies - the
+  // Google consent/sign-in already accepted there carries over, which a
+  // plain embedded WebView (its own cookie jar) would not do.
+  async function openExternal(url) {
+    const browser = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Browser;
+    if (browser) {
+      try {
+        await browser.open({ url, presentationStyle: "popover" });
+        return;
+      } catch (e) {
+        // fall through to a normal navigation
+      }
+    }
+    window.open(url, "_blank", "noopener");
+  }
+
   // A raw "lat,lon" query just drops an unlabelled pin - no name, reviews,
   // hours, or photos attached. Searching by name (+ city for disambiguation)
   // resolves to the actual place listing instead, so always prefer that.
@@ -1029,7 +1053,7 @@
   }
 
   function renderPickCard(p) {
-    const mapsUrl = mapsUrlFor(pickMapsQuery(p));
+    const mapsUrl = pickGoogleUrl(p);
     let descriptionHtml;
     if (p.enrichStatus === "loading") {
       descriptionHtml = `<p class="pick-status">Fetching details from OpenStreetMap & Wikipedia…</p>`;
@@ -1063,7 +1087,13 @@
           <button class="pick-remove" data-remove-pick="${esc(p.id)}" aria-label="Remove">✕</button>
         </div>
         ${p.lat != null ? `<div class="pick-mini-map" id="${mapElId}"></div>` : ""}
-        ${mapsUrl ? `<a class="pick-maps-btn" href="${mapsUrl}" target="_blank" rel="noopener">📍 Open in Google Maps</a>` : ""}
+        ${
+          mapsUrl
+            ? `<button class="pick-maps-btn" data-open-maps="${esc(mapsUrl)}">📍 ${
+                p.googleUrl ? "Open this place on Google Maps" : "Find on Google Maps"
+              }</button>`
+            : ""
+        }
         <div class="move-row">
           <span class="move-label">Folder:</span>
           ${folders
@@ -1185,6 +1215,7 @@
       address: candidate.address || "",
       phone: candidate.phone || "",
       openingHours: candidate.openingHours || "",
+      googleUrl: candidate.googleUrl || "",
       mapsQuery,
       lat: candidate.lat,
       lon: candidate.lon,
@@ -1327,6 +1358,10 @@
       }
     });
 
+    view.querySelectorAll("[data-open-maps]").forEach((btn) => {
+      btn.addEventListener("click", () => openExternal(btn.getAttribute("data-open-maps")));
+    });
+
     view.querySelectorAll("[data-nearby-toggle]").forEach((btn) => {
       btn.addEventListener("click", () => {
         getNearby(btn.getAttribute("data-nearby-toggle")).open ^= true;
@@ -1456,6 +1491,8 @@
       lat: payload.lat != null ? payload.lat : null,
       lon: payload.lon != null ? payload.lon : null,
       description: payload.description || "",
+      // Google's own link to this exact place, when the share carried its id.
+      googleUrl: payload.googleUrl || "",
       // Deliberately not passing the raw share text as displayName: it
       // becomes the Google Maps search query, and the raw text is a
       // sentence with a URL in it ("Check out X https://...") which
