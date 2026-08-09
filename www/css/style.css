@@ -955,3 +955,116 @@ button, select, input[type="text"], input[type="file"] { font-family: inherit; }
   padding: 2px 0;
   flex-shrink: 0;
 }
+
+/* ---------- Picks: compact rows ----------
+   A saved place is a row you can scan, not a full dossier. Everything else
+   is one tap away in the detail sheet. */
+.pick-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 13px 14px;
+  margin-bottom: 8px;
+  font-family: inherit;
+  min-height: 60px;
+}
+.pick-row:active { background: var(--paper); }
+.pick-row-main { flex: 1; min-width: 0; }
+.pick-row-name {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pick-row-meta { font-size: 12px; color: var(--ink-soft); margin-top: 2px; }
+.pick-row-badges { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.pick-row-badges:empty { display: none; }
+.row-badge {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  color: var(--ink-soft);
+}
+.row-badge.day { background: var(--navy); border-color: var(--navy); color: #fff; }
+.row-badge.booked { background: var(--teal); border-color: var(--teal); color: #fff; }
+.pick-row-chevron { color: var(--ink-soft); font-size: 20px; flex-shrink: 0; }
+
+.detail-map {
+  height: 160px;
+  border-radius: 10px;
+  overflow: hidden;
+  margin: 12px 0;
+  background: var(--paper);
+}
+.modal-btn.danger { color: #8c2f2f; border-color: rgba(160, 50, 50, 0.3); }
+
+/* ---------- Empty states ---------- */
+.empty-state { text-align: center; padding: 28px 20px; }
+.empty-icon { font-size: 34px; margin-bottom: 8px; }
+.empty-state h2 { font-size: 16px; margin-bottom: 8px; }
+.empty-list {
+  text-align: left;
+  margin: 12px 0 8px;
+  padding-left: 18px;
+  color: var(--ink-soft);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.empty-list b { color: var(--ink); }
+
+/* ---------- Today ---------- */
+.today-head { margin-bottom: 14px; }
+.today-label {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--teal);
+}
+.today-date { font-size: 22px; font-weight: 700; color: var(--ink); margin-top: 2px; }
+
+.today-card { position: relative; }
+/* The next stop is the one thing you're looking for when you open the app. */
+.today-card.next { border-color: var(--teal); border-width: 2px; }
+.today-next-flag {
+  position: absolute;
+  top: -9px;
+  left: 14px;
+  background: var(--teal);
+  color: #fff;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+.today-card-head { display: flex; justify-content: space-between; gap: 12px; }
+.today-time { font-size: 11.5px; font-weight: 700; color: var(--teal); text-transform: uppercase; }
+.today-name { font-size: 16px; font-weight: 700; color: var(--ink); margin-top: 2px; }
+.today-sub { font-size: 12.5px; color: var(--ink-soft); margin-top: 3px; line-height: 1.4; }
+.today-note {
+  font-size: 12.5px;
+  color: var(--ink);
+  background: rgba(217, 164, 65, 0.14);
+  border-radius: 8px;
+  padding: 7px 9px;
+  margin-top: 8px;
+}
+.today-actions { display: flex; gap: 8px; margin-top: 12px; }
+.today-actions .modal-btn { flex: 1; text-align: center; }
+.today-leg {
+  font-size: 12px;
+  color: var(--ink-soft);
+  text-align: center;
+  padding: 2px 0 10px;
+}

@@ -61,7 +61,9 @@ await page.waitForTimeout(400);
 const moved = await page.evaluate(() => JSON.parse(localStorage.getItem('scotland-trip-picks-v1'))[0].city);
 check('folder actually changes via the correction', moved !== 'Edinburgh', moved);
 
-// --- Scheduling from the pick card, without leaving the tab ---
+// --- Scheduling from the pick's detail sheet, without leaving the tab ---
+await page.evaluate(() => document.querySelector('[data-open-pick]').click());
+await page.waitForSelector('#placeModal.open [data-assign-day]', { timeout: 5000 });
 const dayChips = await page.evaluate(() => document.querySelectorAll('[data-assign-day]').length);
 check('day chips appear on the pick card', dayChips > 0, String(dayChips));
 
@@ -81,6 +83,8 @@ const plan2 = await page.evaluate(() => JSON.parse(localStorage.getItem('trip-pl
 check('tapping again removes it', Object.values(plan2.items || {}).flat().length === 0, JSON.stringify(plan2.items));
 
 // --- Planner uses tappable chips, not a native select ---
+await page.evaluate(() => document.querySelector('#placeModal .modal-close').click());
+await page.waitForTimeout(200);
 await page.evaluate(() => document.querySelector('[data-view="itinerary"]').click());
 await page.waitForTimeout(150);
 await page.evaluate(() => document.querySelector('[data-plan-mode="mine"]').click());

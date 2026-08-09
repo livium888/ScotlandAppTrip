@@ -2287,99 +2287,220 @@
     return html;
   }
 
-  function renderPickCard(p) {
-    const mapsUrl = pickGoogleUrl(p);
-    let descriptionHtml;
-    if (p.enrichStatus === "loading") {
-      descriptionHtml = `<p class="pick-status">Fetching details from OpenStreetMap & Wikipedia…</p>`;
-    } else if (p.description) {
-      descriptionHtml = `<p class="place-notes">${esc(p.description)}</p>`;
-    } else if (p.notes) {
-      descriptionHtml = `<p class="place-notes">${esc(p.notes)}</p>`;
-    } else if (p.enrichStatus === "empty") {
-      descriptionHtml = `<p class="pick-status">No extra details found for this one.</p>`;
-    } else {
-      descriptionHtml = "";
-    }
+  // A pick in the list is a summary, not a dossier. The card used to render
+  // every fact, a live map and eight controls for every saved place - so ten
+  // places meant ten stacked detail pages and ten Leaflet instances, with
+  // nothing to scan and no hierarchy. The row below carries only what you
+  // need to recognise and triage it; everything else lives one tap away in
+  // openPickDetail(), which also means only one map exists at a time.
+  function renderPickRow(p) {
+    const plan = loadPlan();
+    const days = plan.days
+      .filter((d) => (plan.items[d.id] || []).some((it) => it.pickId === p.id))
+      .map((d) => shortDayLabel(d.label));
 
-    const mapElId = pickMapElId(p.id);
-    const folders = loadFolders();
+    const meta = [p.category, p.rating != null ? `⭐ ${p.rating}` : null].filter(Boolean).join(" · ");
 
     return `
-      <div class="card pick-card" data-pick-id="${esc(p.id)}">
-        <div class="pick-card-top">
-          <div style="flex:1;">
-            <div class="place-name">${esc(p.name)}</div>
-            <div class="place-meta">
-              ${p.city ? `<span class="pill" style="background:${cityColor(p.city)}">${esc(p.city)}</span>` : ""}${esc(p.category)}
-            </div>
-            ${
-              p.rating != null
-                ? `<div class="place-fact">⭐ ${esc(String(p.rating))}${
-                    p.ratingCount ? ` · ${esc(String(p.ratingCount))} reviews` : ""
-                  }</div>`
-                : ""
-            }
-            ${descriptionHtml}
+      <button class="pick-row" data-open-pick="${esc(p.id)}">
+        <div class="pick-row-main">
+          <div class="pick-row-name">${esc(p.name)}</div>
+          ${meta ? `<div class="pick-row-meta">${esc(meta)}</div>` : ""}
+          <div class="pick-row-badges">
+            ${days.map((d) => `<span class="row-badge day">${esc(d)}</span>`).join("")}
+            ${p.booked ? `<span class="row-badge booked">booked</span>` : ""}
+            ${p.note ? `<span class="row-badge note">note</span>` : ""}
+            ${p.enrichStatus === "loading" ? `<span class="row-badge">loading…</span>` : ""}
+          </div>
+        </div>
+        <span class="pick-row-chevron">›</span>
+      </button>
+    `;
+  }
+
+  // Everything about one place, opened from a row. This is where the map,
+  // the full facts and all the editing controls live.
+  function openPickDetail(id) {
+    const p = loadPicks().find((x) => x.id === id);
+    if (!p) return;
+    const mapsUrl = pickGoogleUrl(p);
+    const plan = loadPlan();
+    const folders = loadFolders();
+    const scheduled = {};
+    plan.days.forEach((d) => {
+      if ((plan.items[d.id] || []).some((it) => it.pickId === p.id)) scheduled[d.id] = true;
+    });
+
+    const description = p.description || p.notes || "";
+
+    placeModal.innerHTML = `
+      <div class="modal-backdrop" data-close="1">
+        <div class="modal-sheet" role="dialog" aria-label="${esc(p.name)}">
+          <div class="modal-handle"></div>
+          <button class="modal-close" data-close="1" aria-label="Close">✕</button>
+          <div class="modal-body">
+            <h2 class="modal-title">${esc(p.name)}</h2>
+            <div class="modal-subtitle">${esc(
+              [p.category, p.city].filter(Boolean).join(" · ")
+            )}${p.rating != null ? ` · ⭐ ${esc(String(p.rating))}` : ""}</div>
+
+            ${description ? `<p class="place-notes" style="margin-top:10px;">${esc(description)}</p>` : ""}
+
             ${p.address ? `<div class="place-fact">📍 ${esc(p.address)}</div>` : ""}
             ${p.openingHours ? `<div class="place-fact">🕒 ${esc(p.openingHours)}</div>` : ""}
             ${p.phone ? `<div class="place-fact">📞 <a href="tel:${esc(p.phone)}">${esc(p.phone)}</a></div>` : ""}
-            ${p.website ? `<div class="place-links"><a href="${esc(p.website)}" target="_blank" rel="noopener">🌐 Website</a></div>` : ""}
-          </div>
-          <button class="pick-remove" data-remove-pick="${esc(p.id)}" aria-label="Remove">✕</button>
-        </div>
-        ${p.lat != null ? `<div class="pick-mini-map" id="${mapElId}"></div>` : ""}
-        ${
-          mapsUrl
-            ? `<button class="pick-maps-btn" data-open-maps="${esc(mapsUrl)}">📍 ${
-                p.googleUrl ? "Open this place on Google Maps" : "Find on Google Maps"
-              }</button>`
-            : ""
-        }
-        ${(() => {
-          // Schedule straight from the card. Previously the only route was
-          // Picks -> Itinerary -> My plan -> find the day -> picker, which
-          // made planning feel like admin rather than one gesture.
-          const plan = loadPlan();
-          const scheduled = {};
-          Object.keys(plan.items || {}).forEach((dayId) => {
-            if ((plan.items[dayId] || []).some((it) => it.pickId === p.id)) scheduled[dayId] = true;
-          });
-          if (!plan.days.length) return "";
-          return `
+            ${p.website ? `<div class="place-fact">🌐 <a href="${esc(p.website)}" target="_blank" rel="noopener">Website</a></div>` : ""}
+
+            ${p.lat != null ? `<div class="detail-map" id="detailMap"></div>` : ""}
+            ${mapsUrl ? `<button class="modal-btn modal-btn-primary" data-open-maps="${esc(mapsUrl)}">📍 ${
+              p.googleUrl ? "Open on Google Maps" : "Find on Google Maps"
+            }</button>` : ""}
+
+            <div class="settings-divider"></div>
+
+            <label class="settings-label">Which days</label>
             <div class="day-assign-row">
-              <span class="move-label">Day:</span>
-              ${plan.days
+              ${
+                plan.days.length
+                  ? plan.days
+                      .map(
+                        (d) =>
+                          `<button class="day-chip${scheduled[d.id] ? " on" : ""}" data-assign-day="${esc(
+                            p.id
+                          )}|${esc(d.id)}">${esc(shortDayLabel(d.label))}</button>`
+                      )
+                      .join("")
+                  : `<span class="settings-hint">Add days in the Itinerary tab first.</span>`
+              }
+            </div>
+
+            <label class="settings-label">Your note</label>
+            <input class="settings-input" type="text" placeholder="e.g. book ahead, buggy round the back"
+                   value="${esc(p.note || "")}" data-pick-note="${esc(p.id)}" />
+
+            <div class="settings-btn-row" style="margin-top:12px;">
+              <button class="modal-btn booked-toggle${p.booked ? " on" : ""}" data-toggle-booked="${esc(p.id)}">
+                ${p.booked ? "✓ Booked" : "Mark booked"}
+              </button>
+              <button class="modal-btn" data-explore-from="${esc(p.id)}">🧭 What's nearby</button>
+            </div>
+
+            <label class="settings-label">Folder</label>
+            <div class="move-row">
+              ${folders
                 .map(
-                  (d) =>
-                    `<button class="day-chip${scheduled[d.id] ? " on" : ""}" data-assign-day="${esc(p.id)}|${esc(
-                      d.id
-                    )}">${esc(shortDayLabel(d.label))}</button>`
+                  (c) =>
+                    `<button class="move-chip${p.city === c ? " active" : ""}" data-move-pick="${esc(
+                      p.id
+                    )}|${esc(c)}">${esc(c)}</button>`
                 )
                 .join("")}
+              <button class="move-chip" data-new-folder-for="${esc(p.id)}">+ New</button>
             </div>
-          `;
-        })()}
-        <div class="pick-note-row">
-          <button class="booked-toggle${p.booked ? " on" : ""}" data-toggle-booked="${esc(p.id)}">
-            ${p.booked ? "✓ Booked" : "Mark booked"}
-          </button>
-          <input class="pick-note" type="text" placeholder="Your note (e.g. book ahead, buggy round the back)…"
-                 value="${esc(p.note || "")}" data-pick-note="${esc(p.id)}" />
+
+            <button class="modal-btn danger" data-remove-pick="${esc(p.id)}" style="margin-top:16px;width:100%;">
+              Remove from picks
+            </button>
+          </div>
         </div>
-        <div class="move-row">
-          <span class="move-label">Folder:</span>
-          ${folders
-            .map(
-              (c) =>
-                `<button class="move-chip${p.city === c ? " active" : ""}" data-move-pick="${esc(p.id)}|${esc(c)}">${esc(c)}</button>`
-            )
-            .join("")}
-          <button class="move-chip" data-new-folder-for="${esc(p.id)}">+ New</button>
-        </div>
-        ${renderNearbyPanel(p)}
       </div>
     `;
+    placeModal.classList.add("open");
+    wirePickDetail(p);
+  }
+
+  function wirePickDetail(p) {
+    placeModal.querySelectorAll("[data-close]").forEach((el) => {
+      el.addEventListener("click", (e) => {
+        if (e.target === el) closePlaceModal();
+      });
+    });
+
+    const mapEl = document.getElementById("detailMap");
+    if (mapEl && p.lat != null) {
+      const map = L.map(mapEl, { scrollWheelZoom: false, attributionControl: false });
+      addTileLayer(map);
+      map.setView([p.lat, p.lon], 15);
+      L.marker([p.lat, p.lon]).addTo(map);
+      // Leaflet needs a nudge when it initialises inside a sheet that was
+      // display:none a moment ago, or it renders a grey box.
+      setTimeout(() => map.invalidateSize(), 60);
+    }
+
+    placeModal.querySelectorAll("[data-open-maps]").forEach((btn) =>
+      btn.addEventListener("click", () => openExternal(btn.getAttribute("data-open-maps")))
+    );
+
+    placeModal.querySelectorAll("[data-assign-day]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const [pid, dayId] = btn.getAttribute("data-assign-day").split("|");
+        const plan = loadPlan();
+        const already = (plan.items[dayId] || []).some((it) => it.pickId === pid);
+        if (already) removeFromPlan(dayId, pid);
+        else addToPlan(dayId, pid);
+        btn.classList.toggle("on", !already);
+      });
+    });
+
+    placeModal.querySelectorAll("[data-pick-note]").forEach((input) =>
+      input.addEventListener("blur", () =>
+        updatePick(input.getAttribute("data-pick-note"), { note: input.value.trim() })
+      )
+    );
+
+    placeModal.querySelectorAll("[data-toggle-booked]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const id = btn.getAttribute("data-toggle-booked");
+        const cur = loadPicks().find((x) => x.id === id);
+        const next = !(cur && cur.booked);
+        updatePick(id, { booked: next });
+        btn.classList.toggle("on", next);
+        btn.textContent = next ? "✓ Booked" : "Mark booked";
+      });
+    });
+
+    placeModal.querySelectorAll("[data-move-pick]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const [id, folder] = btn.getAttribute("data-move-pick").split("|");
+        setPickCity(id, folder);
+        closePlaceModal();
+        renderPicks();
+        toast(`Moved to ${folder}`);
+      });
+    });
+
+    placeModal.querySelectorAll("[data-new-folder-for]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const id = btn.getAttribute("data-new-folder-for");
+        const name = prompt("New folder name");
+        const created = addFolder(name);
+        if (!created) return;
+        setPickCity(id, created);
+        closePlaceModal();
+        renderPicks();
+        toast(`Moved to ${created}`);
+      });
+    });
+
+    placeModal.querySelectorAll("[data-explore-from]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const id = btn.getAttribute("data-explore-from");
+        closePlaceModal();
+        explore.open = true;
+        setExploreCentreFromPick(id);
+      });
+    });
+
+    placeModal.querySelectorAll("[data-remove-pick]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const id = btn.getAttribute("data-remove-pick");
+        const removed = loadPicks().find((x) => x.id === id);
+        removePick(id);
+        closePlaceModal();
+        renderPicks();
+        toast(`Removed ${removed ? removed.name : "pick"}`);
+      });
+    });
   }
 
   // ---------- Picks: search-and-confirm with a real map ----------
@@ -2650,10 +2771,6 @@
     const picks = loadPicks();
 
     let html = `
-      <div class="card">
-        <p>Bookmark places from Places/Eats (♡), or search for anywhere else you've found — confirm the
-        right one on the map, then a real description comes from Wikipedia automatically. Free, no account needed.</p>
-      </div>
       <form class="search-bar" id="pickSearchForm">
         <input type="text" id="pickSearchInput" placeholder="Search for a place to add…" autocomplete="off" value="${esc(
           pickSearch.query
@@ -2709,7 +2826,20 @@
     }
 
     if (picks.length === 0) {
-      html += `<div class="card"><p>No picks yet.</p></div>`;
+      // Guidance belongs here, where it's actually needed, rather than
+      // permanently occupying the top of the screen once you know the app.
+      html += `
+        <div class="card empty-state">
+          <div class="empty-icon">♡</div>
+          <h2>No places saved yet</h2>
+          <ul class="empty-list">
+            <li><b>Share from Google Maps</b> — tap Share on a place, pick this app</li>
+            <li><b>Search above</b> — by name, or describe what you want</li>
+            <li><b>Explore around a place</b> — cafés, museums, playgrounds nearby</li>
+          </ul>
+          <p class="settings-hint">Tapping ♡ in Places or Eats saves things here too.</p>
+        </div>
+      `;
     } else {
       html += `<button class="hero-share" id="sharePicks" style="color:var(--navy);border-color:var(--line);background:var(--card);margin:16px 0;">↗ Share my picks</button>`;
 
@@ -2732,7 +2862,7 @@
         if (!groups[city].length) return;
         html += `<div class="section-label">${esc(city)}</div>`;
         groups[city].forEach((p) => {
-          html += renderPickCard(p);
+          html += renderPickRow(p);
         });
       });
     }
@@ -2769,12 +2899,12 @@
       });
     }
 
-    picks.forEach((p) => {
-      if (p.lat != null) initPickMiniMap(p);
-      const state = nearbyState[p.id];
-      if (state && state.open && state.category && state.status === "done" && state.results.length) {
-        initNearbyMap(p, state.results);
-      }
+    // No per-pick maps in the list any more: the single map lives in the
+    // detail sheet. Ten saved places used to mean ten live Leaflet instances
+    // stacked on one screen.
+
+    view.querySelectorAll("[data-open-pick]").forEach((row) => {
+      row.addEventListener("click", () => openPickDetail(row.getAttribute("data-open-pick")));
     });
 
     view.querySelectorAll("[data-open-maps]").forEach((btn) => {
@@ -2895,7 +3025,148 @@
     });
   }
 
+  // ---------- Today ----------
+  // The screen the app opens on, and the only one that matters while you're
+  // actually out: what's next, how far, is it open. Everything else in the
+  // app is preparation for this.
+
+  // Matches a day label like "Day 3 · Fri 21 Aug" against a real date, so the
+  // app can find today without the user having entered machine-readable dates.
+  const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+
+  function dayLabelToDate(label, referenceYear) {
+    const m = String(label || "").match(/(\d{1,2})\s*([A-Za-z]{3,})/);
+    if (!m) return null;
+    const monthIdx = MONTHS.indexOf(m[2].slice(0, 3).toLowerCase());
+    if (monthIdx < 0) return null;
+    return new Date(referenceYear, monthIdx, Number(m[1]));
+  }
+
+  function sameDay(a, b) {
+    return (
+      a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()
+    );
+  }
+
+  // Today's day if the trip is running, otherwise the next one still ahead,
+  // otherwise the first - so the screen is never empty for lack of a match.
+  function currentPlanDay() {
+    const plan = loadPlan();
+    if (!plan.days.length) return null;
+    const now = new Date();
+    const dated = plan.days.map((d) => ({ day: d, date: dayLabelToDate(d.label, now.getFullYear()) }));
+
+    const today = dated.find((x) => x.date && sameDay(x.date, now));
+    if (today) return { ...today, isToday: true };
+
+    const upcoming = dated.filter((x) => x.date && x.date > now).sort((a, b) => a.date - b.date)[0];
+    if (upcoming) return { ...upcoming, isToday: false };
+
+    return { day: plan.days[0], date: dated[0].date, isToday: false };
+  }
+
+  function renderToday() {
+    const current = currentPlanDay();
+    const picks = loadPicks();
+    const byId = {};
+    picks.forEach((p) => (byId[p.id] = p));
+
+    if (!current) {
+      view.innerHTML = `
+        <div class="card empty-state">
+          <div class="empty-icon">🗓️</div>
+          <h2>No days planned yet</h2>
+          <p>Add days in the Itinerary tab, then schedule your saved places into them.</p>
+        </div>
+      `;
+      return;
+    }
+
+    const plan = loadPlan();
+    const items = (plan.items[current.day.id] || []).filter((it) => byId[it.pickId]);
+    const dayCode = dayCodeFromLabel(current.day.label);
+
+    let html = `
+      <div class="today-head">
+        <div class="today-label">${current.isToday ? "Today" : "Next up"}</div>
+        <div class="today-date">${esc(current.day.label)}</div>
+      </div>
+    `;
+
+    if (!items.length) {
+      html += `
+        <div class="card empty-state">
+          <div class="empty-icon">🚶</div>
+          <h2>Nothing planned${current.isToday ? " for today" : " for that day"}</h2>
+          <p>Open Picks and tap a day chip on anything you've saved.</p>
+        </div>
+      `;
+    } else {
+      items.forEach((it, idx) => {
+        const p = byId[it.pickId];
+        const prev = idx > 0 ? byId[items[idx - 1].pickId] : null;
+        const leg = walkLeg(prev, p);
+        const mayBeClosed = closedOnDay(p.openingHours, dayCode);
+        const isNext = idx === 0;
+
+        if (leg && leg.mins >= 5) {
+          html += `<div class="today-leg">🚶 ${leg.mins} min · ${
+            leg.km < 1 ? Math.round(leg.km * 1000) + " m" : leg.km.toFixed(1) + " km"
+          }</div>`;
+        }
+
+        html += `
+          <div class="card today-card${isNext ? " next" : ""}">
+            ${isNext ? `<div class="today-next-flag">NEXT</div>` : ""}
+            <div class="today-card-head">
+              <div>
+                <div class="today-time">${esc(it.time || "—")}</div>
+                <div class="today-name">${esc(p.name)}${
+                  p.booked ? ` <span class="booked-badge">booked</span>` : ""
+                }</div>
+                ${p.address ? `<div class="today-sub">${esc(p.address)}</div>` : ""}
+              </div>
+            </div>
+            ${p.openingHours ? `<div class="place-fact">🕒 ${esc(p.openingHours)}</div>` : ""}
+            ${
+              mayBeClosed
+                ? `<div class="plan-warn">⚠ May be closed today — check before setting off.</div>`
+                : ""
+            }
+            ${p.note ? `<div class="today-note">📝 ${esc(p.note)}</div>` : ""}
+            <div class="today-actions">
+              <button class="modal-btn modal-btn-primary" data-open-maps="${esc(directionsUrl(p))}">↗ Directions</button>
+              <button class="modal-btn" data-open-pick="${esc(p.id)}">Details</button>
+            </div>
+          </div>
+        `;
+      });
+    }
+
+    view.innerHTML = html;
+
+    view.querySelectorAll("[data-open-maps]").forEach((btn) =>
+      btn.addEventListener("click", () => openExternal(btn.getAttribute("data-open-maps")))
+    );
+    view.querySelectorAll("[data-open-pick]").forEach((btn) =>
+      btn.addEventListener("click", () => openPickDetail(btn.getAttribute("data-open-pick")))
+    );
+  }
+
+  // Walking directions to a place. Uses the exact Google place when the share
+  // gave us its id, so navigation lands on the real venue rather than a
+  // name-matched guess.
+  function directionsUrl(p) {
+    if (p.lat != null && p.lon != null) {
+      return `https://www.google.com/maps/dir/?api=1&destination=${p.lat},${p.lon}&travelmode=walking`;
+    }
+    return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(
+      pickMapsQuery(p)
+    )}&travelmode=walking`;
+  }
+
   const VIEWS = {
+    today: { render: renderToday, sub: "What's on now" },
     overview: { render: renderOverview, sub: TRIP.dates },
     itinerary: { render: renderItinerary, sub: "Tap a day to expand" },
     places: { render: renderPlaces, sub: "Edinburgh · Stirling · Glasgow" },
@@ -3027,5 +3298,5 @@
   if (settingsBtn) settingsBtn.addEventListener("click", openSettings);
 
   topbarTitle.textContent = loadTripSettings().title;
-  showView("overview");
+  showView("today");
 })();

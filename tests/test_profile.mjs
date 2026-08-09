@@ -100,16 +100,21 @@ if (m) {
 
 check('saved: googleUrl (CID link) persisted', m && m.googleUrl === 'https://www.google.com/maps?cid=15690000382639893418', m && m.googleUrl);
 
-const cardText = await page.evaluate(() => document.getElementById('view').textContent);
+// Facts and the Maps button now live in the detail sheet, not the list row.
+await page.evaluate(() => document.querySelector('[data-open-pick]').click());
+await page.waitForSelector('#placeModal.open', { timeout: 5000 });
+await page.waitForTimeout(300);
+const cardText = await page.evaluate(() => document.getElementById('placeModal').textContent);
 const mapsBtn = await page.evaluate(() => {
   const b = document.querySelector('[data-open-maps]');
   return b ? { url: b.getAttribute('data-open-maps'), label: b.textContent.trim() } : null;
 });
 check('maps button uses the exact CID link', mapsBtn && mapsBtn.url === 'https://www.google.com/maps?cid=15690000382639893418', JSON.stringify(mapsBtn));
-check('maps button label reflects exact place', mapsBtn && /Open this place/.test(mapsBtn.label), mapsBtn && mapsBtn.label);
-check('card renders address', cardText.includes('Albert Square') || cardText.includes('M2 5DB'));
-check('card renders hours', cardText.includes('Mo-Fr 09:00-17:00'));
-check('card renders phone', cardText.includes('+44 161 234 5000'));
+// "Open" means we have Google's exact place id; "Find" means a name search.
+check('maps button label reflects exact place', mapsBtn && /^📍 Open on Google Maps/.test(mapsBtn.label), mapsBtn && mapsBtn.label);
+check('detail sheet renders address', cardText.includes('Albert Square') || cardText.includes('M2 5DB'));
+check('detail sheet renders hours', cardText.includes('Mo-Fr 09:00-17:00'));
+check('detail sheet renders phone', cardText.includes('+44 161 234 5000'));
 await browser.close();
 console.log(failures === 0 ? '\nALL TESTS PASSED' : `\n${failures} FAILED`);
 process.exit(failures ? 1 : 0);
