@@ -106,7 +106,7 @@ check('distance computed from the centre', /\d+\s*(m|km) away/.test(text), text.
 // --- Saving one keeps the AI description and OSM position ---
 await page.evaluate(() => document.querySelector('[data-explore-add]').click());
 await page.waitForTimeout(900);
-const picks = await page.evaluate(() => JSON.parse(localStorage.getItem('scotland-trip-picks-v1') || '[]'));
+const picks = await page.evaluate(() => JSON.parse(localStorage.getItem('board:'+JSON.parse(localStorage.getItem('boards-v1')).activeId+':picks') || '[]'));
 const saved = picks.find((p) => p.name === 'Lovecrumbs');
 check('AI explore result can be saved', !!saved, JSON.stringify(picks.map((p) => p.name)));
 check('saved with real coordinates', saved && saved.lat != null, saved && String(saved.lat));

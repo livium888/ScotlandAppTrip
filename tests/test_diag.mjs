@@ -139,7 +139,7 @@ const browser = await chromium.launch(LAUNCH_OPTS);
   await page.evaluate(() => document.querySelector('[data-explore-add]').click());
   // Adding now saves immediately - no folder question to answer.
   await page.waitForTimeout(900);
-  const picks = await page.evaluate(() => JSON.parse(localStorage.getItem('scotland-trip-picks-v1') || '[]'));
+  const picks = await page.evaluate(() => JSON.parse(localStorage.getItem('board:'+JSON.parse(localStorage.getItem('boards-v1')).activeId+':picks') || '[]'));
   check('explore result can be saved', picks.some(p => p.name === 'Castle Cafe'), JSON.stringify(picks.map(p=>p.name)));
   await page.close();
 }

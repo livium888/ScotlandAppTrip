@@ -85,7 +85,7 @@ await page.evaluate(() => {
 });
 await page.waitForTimeout(600);
 
-const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('scotland-trip-picks-v1') || '[]'));
+const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('board:'+JSON.parse(localStorage.getItem('boards-v1')).activeId+':picks') || '[]'));
 const m = saved.find((p) => p.name === 'Manchester');
 check('pick was saved', !!m, JSON.stringify(saved).slice(0, 200));
 if (m) {

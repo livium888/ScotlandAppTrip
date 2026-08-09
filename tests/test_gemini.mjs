@@ -97,7 +97,7 @@ check('citation link shown', await page.evaluate(() =>
 await page.evaluate(() => document.querySelector('[data-add-candidate]').click());
 // Adding now saves immediately - no folder question to answer.
 await page.waitForTimeout(900);
-const picks = await page.evaluate(() => JSON.parse(localStorage.getItem('scotland-trip-picks-v1') || '[]'));
+const picks = await page.evaluate(() => JSON.parse(localStorage.getItem('board:'+JSON.parse(localStorage.getItem('boards-v1')).activeId+':picks') || '[]'));
 check('AI-found place saved with real OSM coords', picks.length === 1 && picks[0].lat != null, JSON.stringify(picks[0] || {}).slice(0, 200));
 
 // --- Auto plan ---
@@ -110,7 +110,7 @@ check('Plan my days button present', await page.evaluate(() => !!document.getEle
 await page.evaluate(() => document.getElementById('autoPlanBtn').click());
 await page.waitForTimeout(1200);
 
-const plan = await page.evaluate(() => JSON.parse(localStorage.getItem('trip-plan-v1')));
+const plan = await page.evaluate(() => JSON.parse(localStorage.getItem('board:'+JSON.parse(localStorage.getItem('boards-v1')).activeId+':plan')));
 const all = Object.values(plan.items).flat();
 check('real pick was scheduled', all.length === 1, JSON.stringify(plan.items));
 check('hallucinated place was NOT scheduled', all.every((it) => it.pickId === picks[0].id), JSON.stringify(all));

@@ -95,6 +95,9 @@ function installMockShareReceiver(page) {
   const page = await browser.newPage();
   page.on('pageerror', (e) => console.log('PAGEERROR:', e.message));
   await installMockShareReceiver(page);
+  // Deterministic: without this the assertion raced the enrichment, passing
+  // where the network was blocked and failing where it wasn't.
+  await blockExternal(page);
   await page.goto(BASE, { waitUntil: 'load' });
   await page.waitForTimeout(200);
   const noThrow = await page.evaluate(() => {
@@ -105,10 +108,13 @@ function installMockShareReceiver(page) {
       return false;
     }
   });
-  await page.waitForTimeout(200);
-  const inputValue = await page.evaluate(() => document.getElementById('pickSearchInput')?.value || null);
   check('Test3: name-only payload does not throw', noThrow);
-  check('Test3: pickSearchInput prefilled with shared name', inputValue === 'Some Random Cafe');
+
+  // A share with no coordinates still ends at the folder picker - it just
+  // arrives there without a map position.
+  await page.waitForSelector('#placeModal.open', { timeout: 10000 }).catch(() => {});
+  const modalText = await page.evaluate(() => document.getElementById('placeModal')?.textContent || '');
+  check('Test3: name-only share still offers to save it', /Some Random Cafe/.test(modalText), modalText.slice(0, 120));
   await page.close();
 }
 

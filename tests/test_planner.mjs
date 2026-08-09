@@ -78,7 +78,7 @@ await page.evaluate(() => document.querySelector('[data-add-candidate]').click()
 // Adding now saves immediately - no folder question to answer.
 await page.waitForTimeout(900);
 
-const picks = await page.evaluate(() => JSON.parse(localStorage.getItem('scotland-trip-picks-v1') || '[]'));
+const picks = await page.evaluate(() => JSON.parse(localStorage.getItem('board:'+JSON.parse(localStorage.getItem('boards-v1')).activeId+':picks') || '[]'));
 const chip = picks.find((p) => p.name === 'The Little Chippy');
 check('google pick saved', !!chip, JSON.stringify(picks).slice(0, 200));
 if (chip) {
@@ -107,7 +107,7 @@ await page.waitForTimeout(300);
 const planText = await page.evaluate(() => document.getElementById('view').textContent);
 check('pick appears in the plan', planText.includes('The Little Chippy'), planText.slice(0, 200));
 
-const plan = await page.evaluate(() => JSON.parse(localStorage.getItem('trip-plan-v1')));
+const plan = await page.evaluate(() => JSON.parse(localStorage.getItem('board:'+JSON.parse(localStorage.getItem('boards-v1')).activeId+':plan')));
 const firstDay = plan.days[0].id;
 check('plan persisted to storage', plan.items[firstDay] && plan.items[firstDay].length === 1, JSON.stringify(plan.items));
 
@@ -118,14 +118,14 @@ await page.evaluate(() => {
   inp.dispatchEvent(new Event('blur'));
 });
 await page.waitForTimeout(200);
-const plan2 = await page.evaluate(() => JSON.parse(localStorage.getItem('trip-plan-v1')));
+const plan2 = await page.evaluate(() => JSON.parse(localStorage.getItem('board:'+JSON.parse(localStorage.getItem('boards-v1')).activeId+':plan')));
 check('time saved on plan item', plan2.items[firstDay][0].time === '13:00', JSON.stringify(plan2.items[firstDay]));
 
 // add a custom day
 await page.fill('#addDayInput', 'Sat 22 Aug');
 await page.evaluate(() => document.getElementById('addDayForm').requestSubmit());
 await page.waitForTimeout(300);
-const plan3 = await page.evaluate(() => JSON.parse(localStorage.getItem('trip-plan-v1')));
+const plan3 = await page.evaluate(() => JSON.parse(localStorage.getItem('board:'+JSON.parse(localStorage.getItem('boards-v1')).activeId+':plan')));
 check('custom day added', plan3.days.some((d) => d.label === 'Sat 22 Aug'), JSON.stringify(plan3.days.map(d=>d.label)));
 
 // ---- No key => falls back to OSM ----

@@ -125,7 +125,10 @@
   // Appends the trip's region to a lookup so "Museum" finds the one you mean,
   // while staying empty-safe so a trip with no region set searches globally.
   function scopedQuery(text) {
-    const dest = loadTripSettings().destination.trim();
+    // The board's own destination wins - a board for Manchester shouldn't
+    // inherit the Scotland trip's region.
+    const board = activeBoard();
+    const dest = (board.destination || loadTripSettings().destination || "").trim();
     return dest ? `${text}, ${dest}` : text;
   }
 
@@ -412,20 +415,139 @@
     return resolved.filter(Boolean);
   }
 
+  // ---------- Boards ----------
+  // A board is a collection of places. Give it dates and it behaves like a
+  // trip - Today screen, day planner. Leave the dates off and it's simply a
+  // list worth keeping: restaurants to try, days out near home. One concept
+  // rather than two, so nothing has to be learned twice, and the app decides
+  // what to show from whether the board has days.
+  const BOARDS_KEY = "boards-v1";
+
+  // Where the single-board version kept everything. Read once, during
+  // migration, and then left alone - deleting it would make a downgrade lose
+  // the lot, and it costs nothing to leave in place.
+  const LEGACY = {
+    picks: "scotland-trip-picks-v1",
+    folders: "scotland-trip-folders-v1",
+    plan: "trip-plan-v1",
+  };
+
+  function readJson(key, fallback) {
+    try {
+      const v = JSON.parse(localStorage.getItem(key));
+      return v === null || v === undefined ? fallback : v;
+    } catch (e) {
+      return fallback;
+    }
+  }
+
+  function boardKey(id, part) {
+    return `board:${id}:${part}`;
+  }
+
+  function loadBoards() {
+    const state = readJson(BOARDS_KEY, null);
+    if (state && Array.isArray(state.boards) && state.boards.length) return state;
+    return migrateToBoards();
+  }
+
+  function saveBoards(state) {
+    localStorage.setItem(BOARDS_KEY, JSON.stringify(state));
+  }
+
+  // Turns the old single-trip storage into the first board. Runs once. The
+  // existing picks, folders and plan are carried across as-is rather than
+  // rebuilt, because losing a curated list would be far worse than any
+  // tidiness gained.
+  function migrateToBoards() {
+    const id = "b-scotland";
+    const state = {
+      activeId: id,
+      boards: [
+        {
+          id,
+          name: TRIP.title,
+          destination: DEFAULT_DESTINATION,
+          dated: true,
+          // Only this board shows the bundled Edinburgh guide; new boards
+          // start clean rather than pretending to be about Scotland.
+          hasGuide: true,
+          createdAt: Date.now(),
+        },
+      ],
+    };
+
+    const legacyPicks = readJson(LEGACY.picks, null);
+    const legacyFolders = readJson(LEGACY.folders, null);
+    const legacyPlan = readJson(LEGACY.plan, null);
+
+    if (legacyPicks !== null) localStorage.setItem(boardKey(id, "picks"), JSON.stringify(legacyPicks));
+    if (legacyFolders !== null) localStorage.setItem(boardKey(id, "folders"), JSON.stringify(legacyFolders));
+    if (legacyPlan !== null) localStorage.setItem(boardKey(id, "plan"), JSON.stringify(legacyPlan));
+
+    saveBoards(state);
+    return state;
+  }
+
+  function activeBoard() {
+    const state = loadBoards();
+    return state.boards.find((b) => b.id === state.activeId) || state.boards[0];
+  }
+
+  function setActiveBoard(id) {
+    const state = loadBoards();
+    if (!state.boards.some((b) => b.id === id)) return;
+    state.activeId = id;
+    saveBoards(state);
+  }
+
+  function createBoard({ name, destination, dated }) {
+    const state = loadBoards();
+    const id = `b-${Date.now()}`;
+    state.boards.push({
+      id,
+      name: (name || "Untitled").trim(),
+      destination: (destination || "").trim(),
+      dated: !!dated,
+      hasGuide: false,
+      createdAt: Date.now(),
+    });
+    state.activeId = id;
+    saveBoards(state);
+    return id;
+  }
+
+  function updateBoard(id, patch) {
+    const state = loadBoards();
+    const b = state.boards.find((x) => x.id === id);
+    if (!b) return;
+    Object.assign(b, patch);
+    saveBoards(state);
+  }
+
+  function deleteBoard(id) {
+    const state = loadBoards();
+    if (state.boards.length <= 1) return false; // never leave the app with none
+    state.boards = state.boards.filter((b) => b.id !== id);
+    if (state.activeId === id) state.activeId = state.boards[0].id;
+    saveBoards(state);
+    ["picks", "folders", "plan"].forEach((part) => localStorage.removeItem(boardKey(id, part)));
+    return true;
+  }
+
   // ---------- Picks (bookmarks + custom places) ----------
 
   const PICKS_KEY = "scotland-trip-picks-v1";
 
+  // Picks, folders and the plan all belong to the board that's open, so
+  // switching boards swaps the whole working set without anything leaking
+  // between them.
   function loadPicks() {
-    try {
-      return JSON.parse(localStorage.getItem(PICKS_KEY) || "[]");
-    } catch (e) {
-      return [];
-    }
+    return readJson(boardKey(activeBoard().id, "picks"), []);
   }
 
   function savePicks(picks) {
-    localStorage.setItem(PICKS_KEY, JSON.stringify(picks));
+    localStorage.setItem(boardKey(activeBoard().id, "picks"), JSON.stringify(picks));
   }
 
   // Folders are user-owned organisation, separate from geography - a pick's
@@ -435,16 +557,14 @@
   const FOLDERS_KEY = "scotland-trip-folders-v1";
 
   function loadFolders() {
-    try {
-      const f = JSON.parse(localStorage.getItem(FOLDERS_KEY));
-      return Array.isArray(f) && f.length ? f : ["Edinburgh", "Stirling", "Glasgow"];
-    } catch (e) {
-      return ["Edinburgh", "Stirling", "Glasgow"];
-    }
+    const f = readJson(boardKey(activeBoard().id, "folders"), null);
+    if (Array.isArray(f) && f.length) return f;
+    // A brand-new board has no business defaulting to Scottish cities.
+    return activeBoard().hasGuide ? ["Edinburgh", "Stirling", "Glasgow"] : ["Saved"];
   }
 
   function saveFolders(folders) {
-    localStorage.setItem(FOLDERS_KEY, JSON.stringify(folders));
+    localStorage.setItem(boardKey(activeBoard().id, "folders"), JSON.stringify(folders));
   }
 
   function addFolder(name) {
@@ -797,7 +917,15 @@
   // so reading it while this module is still evaluating would hit the
   // temporal dead zone and throw before the app ever renders.
   function backupKeys() {
-    return [PICKS_KEY, FOLDERS_KEY, PLAN_KEY, TRIP_KEY, STORAGE_KEY];
+    // Every board's data, not just the open one - a backup that quietly
+    // dropped the boards you weren't looking at would be worse than none.
+    // The legacy single-trip keys ride along so a backup taken now still
+    // restores onto an older build.
+    const keys = [BOARDS_KEY, TRIP_KEY, STORAGE_KEY, LEGACY.picks, LEGACY.folders, LEGACY.plan];
+    loadBoards().boards.forEach((b) => {
+      keys.push(boardKey(b.id, "picks"), boardKey(b.id, "folders"), boardKey(b.id, "plan"));
+    });
+    return keys;
   }
 
   function buildBackup() {
@@ -842,11 +970,26 @@
 
   function countBackup(parsed) {
     try {
-      const picks = JSON.parse(parsed.data[PICKS_KEY] || "[]");
-      const folders = JSON.parse(parsed.data[FOLDERS_KEY] || "[]");
-      const plan = JSON.parse(parsed.data[PLAN_KEY] || "{}");
-      const planned = Object.values(plan.items || {}).reduce((n, list) => n + list.length, 0);
-      return `${picks.length} places, ${folders.length} folders, ${planned} planned items`;
+      let boards = 0;
+      let picks = 0;
+      let planned = 0;
+      Object.keys(parsed.data).forEach((k) => {
+        if (/^board:.*:picks$/.test(k)) picks += JSON.parse(parsed.data[k] || "[]").length;
+        if (/^board:.*:plan$/.test(k)) {
+          const plan = JSON.parse(parsed.data[k] || "{}");
+          planned += Object.values(plan.items || {}).reduce((n, list) => n + list.length, 0);
+        }
+      });
+      const state = parsed.data[BOARDS_KEY] ? JSON.parse(parsed.data[BOARDS_KEY]) : null;
+      boards = state && Array.isArray(state.boards) ? state.boards.length : 0;
+
+      // A backup from before boards existed still restores; describe it in
+      // the terms it was written in.
+      if (!boards && parsed.data[LEGACY.picks]) {
+        picks = JSON.parse(parsed.data[LEGACY.picks] || "[]").length;
+        return `${picks} places (from an earlier version)`;
+      }
+      return `${boards} board${boards === 1 ? "" : "s"}, ${picks} places, ${planned} planned items`;
     } catch (e) {
       return "contents unreadable";
     }
@@ -864,8 +1007,13 @@
     }
     // Replaces rather than merges - merging two sets of picks silently
     // duplicates them, and a restore is almost always "put it back how it was".
-    backupKeys().forEach((k) => {
-      if (parsed.data[k] !== undefined) localStorage.setItem(k, parsed.data[k]);
+    // Restore every key in the file rather than only the ones this device
+    // currently has - otherwise boards present in the backup but not here
+    // would be silently dropped, which is exactly what a restore must not do.
+    Object.keys(parsed.data).forEach((k) => {
+      if (k === BOARDS_KEY || k === TRIP_KEY || k === STORAGE_KEY || /^board:/.test(k) || /^scotland-trip-|^trip-plan-/.test(k)) {
+        localStorage.setItem(k, parsed.data[k]);
+      }
     });
     return { ok: true, message: `Restored ${countBackup(parsed)}.` };
   }
@@ -875,6 +1023,108 @@
     if (!sel || sel.disabled) return "";
     const v = sel.value || "";
     return v.indexOf("models/") === 0 ? v : "";
+  }
+
+  // Tapping the title switches board. Putting it on the title rather than
+  // behind another tab keeps the current board always visible and its
+  // siblings always one tap away.
+  function openBoardSwitcher() {
+    const state = loadBoards();
+    placeModal.innerHTML = `
+      <div class="modal-backdrop" data-close="1">
+        <div class="modal-sheet" role="dialog" aria-label="Switch board">
+          <div class="modal-handle"></div>
+          <button class="modal-close" data-close="1" aria-label="Close">✕</button>
+          <div class="modal-body">
+            <h2 class="modal-title">Your boards</h2>
+            <p class="settings-hint">A board with dates works like a trip. Without them it's just a list of places worth keeping.</p>
+
+            <div class="board-list">
+              ${state.boards
+                .map((b) => {
+                  const picks = readJson(boardKey(b.id, "picks"), []).length;
+                  return `
+                    <button class="board-row${b.id === state.activeId ? " active" : ""}" data-open-board="${esc(b.id)}">
+                      <div class="board-row-main">
+                        <div class="board-row-name">${esc(b.name)}</div>
+                        <div class="board-row-meta">${b.dated ? "Trip" : "List"}${
+                          b.destination ? ` · ${esc(b.destination)}` : ""
+                        } · ${picks} place${picks === 1 ? "" : "s"}</div>
+                      </div>
+                      ${b.id === state.activeId ? `<span class="board-row-tick">✓</span>` : ""}
+                    </button>
+                  `;
+                })
+                .join("")}
+            </div>
+
+            <div class="settings-divider"></div>
+            <label class="settings-label" for="newBoardName">New board</label>
+            <input class="settings-input" type="text" id="newBoardName" placeholder="e.g. Lake District, or Places to try" />
+            <input class="settings-input" type="text" id="newBoardDest" placeholder="Area to search in (optional)" style="margin-top:8px;" />
+            <label class="board-dated-row">
+              <input type="checkbox" id="newBoardDated" checked />
+              <span>Plan it by day (a trip rather than a list)</span>
+            </label>
+            <button class="modal-btn modal-btn-primary" id="createBoardBtn" style="width:100%;margin-top:12px;">Create board</button>
+
+            ${
+              state.boards.length > 1
+                ? `<button class="modal-btn danger" id="deleteBoardBtn" style="width:100%;margin-top:16px;">Delete "${esc(
+                    activeBoard().name
+                  )}" and its places</button>`
+                : ""
+            }
+          </div>
+        </div>
+      </div>
+    `;
+    placeModal.classList.add("open");
+
+    placeModal.querySelectorAll("[data-close]").forEach((el) =>
+      el.addEventListener("click", (e) => {
+        if (e.target === el) closePlaceModal();
+      })
+    );
+
+    placeModal.querySelectorAll("[data-open-board]").forEach((btn) =>
+      btn.addEventListener("click", () => {
+        setActiveBoard(btn.getAttribute("data-open-board"));
+        closePlaceModal();
+        refreshForBoard();
+      })
+    );
+
+    document.getElementById("createBoardBtn").addEventListener("click", () => {
+      const name = document.getElementById("newBoardName").value.trim();
+      if (!name) return;
+      createBoard({
+        name,
+        destination: document.getElementById("newBoardDest").value,
+        dated: document.getElementById("newBoardDated").checked,
+      });
+      closePlaceModal();
+      refreshForBoard();
+      toast(`Created “${name}”`);
+    });
+
+    const del = document.getElementById("deleteBoardBtn");
+    if (del) {
+      del.addEventListener("click", () => {
+        const b = activeBoard();
+        if (!confirm(`Delete "${b.name}" and everything saved in it? This can't be undone.`)) return;
+        deleteBoard(b.id);
+        closePlaceModal();
+        refreshForBoard();
+        toast(`Deleted “${b.name}”`);
+      });
+    }
+  }
+
+  function refreshForBoard() {
+    const board = activeBoard();
+    topbarTitle.textContent = board.name;
+    showView(firstVisibleTab());
   }
 
   function openSettings() {
@@ -1317,21 +1567,19 @@
   let planMode = "suggested"; // "suggested" | "mine"
 
   function loadPlan() {
-    let stored = null;
-    try {
-      stored = JSON.parse(localStorage.getItem(PLAN_KEY));
-    } catch (e) {
-      stored = null;
-    }
+    const board = activeBoard();
+    const stored = readJson(boardKey(board.id, "plan"), null);
     if (stored && Array.isArray(stored.days)) return stored;
+    // Only the bundled Scotland board starts with its days filled in; any
+    // other board begins empty so the user names their own.
     return {
-      days: DAYS.map((d, i) => ({ id: `d${i}`, label: `${d.day} · ${d.date}` })),
+      days: board.hasGuide ? DAYS.map((d, i) => ({ id: `d${i}`, label: `${d.day} · ${d.date}` })) : [],
       items: {},
     };
   }
 
   function savePlan(plan) {
-    localStorage.setItem(PLAN_KEY, JSON.stringify(plan));
+    localStorage.setItem(boardKey(activeBoard().id, "plan"), JSON.stringify(plan));
   }
 
   // "Day 3 · Fri 21 Aug" -> "Fri 21". Full labels don't fit on a chip.
@@ -3417,7 +3665,36 @@
     tips: { render: renderTips, sub: "Walking, weather, safety & packing" },
   };
 
+  // Which tabs make sense depends on the board. A plain saved list has no
+  // days, so Today and Itinerary would be empty furniture; and the bundled
+  // Edinburgh guide only belongs to the board it came with. This is also what
+  // stops a fresh board opening onto eight tabs of someone else's trip.
+  function applyBoardTabs() {
+    const board = activeBoard();
+    const visible = {
+      today: board.dated,
+      itinerary: board.dated,
+      picks: true,
+      overview: !!board.hasGuide,
+      places: !!board.hasGuide,
+      eats: !!board.hasGuide,
+      budget: !!board.hasGuide,
+      tips: !!board.hasGuide,
+    };
+    tabbar.querySelectorAll(".tab").forEach((t) => {
+      t.hidden = visible[t.getAttribute("data-view")] === false;
+    });
+    return visible;
+  }
+
+  function firstVisibleTab() {
+    const visible = applyBoardTabs();
+    return ["today", "picks", "itinerary", "overview"].find((n) => visible[n]) || "picks";
+  }
+
   function showView(name) {
+    const visible = applyBoardTabs();
+    if (visible[name] === false) name = firstVisibleTab();
     const v = VIEWS[name];
     if (!v) return;
     view.dataset.activeTab = name;
@@ -3538,6 +3815,12 @@
   const settingsBtn = document.getElementById("settingsBtn");
   if (settingsBtn) settingsBtn.addEventListener("click", openSettings);
 
-  topbarTitle.textContent = loadTripSettings().title;
-  showView("today");
+  const topbarText = document.querySelector(".topbar-text");
+  if (topbarText) {
+    topbarText.addEventListener("click", openBoardSwitcher);
+    topbarText.setAttribute("role", "button");
+    topbarText.setAttribute("aria-label", "Switch board");
+  }
+
+  refreshForBoard();
 })();

@@ -25,6 +25,7 @@ const SUITES = [
   "test_quickadd.mjs",
   "test_model.mjs",
   "test_explore_ai.mjs",
+  "test_boards.mjs",
 ];
 
 const MIME = {

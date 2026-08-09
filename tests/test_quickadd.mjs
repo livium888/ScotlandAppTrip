@@ -37,7 +37,7 @@ await page.waitForTimeout(700);
 const modalOpen = await page.evaluate(() => document.getElementById('placeModal').classList.contains('open'));
 check('no folder modal interrupts the add', modalOpen === false);
 
-const picks = await page.evaluate(() => JSON.parse(localStorage.getItem('scotland-trip-picks-v1') || '[]'));
+const picks = await page.evaluate(() => JSON.parse(localStorage.getItem('board:'+JSON.parse(localStorage.getItem('boards-v1')).activeId+':picks') || '[]'));
 check('place saved in one tap', picks.length === 1 && picks[0].name === 'Camera Obscura', JSON.stringify(picks.map(p => p.name)));
 check('auto-filed to a sensible folder', picks[0] && picks[0].city === 'Edinburgh', picks[0] && picks[0].city);
 
@@ -58,7 +58,7 @@ await page.evaluate(() => {
   if (other) other.click();
 });
 await page.waitForTimeout(400);
-const moved = await page.evaluate(() => JSON.parse(localStorage.getItem('scotland-trip-picks-v1'))[0].city);
+const moved = await page.evaluate(() => JSON.parse(localStorage.getItem('board:'+JSON.parse(localStorage.getItem('boards-v1')).activeId+':picks'))[0].city);
 check('folder actually changes via the correction', moved !== 'Edinburgh', moved);
 
 // --- Scheduling from the pick's detail sheet, without leaving the tab ---
@@ -69,7 +69,7 @@ check('day chips appear on the pick card', dayChips > 0, String(dayChips));
 
 await page.evaluate(() => document.querySelector('[data-assign-day]').click());
 await page.waitForTimeout(400);
-const plan = await page.evaluate(() => JSON.parse(localStorage.getItem('trip-plan-v1') || '{}'));
+const plan = await page.evaluate(() => JSON.parse(localStorage.getItem('board:'+JSON.parse(localStorage.getItem('boards-v1')).activeId+':plan') || '{}'));
 const scheduled = Object.values(plan.items || {}).flat();
 check('scheduled to a day without leaving Picks', scheduled.length === 1, JSON.stringify(plan.items));
 
@@ -79,7 +79,7 @@ check('the chip shows it is scheduled', chipOn);
 // Tapping again unschedules - the same control both ways.
 await page.evaluate(() => document.querySelector('[data-assign-day].on').click());
 await page.waitForTimeout(400);
-const plan2 = await page.evaluate(() => JSON.parse(localStorage.getItem('trip-plan-v1') || '{}'));
+const plan2 = await page.evaluate(() => JSON.parse(localStorage.getItem('board:'+JSON.parse(localStorage.getItem('boards-v1')).activeId+':plan') || '{}'));
 check('tapping again removes it', Object.values(plan2.items || {}).flat().length === 0, JSON.stringify(plan2.items));
 
 // --- Planner uses tappable chips, not a native select ---
@@ -98,14 +98,14 @@ check('add chips present instead', addChips > 0, String(addChips));
 await page.evaluate(() => document.querySelector('button[data-plan-add]').click());
 await page.waitForTimeout(400);
 check('chip adds to the day in one tap', await page.evaluate(() =>
-  Object.values(JSON.parse(localStorage.getItem('trip-plan-v1')).items).flat().length === 1));
+  Object.values(JSON.parse(localStorage.getItem('board:'+JSON.parse(localStorage.getItem('boards-v1')).activeId+':plan')).items).flat().length === 1));
 
 // --- Quick times avoid the keyboard ---
 const quick = await page.evaluate(() => document.querySelectorAll('[data-plan-quicktime]').length);
 check('quick time chips offered when no time set', quick >= 4, String(quick));
 await page.evaluate(() => document.querySelector('[data-plan-quicktime]').click());
 await page.waitForTimeout(400);
-const time = await page.evaluate(() => Object.values(JSON.parse(localStorage.getItem('trip-plan-v1')).items).flat()[0].time);
+const time = await page.evaluate(() => Object.values(JSON.parse(localStorage.getItem('board:'+JSON.parse(localStorage.getItem('boards-v1')).activeId+':plan')).items).flat()[0].time);
 check('time set without typing', !!time, time);
 
 await browser.close();
