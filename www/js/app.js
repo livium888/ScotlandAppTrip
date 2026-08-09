@@ -1987,6 +1987,7 @@
     status: "idle", // idle | locating | loading | done | error
     results: [],
     error: "",
+    usedAi: false,
   };
 
   async function setExploreCentreFromSearch(query) {
@@ -2041,19 +2042,95 @@
     );
   }
 
+  // Category browsing via Gemini. OSM is thinnest exactly here - independent
+  // cafés and restaurants are the least-mapped things in it - so the model
+  // names candidates and OSM is then used only to place them.
+  async function exploreWithGemini(centre, category, radiusMetres, key) {
+    const cat = NEARBY_CATEGORIES.find((c) => c.key === category);
+    const s = loadTripSettings();
+    const who = s.travellers.trim() ? `\nTravellers: ${s.travellers.trim()}` : "";
+    const distance = radiusMetres >= 1000 ? `${radiusMetres / 1000} km` : `${radiusMetres} m`;
+
+    const prompt =
+      `List up to 6 real, currently-open ${cat ? cat.label.toLowerCase() : category} within about ` +
+      `${distance} of ${centre.name}.${who}\n\n` +
+      `Use search to confirm each one exists and is still trading. Reply with ONLY a JSON array, ` +
+      `each item {"name": exact official name, "area": street or neighbourhood, ` +
+      `"why": one short sentence}. No other text.`;
+
+    const { text, sources } = await callGemini(key, prompt, { grounded: true });
+    const parsed = extractJson(text);
+    if (!Array.isArray(parsed) || !parsed.length) throw new Error("Gemini returned no usable places");
+
+    // Geocoded one at a time with a gap: Nominatim is a free community
+    // service that asks for about one request a second, and firing a burst at
+    // it is both rude and a good way to get blocked.
+    const out = [];
+    for (const item of parsed.slice(0, 6)) {
+      if (!item || !item.name) continue;
+      let geo = null;
+      try {
+        geo = await geocodePlace(item.name, item.area || centre.name);
+      } catch (e) {
+        geo = null;
+      }
+      if (geo) {
+        // The model can name somewhere in the right country but the wrong
+        // city. Anything absurdly outside the requested radius is dropped
+        // rather than shown as "nearby".
+        const km = haversineKm(centre.lat, centre.lon, geo.lat, geo.lon);
+        if (km > (radiusMetres / 1000) * 3 + 2) continue;
+      }
+      out.push({
+        name: item.name,
+        lat: geo ? geo.lat : null,
+        lon: geo ? geo.lon : null,
+        website: geo ? geo.website : null,
+        openingHours: geo ? geo.openingHours : null,
+        address: geo ? geo.address : item.area || "",
+        description: item.why || "",
+        aiSuggested: true,
+        sources,
+      });
+      await new Promise((r) => setTimeout(r, 1100));
+    }
+    if (!out.length) throw new Error("None of the suggestions could be placed on the map");
+    return out.sort((a, b) => {
+      if (a.lat == null) return 1;
+      if (b.lat == null) return -1;
+      return haversineKm(centre.lat, centre.lon, a.lat, a.lon) - haversineKm(centre.lat, centre.lon, b.lat, b.lon);
+    });
+  }
+
   async function runExplore() {
     if (!explore.centre || !explore.category) return;
     explore.status = "loading";
     explore.error = "";
+    explore.usedAi = false;
     renderPicks();
+
+    const key = loadTripSettings().geminiKey.trim();
+    if (key) {
+      try {
+        explore.results = await exploreWithGemini(explore.centre, explore.category, explore.radius, key);
+        explore.usedAi = true;
+        explore.status = "done";
+        renderPicks();
+        return;
+      } catch (e) {
+        // Recorded rather than swallowed, so a quiet drop to thinner data is
+        // visible instead of just looking like a sparse area.
+        explore.error = e && e.message ? e.message : String(e);
+      }
+    }
+
     try {
-      const results = await overpassNearby(
+      explore.results = await overpassNearby(
         explore.centre.lat,
         explore.centre.lon,
         NEARBY_CATEGORIES.find((c) => c.key === explore.category),
         explore.radius
       );
-      explore.results = results;
       explore.status = "done";
     } catch (e) {
       explore.status = "error";
@@ -2109,23 +2186,44 @@
     }
 
     if (explore.status === "locating") body += `<p class="pick-status">Finding that location…</p>`;
-    if (explore.status === "loading") body += `<p class="pick-status">Looking for ${esc(catLabel(explore.category))}…</p>`;
+    if (explore.status === "loading") {
+      const usingAi = !!loadTripSettings().geminiKey.trim();
+      body += `<p class="pick-status">Looking for ${esc(catLabel(explore.category))}${
+        usingAi ? " with AI search — this takes a few seconds" : ""
+      }…</p>`;
+    }
     if (explore.status === "error") body += `<pre class="settings-result bad">${esc(explore.error)}</pre>`;
 
     if (explore.status === "done") {
       if (!explore.results.length) {
         body += `<p class="pick-status">Nothing found in range — try a wider radius.</p>`;
       } else {
+        if (explore.error) {
+          body += `<p class="pick-status">Fell back to OpenStreetMap — the AI search didn't answer.</p><pre class="settings-result bad">${esc(
+            explore.error
+          )}</pre>`;
+        }
         body += `<div class="explore-results">`;
         explore.results.forEach((r, i) => {
-          const km = haversineKm(explore.centre.lat, explore.centre.lon, r.lat, r.lon);
+          // AI suggestions can lack coordinates when the follow-up geocode
+          // finds nothing; they're still worth offering, just without a
+          // distance.
+          const km = r.lat != null ? haversineKm(explore.centre.lat, explore.centre.lon, r.lat, r.lon) : null;
+          const distance = km == null ? "" : km < 1 ? Math.round(km * 1000) + " m away" : km.toFixed(1) + " km away";
+          const meta = [distance, r.openingHours].filter(Boolean).join(" · ");
           body += `
             <div class="candidate-card explore-result">
               <div style="flex:1;">
-                <div class="place-name">${esc(r.name)}</div>
-                <div class="place-notes">${km < 1 ? Math.round(km * 1000) + " m" : km.toFixed(1) + " km"} away${
-                  r.openingHours ? ` · ${esc(r.openingHours)}` : ""
+                <div class="place-name">${esc(r.name)}${
+                  r.aiSuggested ? ` <span class="ai-badge">AI</span>` : ""
                 }</div>
+                ${meta ? `<div class="place-notes">${esc(meta)}</div>` : ""}
+                ${r.description ? `<div class="place-notes">${esc(r.description)}</div>` : ""}
+                ${
+                  r.aiSuggested && r.sources && r.sources.length
+                    ? `<div class="place-links"><a href="${esc(r.sources[0].uri)}" target="_blank" rel="noopener">🔗 source</a></div>`
+                    : ""
+                }
               </div>
               <button class="candidate-add" data-explore-add="${i}">+</button>
             </div>
@@ -2196,6 +2294,8 @@
           lon: r.lon,
           website: r.website || "",
           openingHours: r.openingHours || "",
+          address: r.address || "",
+          description: r.description || "",
           category: catLabel(explore.category),
         };
         quickAdd(candidate);
