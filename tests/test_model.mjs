@@ -11,10 +11,16 @@ let failures = 0;
 const check = (l, c, extra) => { if (c) console.log(`PASS: ${l}`); else { console.log(`FAIL: ${l}${extra ? ' :: ' + extra : ''}`); failures++; } };
 
 const MODELS = [
+  { name: 'models/gemini-1.5-flash', supportedGenerationMethods: ['generateContent'] },
+  // Deprecated, and listed before the current one - the old picker took this.
+  { name: 'models/gemini-2.0-flash-lite-001', supportedGenerationMethods: ['generateContent'] },
+  { name: 'models/gemini-2.5-flash', supportedGenerationMethods: ['generateContent'] },
+  { name: 'models/gemini-3.5-flash-lite-preview', supportedGenerationMethods: ['generateContent'] },
   { name: 'models/gemini-3.5-flash-lite', supportedGenerationMethods: ['generateContent'] },
   { name: 'models/gemini-3.5-pro', supportedGenerationMethods: ['generateContent'] },
   { name: 'models/text-embedding-004', supportedGenerationMethods: ['embedContent'] },
 ];
+const DEAD_MODEL = 'models/gemini-2.0-flash-lite-001';
 
 const browser = await chromium.launch(LAUNCH_OPTS);
 const page = await browser.newPage();
@@ -30,6 +36,10 @@ await page.route(/generativelanguage\.googleapis\.com/, (route) => {
     return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ models: MODELS }) });
   }
   generateUrls.push(url);
+  if (url.includes('gemini-2.0-flash-lite-001')) {
+    return route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({
+      error: { code: 404, message: 'This model models/gemini-2.0-flash-lite-001 is no longer available.' } }) });
+  }
   if (geminiShouldFail) {
     return route.fulfill({ status: 429, contentType: 'application/json', body: JSON.stringify({
       error: { code: 429, status: 'RESOURCE_EXHAUSTED', message: 'Quota exceeded.' } }) });
@@ -82,7 +92,51 @@ check('lists the generateContent models', shown.options.includes('models/gemini-
 check('excludes embedding-only models', !shown.options.some((o) => /embedding/.test(o)), JSON.stringify(shown.options));
 
 const auto = await page.evaluate(() => JSON.parse(localStorage.getItem('trip-settings-v1')).geminiModel);
-check('defaults to the cheap lite tier', /flash-lite/.test(auto || ''), auto);
+check('auto-pick chooses the newest lite tier', auto === 'models/gemini-3.5-flash-lite', auto);
+check('auto-pick avoids the deprecated dated build', auto !== DEAD_MODEL, auto);
+check('auto-pick avoids preview builds', !/preview/.test(auto || ''), auto);
+
+// The reported bug: choose a model, test it, and the choice was overwritten
+// by the app's own guess.
+await page.evaluate(() => {
+  const sel = document.getElementById('setGeminiModel');
+  sel.value = 'models/gemini-2.5-flash';
+  sel.dispatchEvent(new Event('change'));
+});
+await page.waitForTimeout(250);
+await page.click('#testGeminiBtn');
+await page.waitForTimeout(900);
+const afterTest = await page.evaluate(() => JSON.parse(localStorage.getItem('trip-settings-v1')).geminiModel);
+check('testing does NOT overwrite a chosen model', afterTest === 'models/gemini-2.5-flash', afterTest);
+const msg = await page.evaluate(() => document.getElementById('geminiTestResult').textContent);
+check('test says which model it used and that it was yours', /gemini-2\.5-flash/.test(msg) && /your choice/i.test(msg), msg.slice(0, 160));
+
+// A 404 must not silently revert a deliberate choice.
+await page.evaluate(() => {
+  const sel = document.getElementById('setGeminiModel');
+  sel.value = 'models/gemini-2.0-flash-lite-001';
+  sel.dispatchEvent(new Event('change'));
+});
+await page.waitForTimeout(250);
+await page.click('#testGeminiBtn');
+await page.waitForTimeout(900);
+const after404 = await page.evaluate(() => JSON.parse(localStorage.getItem('trip-settings-v1')).geminiModel);
+check('a 404 does not wipe the chosen model', after404 === DEAD_MODEL, after404);
+const msg404 = await page.evaluate(() => document.getElementById('geminiTestResult').textContent);
+check('404 tells you to pick another model', /no longer available/.test(msg404) && /Pick a different model/.test(msg404), msg404.slice(0, 200));
+
+// Saving with the picker populated keeps the real name, not placeholder text.
+await page.evaluate(() => {
+  const sel = document.getElementById('setGeminiModel');
+  sel.value = 'models/gemini-3.5-flash-lite';
+  sel.dispatchEvent(new Event('change'));
+});
+await page.click('#saveSettings');
+await page.waitForTimeout(300);
+const afterSave = await page.evaluate(() => JSON.parse(localStorage.getItem('trip-settings-v1')).geminiModel);
+check('Save keeps the chosen model', afterSave === 'models/gemini-3.5-flash-lite', afterSave);
+await page.click('#settingsBtn');
+await page.waitForSelector('#setGeminiModel');
 
 // Choosing a different model takes effect without pressing Save.
 await page.evaluate(() => {

@@ -103,6 +103,10 @@
       // Discovered model name, cached so a working key isn't re-probed on
       // every call. Cleared automatically if the model stops resolving.
       geminiModel: stored.geminiModel || "",
+      // True once the model was chosen from the picker. A deliberate choice
+      // must survive testing, a 404, and anything else the app decides it
+      // knows better about - overwriting it is what made the picker useless.
+      geminiModelPinned: !!stored.geminiModelPinned,
       // Models discovered from the key, cached so the picker has something to
       // show without re-probing every time Settings opens.
       geminiModels: Array.isArray(stored.geminiModels) ? stored.geminiModels : [],
@@ -214,31 +218,60 @@
     // Keep the full list so Settings can offer a picker - model names change
     // often enough that hardcoding one is how this broke the first time.
     const names = models.map((m) => m.name);
-    const chosen = chooseGeminiModel(models);
+    const settings = loadTripSettings();
+
+    // Only choose automatically when the user hasn't. Testing used to
+    // overwrite a picked model with the app's own guess, so selecting one and
+    // then testing it silently reverted the selection.
+    const pinned = settings.geminiModelPinned && names.indexOf(settings.geminiModel) >= 0;
+    const chosen = pinned ? settings.geminiModel : chooseGeminiModel(models);
     saveTripSettings({ geminiModel: chosen, geminiModels: names });
 
+    const shortName = chosen.replace(/^models\//, "");
     try {
       await callGemini(key, "Reply with the single word: ok");
     } catch (e) {
       return {
         ok: false,
-        message: `Key is valid and ${models.length} models are visible, but the test message failed.\n\n${e.message || e}`,
+        models: names,
+        message:
+          `Key is valid and ${models.length} models are visible, but ${shortName} failed.\n\n` +
+          `${e.message || e}\n\nPick a different model below and test again.`,
       };
     }
     return {
       ok: true,
       models: names,
-      message: `Working. Using ${chosen.replace(/^models\//, "")}. ${models.length} models available — pick a different one below if you prefer.`,
+      message: `Working. Using ${shortName}${pinned ? " (your choice)" : " (auto-selected)"}. ${
+        models.length
+      } models available — pick a different one below if you prefer.`,
     };
+  }
+
+  // Scores a model so the newest sensible one wins. The previous version took
+  // the first name containing "flash-lite" out of a 40-odd model list, which
+  // matched the long-deprecated gemini-2.0-flash-lite-001 before ever reaching
+  // 3.5 - so the automatic choice was a model Google had already retired.
+  function scoreGeminiModel(name) {
+    const n = name.replace(/^models\//, "");
+    const version = parseFloat((n.match(/gemini-(\d+(?:\.\d+)?)/) || [])[1] || "0");
+    let score = version * 100; // newer generation beats everything else
+
+    if (/flash-lite/.test(n)) score += 40; // cheapest capable tier
+    else if (/flash/.test(n)) score += 30;
+    else if (/pro/.test(n)) score += 10;
+
+    // Pinned dated builds ("-001") get retired while the rolling alias keeps
+    // working, and experimental/preview names come and go.
+    if (/-\d{3}$/.test(n)) score -= 25;
+    if (/(exp|preview)/.test(n)) score -= 30;
+    return score;
   }
 
   function chooseGeminiModel(models) {
     const names = models.map((m) => m.name);
-    for (const pref of GEMINI_MODEL_PREFERENCE) {
-      const hit = names.find((n) => n.indexOf(pref) >= 0);
-      if (hit) return hit;
-    }
-    return names[0];
+    if (!names.length) return "";
+    return names.slice().sort((a, b) => scoreGeminiModel(b) - scoreGeminiModel(a))[0];
   }
 
   // Returns the cached model, discovering one if this key hasn't been used
@@ -278,7 +311,12 @@
     if (!res.ok) {
       // A cached model name can go stale; clear it so the next attempt
       // rediscovers rather than failing the same way forever.
-      if (res.status === 404) saveTripSettings({ geminiModel: "" });
+      // Clear the cached model so the next call rediscovers - but never a
+      // pinned one, or the user's choice silently reverts to the guess that
+      // just failed, and they can never get out of it.
+      if (res.status === 404 && !loadTripSettings().geminiModelPinned) {
+        saveTripSettings({ geminiModel: "" });
+      }
       const err = new Error(describeGeminiError(res.status, data, rawText));
       err.status = res.status;
       throw err;
@@ -832,6 +870,13 @@
     return { ok: true, message: `Restored ${countBackup(parsed)}.` };
   }
 
+  function selectedGeminiModel() {
+    const sel = document.getElementById("setGeminiModel");
+    if (!sel || sel.disabled) return "";
+    const v = sel.value || "";
+    return v.indexOf("models/") === 0 ? v : "";
+  }
+
   function openSettings() {
     const s = loadTripSettings();
     placeModal.innerHTML = `
@@ -957,7 +1002,10 @@
       const key = document.getElementById("setGeminiKey").value.trim();
       // Saved first so the test uses the key actually being tried, and a
       // rediscovered model is kept even if the user closes the sheet.
-      saveTripSettings({ geminiKey: key, geminiModel: "" });
+      // Don't blank the model here: if the user picked one, testing it is
+      // exactly the point. A changed key is handled by the pinned name simply
+      // not being in the new list, which falls back to auto-selection.
+      saveTripSettings({ geminiKey: key });
       testOut.hidden = false;
       testOut.className = "settings-result";
       testOut.textContent = "Testing…";
@@ -991,7 +1039,7 @@
     const modelSel = document.getElementById("setGeminiModel");
     if (modelSel) {
       modelSel.addEventListener("change", () => {
-        saveTripSettings({ geminiModel: modelSel.value });
+        saveTripSettings({ geminiModel: modelSel.value, geminiModelPinned: true });
         toast(`Using ${modelSel.value.replace(/^models\//, "")}`);
       });
     }
@@ -1001,7 +1049,9 @@
         destination: document.getElementById("setDestination").value,
         googleKey: document.getElementById("setGoogleKey").value.trim(),
         geminiKey: document.getElementById("setGeminiKey").value.trim(),
-        geminiModel: (document.getElementById("setGeminiModel") || {}).value || loadTripSettings().geminiModel,
+        // Only a real model name, never the "tap the button" placeholder the
+        // disabled picker shows before it's been populated.
+        geminiModel: selectedGeminiModel() || loadTripSettings().geminiModel,
         travellers: document.getElementById("setTravellers").value,
       });
       closePlaceModal();
