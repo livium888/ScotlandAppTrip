@@ -103,6 +103,9 @@
       // Discovered model name, cached so a working key isn't re-probed on
       // every call. Cleared automatically if the model stops resolving.
       geminiModel: stored.geminiModel || "",
+      // Models discovered from the key, cached so the picker has something to
+      // show without re-probing every time Settings opens.
+      geminiModels: Array.isArray(stored.geminiModels) ? stored.geminiModels : [],
       // Free text about who is travelling, so AI suggestions are tailored
       // rather than generic ("family of 3, 4-year-old who walks, no stroller").
       travellers: stored.travellers !== undefined ? stored.travellers : TRIP.traveler || "",
@@ -138,7 +141,10 @@
   // existing for a given project - which surfaces as a 404 that looks
   // identical to "your key is broken". So the model is discovered from the
   // account rather than assumed, and the choice cached in settings.
-  const GEMINI_MODEL_PREFERENCE = ["flash-latest", "2.5-flash", "2.0-flash", "flash", "pro"];
+  // Cheapest-capable first: the lite flash tiers cost a fraction of pro and
+  // are more than adequate for naming places and ordering a day. Only used to
+  // pick a sensible default - the Settings picker overrides it.
+  const GEMINI_MODEL_PREFERENCE = ["flash-lite", "flash-latest", "flash", "pro"];
 
   async function geminiListModels(key) {
     const res = await fetch(`${GEMINI_BASE}/models?key=${encodeURIComponent(key)}`);
@@ -205,8 +211,11 @@
     if (!models.length) {
       return { ok: false, message: "The key works, but no models on it support generateContent." };
     }
+    // Keep the full list so Settings can offer a picker - model names change
+    // often enough that hardcoding one is how this broke the first time.
+    const names = models.map((m) => m.name);
     const chosen = chooseGeminiModel(models);
-    saveTripSettings({ geminiModel: chosen });
+    saveTripSettings({ geminiModel: chosen, geminiModels: names });
 
     try {
       await callGemini(key, "Reply with the single word: ok");
@@ -218,7 +227,8 @@
     }
     return {
       ok: true,
-      message: `Working. Using ${chosen.replace(/^models\//, "")}. ${models.length} models available on this key.`,
+      models: names,
+      message: `Working. Using ${chosen.replace(/^models\//, "")}. ${models.length} models available — pick a different one below if you prefer.`,
     };
   }
 
@@ -856,8 +866,26 @@
               checking — verify before relying on them.
             </p>
 
-            <button class="modal-btn" id="testGeminiBtn" style="margin-top:10px;">Test Gemini key</button>
+            <button class="modal-btn" id="testGeminiBtn" style="margin-top:10px;">Test key & find models</button>
             <pre class="settings-result" id="geminiTestResult" hidden></pre>
+
+            <div id="geminiModelWrap" ${s.geminiModels.length ? "" : "hidden"}>
+              <label class="settings-label" for="setGeminiModel">Model</label>
+              <select class="settings-input" id="setGeminiModel">
+                ${s.geminiModels
+                  .map(
+                    (m) =>
+                      `<option value="${esc(m)}"${m === s.geminiModel ? " selected" : ""}>${esc(
+                        m.replace(/^models\//, "")
+                      )}</option>`
+                  )
+                  .join("")}
+              </select>
+              <p class="settings-hint">
+                Lite and flash tiers cost a fraction of pro and are plenty for naming
+                places and ordering a day. Tap the button above to refresh the list.
+              </p>
+            </div>
 
             <label class="settings-label" for="setTravellers">Who's travelling</label>
             <input class="settings-input" type="text" id="setTravellers" value="${esc(s.travellers)}"
@@ -934,13 +962,41 @@
       testBtn.disabled = false;
       testOut.className = "settings-result " + (result.ok ? "ok" : "bad");
       testOut.textContent = result.message;
+
+      // Fill the picker with whatever this key can actually reach, so the
+      // choice is always real rather than a guess at what exists.
+      if (result.ok && result.models && result.models.length) {
+        const wrap = document.getElementById("geminiModelWrap");
+        const sel = document.getElementById("setGeminiModel");
+        const current = loadTripSettings().geminiModel;
+        sel.innerHTML = result.models
+          .map(
+            (m) =>
+              `<option value="${esc(m)}"${m === current ? " selected" : ""}>${esc(
+                m.replace(/^models\//, "")
+              )}</option>`
+          )
+          .join("");
+        wrap.hidden = false;
+      }
     });
+
+    // Changing the model takes effect immediately - waiting for Save would
+    // mean the next search silently used the old one.
+    const modelSel = document.getElementById("setGeminiModel");
+    if (modelSel) {
+      modelSel.addEventListener("change", () => {
+        saveTripSettings({ geminiModel: modelSel.value });
+        toast(`Using ${modelSel.value.replace(/^models\//, "")}`);
+      });
+    }
 
     document.getElementById("saveSettings").addEventListener("click", () => {
       saveTripSettings({
         destination: document.getElementById("setDestination").value,
         googleKey: document.getElementById("setGoogleKey").value.trim(),
         geminiKey: document.getElementById("setGeminiKey").value.trim(),
+        geminiModel: (document.getElementById("setGeminiModel") || {}).value || loadTripSettings().geminiModel,
         travellers: document.getElementById("setTravellers").value,
       });
       closePlaceModal();
@@ -2517,8 +2573,22 @@
   async function searchPlaces(query) {
     lastSearchError = "";
     const s = loadTripSettings();
-    const googleKey = s.googleKey.trim();
     const geminiKey = s.geminiKey.trim();
+    const googleKey = s.googleKey.trim();
+
+    // Gemini leads. It understands a description rather than only a name, and
+    // its grounded search reaches the small businesses OSM has never had. OSM
+    // still resolves the coordinates for whatever it names, so positions stay
+    // real data rather than anything the model produced.
+    if (geminiKey) {
+      try {
+        const results = await searchWithGemini(query, geminiKey);
+        if (results.length) return results;
+      } catch (e) {
+        console.warn("Gemini search failed, falling back:", e);
+        lastSearchError = e && e.message ? e.message : String(e);
+      }
+    }
 
     if (googleKey) {
       try {
@@ -2530,29 +2600,13 @@
       }
     }
 
-    let osmResults = [];
+    // Final backup: works with no key at all, so search never simply stops.
     try {
-      osmResults = await searchNominatim(query);
+      return await searchNominatim(query);
     } catch (e) {
-      osmResults = [];
+      if (!lastSearchError) lastSearchError = e && e.message ? e.message : String(e);
+      return [];
     }
-    if (osmResults.length) return osmResults;
-
-    // OSM found nothing - this is the gap it's weakest at (small businesses,
-    // and anything phrased as a description rather than a name). Gemini with
-    // search grounding can name real candidates, which are then geocoded
-    // against OSM so their position and address are still real data.
-    if (geminiKey) {
-      try {
-        return await searchWithGemini(query, geminiKey);
-      } catch (e) {
-        console.warn("Gemini search failed:", e);
-        // Surfaced in the results area rather than swallowed - a silent
-        // "no results" is indistinguishable from a broken key.
-        lastSearchError = e && e.message ? e.message : String(e);
-      }
-    }
-    return osmResults;
   }
 
   // Places API (New) text search. Only the fields named below are requested -
@@ -2792,6 +2846,13 @@
           lastSearchError ? `<pre class="settings-result bad">${esc(lastSearchError)}</pre>` : ""
         }</div>`;
       } else {
+        // Gemini failing but OSM answering means quietly worse results. Say
+        // so, rather than letting the app degrade invisibly.
+        if (lastSearchError) {
+          html += `<div class="card"><p class="pick-status">Fell back to OpenStreetMap — the AI search didn't answer.</p><pre class="settings-result bad">${esc(
+            lastSearchError
+          )}</pre></div>`;
+        }
         const anyMappable = pickSearch.results.some((r) => r.lat != null && r.lon != null);
         if (anyMappable) {
           html += `
