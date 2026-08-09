@@ -3181,6 +3181,297 @@
     L.marker([pick.lat, pick.lon]).addTo(map);
   }
 
+  // ---------- Every saved place on one map ----------
+  // The list groups places by folder, which answers "what have I saved" but
+  // never "where are these in relation to each other". That second question
+  // is the one that decides a day: three places on the same street belong
+  // together, and one an hour out of town has to be its own morning. Seeing
+  // them all at once is the only way that's obvious before you're standing
+  // there with a tired four-year-old.
+  const mapOverlay = document.getElementById("mapOverlay");
+  let allMap = null;
+  let allMapFilter = "all";
+
+  function allMapFilters() {
+    const opts = [{ key: "all", label: "All" }];
+    const picks = loadPicks();
+    if (activeBoard().dated) {
+      const plan = loadPlan();
+      plan.days.forEach((d) => {
+        if ((plan.items[d.id] || []).length) {
+          opts.push({ key: `day:${d.id}`, label: shortDayLabel(d.label) });
+        }
+      });
+    }
+    const folders = loadFolders().slice();
+    picks.forEach((p) => {
+      const f = p.city || "Unsorted";
+      if (!folders.includes(f)) folders.push(f);
+    });
+    folders.forEach((f) => {
+      if (picks.some((p) => (p.city || "Unsorted") === f)) opts.push({ key: `folder:${f}`, label: f });
+    });
+    return opts;
+  }
+
+  // Returns { p, order } - order is only set for a day, where the sequence is
+  // the plan's own order and worth numbering on the pins.
+  function picksForMapFilter(filter) {
+    const picks = loadPicks();
+    if (filter && filter.startsWith("day:")) {
+      const dayId = filter.slice(4);
+      const plan = loadPlan();
+      return (plan.items[dayId] || [])
+        .map((it, i) => ({ p: picks.find((x) => x.id === it.pickId), order: i + 1, time: it.time }))
+        .filter((e) => e.p);
+    }
+    if (filter && filter.startsWith("folder:")) {
+      const folder = filter.slice(7);
+      return picks.filter((p) => (p.city || "Unsorted") === folder).map((p) => ({ p }));
+    }
+    return picks.map((p) => ({ p }));
+  }
+
+  // Google Maps' URL API takes one origin, one destination and up to nine
+  // waypoints, so a long list is truncated rather than silently mangled. A
+  // single place goes to its listing instead of a pointless one-stop route.
+  const MAPS_MAX_STOPS = 10;
+  function googleMapsRouteUrl(entries) {
+    const pts = entries.map((e) => e.p).filter((p) => p.lat != null && p.lon != null);
+    if (!pts.length) return null;
+    if (pts.length === 1) return pickGoogleUrl(pts[0]);
+    const capped = pts.slice(0, MAPS_MAX_STOPS);
+    const at = (p) => `${p.lat},${p.lon}`;
+    const waypoints = capped.slice(1, -1).map(at).join("|");
+    return (
+      `https://www.google.com/maps/dir/?api=1&origin=${at(capped[0])}` +
+      `&destination=${at(capped[capped.length - 1])}&travelmode=walking` +
+      (waypoints ? `&waypoints=${encodeURIComponent(waypoints)}` : "")
+    );
+  }
+
+  function openAllMap(filter) {
+    const wasOpen = mapOverlay.classList.contains("open");
+    allMapFilter = filter || "all";
+    renderAllMap();
+    // A full-screen overlay that Android's back button can't dismiss is a
+    // trap - back would close the whole app. A history entry makes back mean
+    // "close the map" instead, with no extra native code.
+    if (!wasOpen) {
+      try {
+        history.pushState({ mapOverlay: true }, "");
+      } catch (e) {
+        /* file:// origins can refuse pushState; the ✕ still works */
+      }
+    }
+  }
+
+  // Closing on purpose unwinds that history entry so back doesn't reopen it.
+  function dismissAllMap() {
+    if (history.state && history.state.mapOverlay) history.back();
+    else closeAllMap();
+  }
+
+  window.addEventListener("popstate", () => {
+    if (mapOverlay.classList.contains("open")) closeAllMap();
+  });
+
+  function closeAllMap() {
+    if (allMap) {
+      allMap.remove();
+      allMap = null;
+    }
+    mapOverlay.classList.remove("open");
+    mapOverlay.innerHTML = "";
+  }
+
+  function renderAllMap() {
+    const filters = allMapFilters();
+    if (!filters.some((f) => f.key === allMapFilter)) allMapFilter = "all";
+    const entries = picksForMapFilter(allMapFilter);
+    const mappable = entries.filter((e) => e.p.lat != null && e.p.lon != null);
+    const missing = entries.length - mappable.length;
+    const routeUrl = googleMapsRouteUrl(entries);
+    const truncated = mappable.length > MAPS_MAX_STOPS;
+
+    mapOverlay.innerHTML = `
+      <div class="map-head">
+        <button class="map-close" data-map-close="1" aria-label="Close map">✕</button>
+        <div class="map-head-text">
+          <div class="map-title">${mappable.length} on the map</div>
+          ${missing ? `<div class="map-sub">${missing} still without a location</div>` : ""}
+        </div>
+        <button class="map-locate" id="allMapLocate" aria-label="Find me">◎</button>
+      </div>
+      <div class="map-filters">
+        ${filters
+          .map(
+            (f) =>
+              `<button class="map-chip${f.key === allMapFilter ? " on" : ""}" data-map-filter="${esc(
+                f.key
+              )}">${esc(f.label)}</button>`
+          )
+          .join("")}
+      </div>
+      <div class="map-canvas" id="allMapCanvas"></div>
+      ${
+        mappable.length
+          ? `<div class="map-foot">
+               <button class="map-open-btn" id="allMapGoogle">↗ ${
+                 mappable.length === 1 ? "Open in Google Maps" : "Route in Google Maps"
+               }</button>
+               ${truncated ? `<div class="map-note">Google Maps takes 10 stops — the first 10 are sent.</div>` : ""}
+             </div>`
+          : `<div class="map-foot"><div class="map-note">${
+              entries.length
+                ? "None of these have coordinates yet — open one and it'll look them up."
+                : "Nothing saved here yet. Add places from Picks and they'll appear on this map."
+            }</div></div>`
+      }
+    `;
+    mapOverlay.classList.add("open");
+
+    mapOverlay.querySelectorAll("[data-map-close]").forEach((b) =>
+      b.addEventListener("click", dismissAllMap)
+    );
+    mapOverlay.querySelectorAll("[data-map-filter]").forEach((b) =>
+      b.addEventListener("click", () => openAllMap(b.getAttribute("data-map-filter")))
+    );
+    const googleBtn = document.getElementById("allMapGoogle");
+    if (googleBtn && routeUrl) googleBtn.addEventListener("click", () => openExternal(routeUrl));
+
+    if (allMap) {
+      allMap.remove();
+      allMap = null;
+    }
+    if (!mappable.length) return;
+
+    const canvas = document.getElementById("allMapCanvas");
+    allMap = L.map(canvas, { scrollWheelZoom: true, attributionControl: false });
+    addTileLayer(allMap);
+
+    mappable.forEach((e) => {
+      const label = e.order != null ? String(e.order) : "";
+      const cls = ["map-pin", e.p.booked ? "booked" : "", e.order != null ? "ordered" : ""]
+        .filter(Boolean)
+        .join(" ");
+      L.marker([e.p.lat, e.p.lon], {
+        icon: L.divIcon({
+          className: "map-pin-wrap",
+          html: `<span class="${cls}">${esc(label)}</span>`,
+          iconSize: [26, 26],
+          iconAnchor: [13, 13],
+        }),
+      })
+        .addTo(allMap)
+        .bindPopup(
+          `<div class="map-pop">
+             <div class="map-pop-name">${esc(e.p.name)}</div>
+             ${
+               e.p.category || e.time
+                 ? `<div class="map-pop-meta">${esc([e.time, e.p.category].filter(Boolean).join(" · "))}</div>`
+                 : ""
+             }
+             <div class="map-pop-actions">
+               <button class="map-pop-btn" data-map-detail="${esc(e.p.id)}">Details</button>
+               <button class="map-pop-btn" data-map-dir="${esc(directionsUrl(e.p))}">Directions</button>
+             </div>
+           </div>`
+        );
+    });
+
+    // Popup buttons only exist once a popup is open, so they're wired then.
+    allMap.on("popupopen", (ev) => {
+      const root = ev.popup.getElement();
+      if (!root) return;
+      const detail = root.querySelector("[data-map-detail]");
+      if (detail) {
+        detail.addEventListener("click", () => {
+          const id = detail.getAttribute("data-map-detail");
+          dismissAllMap();
+          showView("picks");
+          openPickDetail(id);
+        });
+      }
+      const dir = root.querySelector("[data-map-dir]");
+      if (dir) dir.addEventListener("click", () => openExternal(dir.getAttribute("data-map-dir")));
+    });
+
+    const bounds = L.latLngBounds(mappable.map((e) => [e.p.lat, e.p.lon]));
+    if (mappable.length === 1) allMap.setView(bounds.getCenter(), 15);
+    else allMap.fitBounds(bounds.pad(0.2));
+    // The overlay is only laid out once it's visible, so Leaflet's idea of
+    // the canvas size is stale until the next frame.
+    requestAnimationFrame(() => allMap && allMap.invalidateSize());
+
+    const locate = document.getElementById("allMapLocate");
+    if (locate) locate.addEventListener("click", () => showMeOnAllMap(locate));
+  }
+
+  async function showMeOnAllMap(btn) {
+    if (!allMap) return;
+    btn.disabled = true;
+    try {
+      const pos = await currentPosition();
+      if (!allMap) return;
+      L.circleMarker([pos.lat, pos.lon], {
+        radius: 8,
+        color: "#fff",
+        weight: 3,
+        fillColor: "#1a73e8",
+        fillOpacity: 1,
+      })
+        .addTo(allMap)
+        .bindTooltip("You are here");
+      allMap.setView([pos.lat, pos.lon], Math.max(allMap.getZoom(), 14));
+    } catch (e) {
+      toast((e && e.message) || "Couldn't get your location");
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  // Native geolocation when running in the app, the browser's otherwise.
+  function currentPosition() {
+    const geo = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Geolocation;
+    if (geo) {
+      return (async () => {
+        let perm = await geo.checkPermissions();
+        if (perm.location !== "granted" && perm.coarseLocation !== "granted") {
+          perm = await geo.requestPermissions({ permissions: ["location", "coarseLocation"] });
+        }
+        if (perm.location === "denied" && perm.coarseLocation === "denied") {
+          throw new Error("Location permission was declined — enable it in Android settings.");
+        }
+        const pos = await geo.getCurrentPosition({ enableHighAccuracy: false, timeout: 15000 });
+        return { lat: pos.coords.latitude, lon: pos.coords.longitude };
+      })();
+    }
+    return new Promise((resolve, reject) => {
+      if (!navigator.geolocation) return reject(new Error("This device didn't offer location access."));
+      navigator.geolocation.getCurrentPosition(
+        (pos) => resolve({ lat: pos.coords.latitude, lon: pos.coords.longitude }),
+        (err) => reject(new Error(`Couldn't get your location: ${err.message}`)),
+        { enableHighAccuracy: false, timeout: 15000, maximumAge: 60000 }
+      );
+    });
+  }
+
+  // Opening the map from Today or the Itinerary almost always means "these
+  // ones", not "all 40 things I've ever saved" - so it starts on the day in
+  // view. The All chip is right there when that guess is wrong.
+  function defaultMapFilter() {
+    const tab = view.dataset.activeTab;
+    if (tab !== "today" && tab !== "itinerary") return "all";
+    if (!activeBoard().dated) return "all";
+    const current = currentPlanDay();
+    if (!current) return "all";
+    const plan = loadPlan();
+    return (plan.items[current.day.id] || []).length ? `day:${current.day.id}` : "all";
+  }
+
+  document.getElementById("mapBtn").addEventListener("click", () => openAllMap(defaultMapFilter()));
+
   async function confirmAddCandidate(candidate, folder) {
     const id = pickId("custom", candidate.name);
     const picks = loadPicks();

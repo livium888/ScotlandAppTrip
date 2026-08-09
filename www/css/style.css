@@ -551,6 +551,144 @@ body {
   width: 100%;
 }
 
+/* ---- Every saved place on one map ---- */
+/* Full screen rather than a card: the whole point is seeing the spread, and
+   a 220px window inside a scrolling list can't show it. Sits above the tab
+   bar (z-index 60 vs the sheet's 50) because it's a place you leave, not a
+   layer you peer through. */
+.map-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: none;
+  flex-direction: column;
+  background: var(--bg);
+}
+.map-overlay.open { display: flex; }
+
+.map-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: calc(10px + var(--safe-top)) 14px 10px;
+  background: linear-gradient(135deg, var(--navy) 0%, var(--navy-dark) 100%);
+  color: var(--on-accent);
+  flex-shrink: 0;
+}
+.map-head-text { flex: 1; min-width: 0; }
+.map-title { font-size: 17px; font-weight: 700; }
+.map-sub { font-size: 12px; opacity: 0.75; margin-top: 2px; }
+.map-close,
+.map-locate {
+  flex-shrink: 0;
+  width: 38px;
+  height: 38px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.14);
+  color: var(--on-accent);
+  font-size: 18px;
+  line-height: 1;
+}
+.map-close:active,
+.map-locate:active { opacity: 0.6; }
+.map-locate:disabled { opacity: 0.4; }
+
+.map-filters {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 10px 14px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  scrollbar-width: none;
+}
+.map-filters::-webkit-scrollbar { display: none; }
+.map-chip {
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 7px 14px;
+  font-size: 13px;
+  font-family: inherit;
+  min-height: 34px;
+}
+.map-chip.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+  font-weight: 600;
+}
+
+.map-canvas { flex: 1; min-height: 0; background: var(--surface-2); }
+
+.map-foot {
+  flex-shrink: 0;
+  padding: 12px 14px calc(12px + var(--safe-bottom));
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+}
+.map-open-btn {
+  width: 100%;
+  min-height: 48px;
+  border: none;
+  border-radius: 12px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 15px;
+  font-weight: 600;
+  font-family: inherit;
+}
+.map-open-btn:active { opacity: 0.8; }
+.map-note {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 8px;
+  text-align: center;
+}
+.map-foot .map-note:only-child { margin-top: 0; }
+
+/* Numbered pins for a planned day, plain dots otherwise - the number is the
+   thing that tells you the order you'd actually walk it. */
+.map-pin-wrap { background: none; border: none; }
+.map-pin {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--on-accent);
+  border: 2px solid var(--surface);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+  font-size: 12px;
+  font-weight: 700;
+}
+.map-pin.booked { background: var(--success); }
+.map-pin.ordered { width: 28px; height: 28px; }
+
+.map-pop-name { font-size: 15px; font-weight: 700; color: var(--text); }
+.map-pop-meta { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+.map-pop-actions { display: flex; gap: 8px; margin-top: 10px; }
+.map-pop-btn {
+  flex: 1;
+  min-height: 36px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 13px;
+  font-family: inherit;
+  white-space: nowrap;
+}
+.leaflet-popup-content-wrapper { background: var(--surface); color: var(--text); }
+.leaflet-popup-tip { background: var(--surface); }
+.leaflet-popup-content { margin: 12px 14px; min-width: 170px; }
+
 .candidate-card {
   display: flex;
   align-items: center;
@@ -924,6 +1062,25 @@ button, select, input[type="text"], input[type="file"] { font-family: inherit; }
   }
   .topbar-settings { background: var(--surface-2); color: var(--text); }
   .hero { background: linear-gradient(135deg, #1f4a5e, #23303f); color: var(--text); }
+
+  /* Same reasoning as the topbar: the map header is that header. */
+  .map-head {
+    background: var(--surface);
+    color: var(--text);
+    border-bottom: 1px solid var(--border);
+  }
+  .map-close, .map-locate { background: var(--surface-2); color: var(--text); }
+
+  /* Leaflet ships its own white controls, which sit on the map as bright
+     slabs at night. */
+  .leaflet-bar a,
+  .leaflet-bar a:hover {
+    background: var(--surface);
+    color: var(--text);
+    border-bottom-color: var(--border);
+  }
+  .leaflet-bar { border-color: var(--border); }
+  .leaflet-popup-close-button { color: var(--text-muted) !important; }
 }
 
 /* ---------- One-tap adding ----------
