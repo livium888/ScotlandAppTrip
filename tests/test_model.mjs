@@ -55,6 +55,18 @@ await page.goto(BASE, { waitUntil: 'load' });
 // --- Detect models and pick one ---
 await page.click('#settingsBtn');
 await page.waitForSelector('#setGeminiKey');
+
+// Discoverability: the picker must be on screen before detection, explaining
+// how to fill it, rather than not existing until a button is pressed.
+const before = await page.evaluate(() => {
+  const wrap = document.getElementById('geminiModelWrap');
+  const sel = document.getElementById('setGeminiModel');
+  return { hidden: wrap.hidden, disabled: sel.disabled, text: sel.textContent.trim() };
+});
+check('picker is visible before detection', before.hidden === false, JSON.stringify(before));
+check('picker explains how to populate it', /Test key & find models/.test(before.text), before.text);
+check('picker disabled until populated', before.disabled === true, JSON.stringify(before));
+
 await page.fill('#setGeminiKey', 'KEY');
 await page.click('#testGeminiBtn');
 await page.waitForTimeout(900);
@@ -62,9 +74,9 @@ await page.waitForTimeout(900);
 const shown = await page.evaluate(() => {
   const wrap = document.getElementById('geminiModelWrap');
   const sel = document.getElementById('setGeminiModel');
-  return { hidden: wrap.hidden, options: Array.from(sel.options).map((o) => o.value) };
+  return { hidden: wrap.hidden, disabled: sel.disabled, options: Array.from(sel.options).map((o) => o.value) };
 });
-check('model picker appears after detection', shown.hidden === false);
+check('model picker enabled after detection', shown.hidden === false && shown.disabled === false, JSON.stringify(shown));
 check('lists the generateContent models', shown.options.includes('models/gemini-3.5-flash-lite') &&
   shown.options.includes('models/gemini-3.5-pro'), JSON.stringify(shown.options));
 check('excludes embedding-only models', !shown.options.some((o) => /embedding/.test(o)), JSON.stringify(shown.options));

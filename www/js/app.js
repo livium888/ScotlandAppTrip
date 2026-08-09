@@ -869,17 +869,21 @@
             <button class="modal-btn" id="testGeminiBtn" style="margin-top:10px;">Test key & find models</button>
             <pre class="settings-result" id="geminiTestResult" hidden></pre>
 
-            <div id="geminiModelWrap" ${s.geminiModels.length ? "" : "hidden"}>
+            <div id="geminiModelWrap">
               <label class="settings-label" for="setGeminiModel">Model</label>
-              <select class="settings-input" id="setGeminiModel">
-                ${s.geminiModels
-                  .map(
-                    (m) =>
-                      `<option value="${esc(m)}"${m === s.geminiModel ? " selected" : ""}>${esc(
-                        m.replace(/^models\//, "")
-                      )}</option>`
-                  )
-                  .join("")}
+              <select class="settings-input" id="setGeminiModel" ${s.geminiModels.length ? "" : "disabled"}>
+                ${
+                  s.geminiModels.length
+                    ? s.geminiModels
+                        .map(
+                          (m) =>
+                            `<option value="${esc(m)}"${m === s.geminiModel ? " selected" : ""}>${esc(
+                              m.replace(/^models\//, "")
+                            )}</option>`
+                        )
+                        .join("")
+                    : `<option>Tap "Test key & find models" to load the list</option>`
+                }
               </select>
               <p class="settings-hint">
                 Lite and flash tiers cost a fraction of pro and are plenty for naming
@@ -977,6 +981,7 @@
               )}</option>`
           )
           .join("");
+        sel.disabled = false;
         wrap.hidden = false;
       }
     });
