@@ -883,3 +883,75 @@ button, select, input[type="text"], input[type="file"] { font-family: inherit; }
   .day-share { color: #8fc0f0; }
   .settings-result { background: rgba(255, 255, 255, 0.06); }
 }
+
+/* ---------- One-tap adding ----------
+   Replaces native <select> pickers, which open a full-screen modal on
+   Android and made adding several places a trip through several modals. */
+.plan-add-row { margin-top: 12px; }
+.plan-add-label { font-size: 11.5px; color: var(--ink-soft); font-weight: 700; margin-bottom: 6px; }
+.plan-add-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.add-chip {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px dashed var(--line);
+  background: transparent;
+  color: var(--ink-soft);
+  font-family: inherit;
+  min-height: 36px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.add-chip:active { background: var(--paper); border-style: solid; }
+
+.quick-times { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+.quick-time {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink-soft);
+  font-family: inherit;
+  min-height: 30px;
+}
+.quick-time:active { background: var(--paper); }
+
+/* Schedule straight from a pick card, instead of going to another tab. */
+.day-assign-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin-top: 10px;
+}
+.day-chip {
+  font-size: 11.5px;
+  font-weight: 700;
+  padding: 7px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink-soft);
+  font-family: inherit;
+  min-height: 34px;
+}
+.day-chip.on { background: var(--navy); border-color: var(--navy); color: #fff; }
+
+/* Toast carrying a single corrective action ("Change"), so a reversible
+   choice is offered after the fact rather than prompted for beforehand. */
+.toast.with-action { display: flex; align-items: center; gap: 14px; }
+.toast-action {
+  background: none;
+  border: none;
+  color: #8fc0f0;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 2px 0;
+  flex-shrink: 0;
+}

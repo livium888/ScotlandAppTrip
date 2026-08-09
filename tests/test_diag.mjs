@@ -137,12 +137,8 @@ const browser = await chromium.launch(LAUNCH_OPTS);
 
   // add one
   await page.evaluate(() => document.querySelector('[data-explore-add]').click());
-  await page.waitForSelector('#placeModal.open');
-  await page.evaluate(() => {
-    const b = document.querySelector('#placeModal [data-pick-folder]');
-    if (b) b.click();
-  });
-  await page.waitForTimeout(700);
+  // Adding now saves immediately - no folder question to answer.
+  await page.waitForTimeout(900);
   const picks = await page.evaluate(() => JSON.parse(localStorage.getItem('scotland-trip-picks-v1') || '[]'));
   check('explore result can be saved', picks.some(p => p.name === 'Castle Cafe'), JSON.stringify(picks.map(p=>p.name)));
   await page.close();

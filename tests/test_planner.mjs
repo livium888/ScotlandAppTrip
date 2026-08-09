@@ -75,12 +75,8 @@ check('google result rendered', resultsText.includes('The Little Chippy'), resul
 const bodySent = await page.evaluate(() => window.__lastGoogleBody || null);
 // add candidate -> folder picker -> save
 await page.evaluate(() => document.querySelector('[data-add-candidate]').click());
-await page.waitForSelector('#placeModal.open');
-await page.evaluate(() => {
-  const b = document.querySelector('#placeModal [data-pick-folder]');
-  if (b) b.click();
-});
-await page.waitForTimeout(500);
+// Adding now saves immediately - no folder question to answer.
+await page.waitForTimeout(900);
 
 const picks = await page.evaluate(() => JSON.parse(localStorage.getItem('scotland-trip-picks-v1') || '[]'));
 const chip = picks.find((p) => p.name === 'The Little Chippy');
@@ -105,11 +101,8 @@ await page.waitForTimeout(200);
 check('my plan shows day slots', await page.evaluate(() => !!document.querySelector('[data-plan-add]')));
 
 // add the saved pick to day 1
-await page.evaluate(() => {
-  const sel = document.querySelector('[data-plan-add]');
-  sel.value = JSON.parse(localStorage.getItem('scotland-trip-picks-v1'))[0].id;
-  sel.dispatchEvent(new Event('change'));
-});
+// Plan add is a tappable chip now, not a native select.
+await page.evaluate(() => document.querySelector('button[data-plan-add]').click());
 await page.waitForTimeout(300);
 const planText = await page.evaluate(() => document.getElementById('view').textContent);
 check('pick appears in the plan', planText.includes('The Little Chippy'), planText.slice(0, 200));

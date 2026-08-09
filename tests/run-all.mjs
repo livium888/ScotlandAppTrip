@@ -22,6 +22,7 @@ const SUITES = [
   "test_gemini.mjs",
   "test_diag.mjs",
   "test_backup.mjs",
+  "test_quickadd.mjs",
 ];
 
 const MIME = {

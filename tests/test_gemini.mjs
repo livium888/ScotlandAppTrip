@@ -95,12 +95,8 @@ check('citation link shown', await page.evaluate(() =>
 
 // add it
 await page.evaluate(() => document.querySelector('[data-add-candidate]').click());
-await page.waitForSelector('#placeModal.open');
-await page.evaluate(() => {
-  const b = document.querySelector('#placeModal [data-pick-folder]');
-  if (b) b.click();
-});
-await page.waitForTimeout(600);
+// Adding now saves immediately - no folder question to answer.
+await page.waitForTimeout(900);
 const picks = await page.evaluate(() => JSON.parse(localStorage.getItem('scotland-trip-picks-v1') || '[]'));
 check('AI-found place saved with real OSM coords', picks.length === 1 && picks[0].lat != null, JSON.stringify(picks[0] || {}).slice(0, 200));
 

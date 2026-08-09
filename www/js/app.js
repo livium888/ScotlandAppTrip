@@ -951,6 +951,57 @@
   // Asks which folder a new pick should go in - existing folders as chips,
   // or type a new one to create it on the spot. onConfirm(folder) fires once
   // the user picks or creates one; the sheet closes either way.
+  // Saves straight away instead of asking which folder first.
+  //
+  // Every add path used to open a modal asking for a folder before the place
+  // was even saved - on a question that is trivially changed afterwards with
+  // the chips on the pick card. Asking up front turned the app's most common
+  // action into a two-step interruption. Now it files itself and says so,
+  // with the folder one tap away if the guess was wrong.
+  function quickAdd(candidate, opts) {
+    const options = opts || {};
+    const suggested =
+      options.folder ||
+      (candidate.lat != null ? nearestCity(candidate.lat, candidate.lon) : null) ||
+      loadFolders()[0] ||
+      "Unsorted";
+    confirmAddCandidate(candidate, suggested);
+    toastWithAction(`Added “${candidate.name}” to ${suggested}`, "Change", () => {
+      openFolderPicker(candidate.name, suggested, (folder) => {
+        const id = pickId("custom", candidate.name);
+        setPickCity(id, folder);
+        renderPicks();
+        toast(`Moved to ${folder}`);
+      });
+    });
+  }
+
+  // A toast with one tappable action, which is how a reversible choice should
+  // be offered: act first, correct after, rather than prompt before.
+  let toastActionTimer = null;
+  function toastWithAction(message, actionLabel, onAction) {
+    let el = document.getElementById("toast");
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "toast";
+      el.className = "toast";
+      document.body.appendChild(el);
+    }
+    el.innerHTML = `<span>${esc(message)}</span><button class="toast-action" type="button">${esc(actionLabel)}</button>`;
+    el.classList.add("show", "with-action");
+    clearTimeout(toastActionTimer);
+    const hide = () => {
+      el.classList.remove("show", "with-action");
+      el.innerHTML = "";
+    };
+    el.querySelector(".toast-action").addEventListener("click", () => {
+      clearTimeout(toastActionTimer);
+      hide();
+      onAction();
+    });
+    toastActionTimer = setTimeout(hide, 5000);
+  }
+
   function openFolderPicker(candidateName, suggestedFolder, onConfirm, options) {
     const folders = loadFolders();
     const summary = (options && options.summary) || null;
@@ -1170,6 +1221,13 @@
 
   function savePlan(plan) {
     localStorage.setItem(PLAN_KEY, JSON.stringify(plan));
+  }
+
+  // "Day 3 · Fri 21 Aug" -> "Fri 21". Full labels don't fit on a chip.
+  function shortDayLabel(label) {
+    const m = String(label || "").match(/\b(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\b\s*(\d{1,2})?/i);
+    if (m) return m[2] ? `${m[1]} ${m[2]}` : m[1];
+    return String(label || "").replace(/^Day\s*\d+\s*·\s*/i, "").slice(0, 10);
   }
 
   function planItems(plan, dayId) {
@@ -1433,6 +1491,16 @@
                   ? `<div class="plan-warn">⚠ May be closed this day — hours say "${esc(p.openingHours)}". Check before going.</div>`
                   : ""
               }
+              ${
+                it.time
+                  ? ""
+                  : `<div class="quick-times">${["Morning", "Lunch", "Afternoon", "Evening"]
+                      .map(
+                        (t) =>
+                          `<button class="quick-time" data-plan-quicktime="${esc(day.id)}|${esc(it.pickId)}|${esc(t)}">${t}</button>`
+                      )
+                      .join("")}</div>`
+              }
             </div>
             <div class="plan-item-actions">
               <button data-plan-move="${esc(day.id)}|${esc(it.pickId)}|-1" ${idx === 0 ? "disabled" : ""} aria-label="Move up">↑</button>
@@ -1446,14 +1514,22 @@
       });
       html += `</div>`;
 
+      // Tappable chips rather than a <select>: on Android a select opens a
+      // full-screen picker, so adding five places meant five trips through a
+      // modal. A chip is one tap, and you can see everything available at once.
       const unplanned = picks.filter((p) => !items.some((it) => it.pickId === p.id));
       if (unplanned.length) {
         html += `
           <div class="plan-add-row">
-            <select data-plan-add="${esc(day.id)}">
-              <option value="">+ Add a saved place…</option>
-              ${unplanned.map((p) => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join("")}
-            </select>
+            <div class="plan-add-label">Add:</div>
+            <div class="plan-add-chips">
+              ${unplanned
+                .map(
+                  (p) =>
+                    `<button class="add-chip" data-plan-add="${esc(day.id)}|${esc(p.id)}">+ ${esc(p.name)}</button>`
+                )
+                .join("")}
+            </div>
           </div>
         `;
       }
@@ -1473,10 +1549,19 @@
     const autoBtn = document.getElementById("autoPlanBtn");
     if (autoBtn) autoBtn.addEventListener("click", autoPlanDays);
 
-    view.querySelectorAll("[data-plan-add]").forEach((sel) => {
-      sel.addEventListener("change", () => {
-        if (!sel.value) return;
-        addToPlan(sel.getAttribute("data-plan-add"), sel.value);
+    view.querySelectorAll("[data-plan-add]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const [dayId, pickId] = btn.getAttribute("data-plan-add").split("|");
+        addToPlan(dayId, pickId);
+        renderItinerary();
+      });
+    });
+
+    // Common times as one-tap chips, so the usual case needs no keyboard.
+    view.querySelectorAll("[data-plan-quicktime]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const [dayId, pickId, time] = btn.getAttribute("data-plan-quicktime").split("|");
+        setPlanItemTime(dayId, pickId, time);
         renderItinerary();
       });
     });
@@ -2057,9 +2142,7 @@
           openingHours: r.openingHours || "",
           category: catLabel(explore.category),
         };
-        openFolderPicker(candidate.name, nearestCity(r.lat, r.lon), (folder) =>
-          confirmAddCandidate(candidate, folder)
-        );
+        quickAdd(candidate);
       });
     });
   }
@@ -2253,6 +2336,30 @@
               }</button>`
             : ""
         }
+        ${(() => {
+          // Schedule straight from the card. Previously the only route was
+          // Picks -> Itinerary -> My plan -> find the day -> picker, which
+          // made planning feel like admin rather than one gesture.
+          const plan = loadPlan();
+          const scheduled = {};
+          Object.keys(plan.items || {}).forEach((dayId) => {
+            if ((plan.items[dayId] || []).some((it) => it.pickId === p.id)) scheduled[dayId] = true;
+          });
+          if (!plan.days.length) return "";
+          return `
+            <div class="day-assign-row">
+              <span class="move-label">Day:</span>
+              ${plan.days
+                .map(
+                  (d) =>
+                    `<button class="day-chip${scheduled[d.id] ? " on" : ""}" data-assign-day="${esc(p.id)}|${esc(
+                      d.id
+                    )}">${esc(shortDayLabel(d.label))}</button>`
+                )
+                .join("")}
+            </div>
+          `;
+        })()}
         <div class="pick-note-row">
           <button class="booked-toggle${p.booked ? " on" : ""}" data-toggle-booked="${esc(p.id)}">
             ${p.booked ? "✓ Booked" : "Mark booked"}
@@ -2657,8 +2764,7 @@
       view.querySelectorAll("[data-add-candidate]").forEach((btn) => {
         btn.addEventListener("click", () => {
           const candidate = pickSearch.results[Number(btn.getAttribute("data-add-candidate"))];
-          const suggested = nearestCity(candidate.lat, candidate.lon);
-          openFolderPicker(candidate.name, suggested, (folder) => confirmAddCandidate(candidate, folder));
+          quickAdd(candidate);
         });
       });
     }
@@ -2673,6 +2779,23 @@
 
     view.querySelectorAll("[data-open-maps]").forEach((btn) => {
       btn.addEventListener("click", () => openExternal(btn.getAttribute("data-open-maps")));
+    });
+
+    view.querySelectorAll("[data-assign-day]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const [pid, dayId] = btn.getAttribute("data-assign-day").split("|");
+        const plan = loadPlan();
+        const already = (plan.items[dayId] || []).some((it) => it.pickId === pid);
+        if (already) {
+          removeFromPlan(dayId, pid);
+          toast("Removed from that day");
+        } else {
+          addToPlan(dayId, pid);
+          const day = plan.days.find((d) => d.id === dayId);
+          toast(`Added to ${day ? shortDayLabel(day.label) : "that day"}`);
+        }
+        renderPicks();
+      });
     });
 
     view.querySelectorAll("[data-toggle-booked]").forEach((btn) => {
@@ -2726,8 +2849,9 @@
         const parentPick = picks.find((p) => p.id === id);
         if (!r) return;
         const candidate = { name: r.name, lat: r.lat, lon: r.lon, type: catLabel(state.category), website: r.website };
-        const suggested = (parentPick && parentPick.city) || nearestCity(r.lat, r.lon);
-        openFolderPicker(candidate.name, suggested, (folder) => confirmAddCandidate(candidate, folder));
+        // Inherit the folder of the pick you were exploring around - that's
+        // almost always where a nearby place belongs.
+        quickAdd(candidate, { folder: (parentPick && parentPick.city) || null });
       });
     });
 
