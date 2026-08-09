@@ -2071,29 +2071,54 @@
     renderPicks();
   }
 
+  // Uses the Capacitor plugin on device, which asks for the runtime
+  // permission properly. Plain navigator.geolocation in a WebView needs the
+  // app to hold the Android permission already - it didn't, so this button
+  // did nothing at all with no error to explain why.
   async function setExploreCentreFromGps() {
-    if (!navigator.geolocation) {
-      explore.status = "error";
-      explore.error = "This device didn't offer location access.";
-      renderPicks();
-      return;
-    }
     explore.status = "locating";
     explore.error = "";
     renderPicks();
+
+    const useCentre = (lat, lon) => {
+      explore.centre = { name: "Where I am", lat, lon };
+      explore.status = "idle";
+      if (explore.category) runExplore();
+      else renderPicks();
+    };
+    const fail = (msg) => {
+      explore.status = "error";
+      explore.error = msg;
+      renderPicks();
+    };
+
+    const geo = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Geolocation;
+    if (geo) {
+      try {
+        let perm = await geo.checkPermissions();
+        if (perm.location !== "granted" && perm.coarseLocation !== "granted") {
+          perm = await geo.requestPermissions({ permissions: ["location", "coarseLocation"] });
+        }
+        if (perm.location === "denied" && perm.coarseLocation === "denied") {
+          fail("Location permission was declined. Enable it for this app in Android settings, or set the area by searching instead.");
+          return;
+        }
+        const pos = await geo.getCurrentPosition({ enableHighAccuracy: false, timeout: 15000 });
+        useCentre(pos.coords.latitude, pos.coords.longitude);
+      } catch (e) {
+        fail(`Couldn't get your location: ${(e && e.message) || e}`);
+      }
+      return;
+    }
+
+    if (!navigator.geolocation) {
+      fail("This device didn't offer location access. Search for the area instead.");
+      return;
+    }
     navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        explore.centre = { name: "Where I am", lat: pos.coords.latitude, lon: pos.coords.longitude };
-        explore.status = "idle";
-        if (explore.category) runExplore();
-        else renderPicks();
-      },
-      (err) => {
-        explore.status = "error";
-        explore.error = `Couldn't get your location: ${err.message}`;
-        renderPicks();
-      },
-      { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 }
+      (pos) => useCentre(pos.coords.latitude, pos.coords.longitude),
+      (err) => fail(`Couldn't get your location: ${err.message}`),
+      { enableHighAccuracy: false, timeout: 15000, maximumAge: 60000 }
     );
   }
 

@@ -1,14 +1,43 @@
 :root {
-  --navy: #16324f;
-  --navy-dark: #0e2338;
-  --teal: #2f7a6b;
-  --thistle: #6b4c8a;
+  /* Colour is defined once, here, and everything else refers to it. The app
+     previously carried 40-odd raw #fff values that dark mode could not reach,
+     which is why it showed white slabs on a dark background.
+
+     Dark values are not the light ones inverted: pure black is avoided in
+     favour of a slightly lifted grey (harsh contrast is tiring at night),
+     text sits just under pure white for the same reason, and accents are
+     desaturated because saturated colour vibrates against a dark surface. */
+
+  --bg: #f7f6f3;          /* page behind everything */
+  --surface: #ffffff;     /* cards, sheets, inputs */
+  --surface-2: #efece6;   /* inset areas, chips at rest */
+  --text: #1a1f27;
+  --text-muted: #5c6672;
+  --border: #e2ded6;
+
+  --accent: #1d4e6f;      /* primary actions, active state */
+  --on-accent: #ffffff;
+  --accent-soft: #e8eef3;
+
+  --success: #2e7d6a;
+  --warn: #9a6410;
+  --warn-bg: rgba(217, 164, 65, 0.16);
+  --danger: #a33636;
+  --danger-bg: rgba(163, 54, 54, 0.1);
+  --ai: #6b4c8a;
+
+  /* Kept so older rules that still name them keep working. */
+  --navy: var(--accent);
+  --navy-dark: #143850;
+  --teal: var(--success);
+  --thistle: var(--ai);
   --mustard: #d9a441;
-  --paper: #f6f3ec;
-  --card: #ffffff;
-  --ink: #1c2430;
-  --ink-soft: #5b6472;
-  --line: #e4dfd3;
+  --paper: var(--bg);
+  --card: var(--surface);
+  --ink: var(--text);
+  --ink-soft: var(--text-muted);
+  --line: var(--border);
+
   --radius: 14px;
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
@@ -34,7 +63,7 @@ body {
 
 .topbar {
   background: linear-gradient(135deg, var(--navy) 0%, var(--navy-dark) 100%);
-  color: #fff;
+  color: var(--on-accent);
   padding: calc(14px + var(--safe-top)) 20px 14px;
   flex-shrink: 0;
   display: flex;
@@ -46,7 +75,7 @@ body {
   flex-shrink: 0;
   background: rgba(255, 255, 255, 0.14);
   border: none;
-  color: #fff;
+  color: var(--on-accent);
   font-size: 18px;
   line-height: 1;
   width: 38px;
@@ -80,7 +109,7 @@ body {
   left: 0;
   right: 0;
   display: flex;
-  background: #fff;
+  background: var(--surface);
   border-top: 1px solid var(--line);
   padding: 6px 4px calc(6px + var(--safe-bottom));
   box-shadow: 0 -2px 10px rgba(0,0,0,0.05);
@@ -130,7 +159,7 @@ body {
 /* Overview hero */
 .hero {
   background: linear-gradient(135deg, var(--teal), var(--navy));
-  color: #fff;
+  color: var(--on-accent);
   border-radius: var(--radius);
   padding: 18px;
   margin-bottom: 16px;
@@ -150,7 +179,7 @@ body {
   border-radius: 10px;
   border: 1px solid rgba(255,255,255,0.3);
   background: rgba(255,255,255,0.1);
-  color: #fff;
+  color: var(--on-accent);
   font-family: inherit;
   font-size: 13.5px;
   font-weight: 700;
@@ -163,7 +192,7 @@ body {
   font-weight: 700;
   padding: 3px 9px;
   border-radius: 999px;
-  color: #fff;
+  color: var(--on-accent);
   margin-right: 6px;
 }
 
@@ -214,7 +243,7 @@ body {
   bottom: calc(84px + var(--safe-bottom));
   transform: translateX(-50%) translateY(12px);
   background: var(--ink);
-  color: #fff;
+  color: var(--on-accent);
   font-size: 13px;
   font-weight: 600;
   padding: 10px 18px;
@@ -332,7 +361,7 @@ body {
   color: var(--navy);
   border: 1px solid var(--line);
 }
-.modal-btn-primary { background: var(--navy); color: #fff; border-color: var(--navy); }
+.modal-btn-primary { background: var(--navy); color: var(--on-accent); border-color: var(--navy); }
 
 /* Places */
 .search-bar {
@@ -344,7 +373,7 @@ body {
   flex: 1;
   min-width: 0;
   border: 1px solid var(--line);
-  background: #fff;
+  background: var(--surface);
   border-radius: 10px;
   padding: 11px 14px;
   font-size: 14px;
@@ -358,7 +387,7 @@ body {
   border: none;
   border-radius: 10px;
   background: var(--navy);
-  color: #fff;
+  color: var(--on-accent);
   font-size: 16px;
 }
 .search-bar button:active { background: var(--navy-dark); }
@@ -373,7 +402,7 @@ body {
 .filter-chip {
   flex-shrink: 0;
   border: 1px solid var(--line);
-  background: #fff;
+  background: var(--surface);
   color: var(--ink-soft);
   font-size: 12.5px;
   font-weight: 700;
@@ -381,7 +410,7 @@ body {
   border-radius: 999px;
   font-family: inherit;
 }
-.filter-chip.active { background: var(--navy); color: #fff; border-color: var(--navy); }
+.filter-chip.active { background: var(--navy); color: var(--on-accent); border-color: var(--navy); }
 
 .place-card { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
 .place-name { font-weight: 700; font-size: 14.5px; margin-bottom: 3px; }
@@ -490,7 +519,7 @@ body {
   padding: 12px;
   border-radius: 10px;
   background: var(--navy);
-  color: #fff;
+  color: var(--on-accent);
   font-size: 13.5px;
   font-weight: 700;
 }
@@ -507,7 +536,7 @@ body {
 .move-chip {
   flex-shrink: 0;
   border: 1px solid var(--line);
-  background: #fff;
+  background: var(--surface);
   color: var(--ink-soft);
   font-size: 11.5px;
   font-weight: 700;
@@ -515,7 +544,7 @@ body {
   border-radius: 999px;
   font-family: inherit;
 }
-.move-chip.active { background: var(--navy); color: #fff; border-color: var(--navy); }
+.move-chip.active { background: var(--navy); color: var(--on-accent); border-color: var(--navy); }
 
 .search-map {
   height: 220px;
@@ -534,7 +563,7 @@ body {
   border: none;
   border-radius: 8px;
   background: var(--navy);
-  color: #fff;
+  color: var(--on-accent);
   font-family: inherit;
   font-size: 13px;
   font-weight: 700;
@@ -618,7 +647,7 @@ body {
   border: 1px solid rgba(0, 0, 0, 0.14);
   border-radius: 10px;
   font-size: 14px;
-  background: #fff;
+  background: var(--surface);
   color: var(--ink);
 }
 .settings-hint {
@@ -662,7 +691,7 @@ body {
   border: 1px solid rgba(0, 0, 0, 0.12);
   border-radius: 8px;
   font-size: 12px;
-  background: #fff;
+  background: var(--surface);
   color: var(--ink);
 }
 .plan-item-main { flex: 1; min-width: 0; }
@@ -690,7 +719,7 @@ body {
   border: 1px solid rgba(0, 0, 0, 0.14);
   border-radius: 10px;
   font-size: 13px;
-  background: #fff;
+  background: var(--surface);
   color: var(--ink);
 }
 
@@ -701,7 +730,7 @@ body {
   font-weight: 700;
   letter-spacing: 0.4px;
   background: var(--thistle);
-  color: #fff;
+  color: var(--on-accent);
   padding: 2px 6px;
   border-radius: 999px;
   vertical-align: middle;
@@ -714,7 +743,7 @@ body {
   border-radius: 10px;
   border: none;
   background: var(--thistle);
-  color: #fff;
+  color: var(--on-accent);
   font-family: inherit;
   font-size: 14px;
   font-weight: 700;
@@ -757,7 +786,7 @@ body {
   border: 1px solid rgba(0, 0, 0, 0.14);
   border-radius: 9px;
   font-size: 12.5px;
-  background: #fff;
+  background: var(--surface);
   color: var(--ink);
 }
 .explore-centre { font-size: 13px; color: var(--ink-soft); margin: 6px 0 8px; }
@@ -768,7 +797,7 @@ body {
   border: 1px solid rgba(0, 0, 0, 0.14);
   border-radius: 8px;
   font-size: 12.5px;
-  background: #fff;
+  background: var(--surface);
   color: var(--ink);
 }
 .explore-results { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
@@ -802,7 +831,7 @@ body {
   font-size: 9.5px;
   font-weight: 700;
   background: var(--teal);
-  color: #fff;
+  color: var(--on-accent);
   padding: 2px 6px;
   border-radius: 999px;
   vertical-align: middle;
@@ -820,7 +849,7 @@ body {
   font-family: inherit;
   min-height: 34px;
 }
-.booked-toggle.on { background: var(--teal); border-color: var(--teal); color: #fff; }
+.booked-toggle.on { background: var(--teal); border-color: var(--teal); color: var(--on-accent); }
 .pick-note {
   flex: 1;
   min-width: 0;
@@ -828,7 +857,7 @@ body {
   border: 1px solid var(--line);
   border-radius: 9px;
   font-size: 12.5px;
-  background: #fff;
+  background: var(--surface);
   color: var(--ink);
   font-family: inherit;
 }
@@ -855,33 +884,46 @@ button, select, input[type="text"], input[type="file"] { font-family: inherit; }
    happens in the evening, and a white screen at 6am in a shared room with a
    sleeping 4-year-old is antisocial. */
 @media (prefers-color-scheme: dark) {
+  /* Only the tokens change. Everything downstream follows automatically,
+     which is the whole point of having them - the previous dark mode had to
+     patch individual rules and missed most of them. */
   :root {
-    --paper: #14171c;
-    --card: #1c2027;
-    --ink: #e8eaed;
-    --ink-soft: #a3abb8;
-    --line: #2c323b;
-    --navy: #24486e;
-    --navy-dark: #16283f;
-    --teal: #4c9d8b;
-    --thistle: #8f6db3;
+    --bg: #121417;
+    --surface: #1b1f24;
+    --surface-2: #262b32;
+    --text: #e7e9ec;        /* not pure white - less glare at night */
+    --text-muted: #a2aab6;
+    --border: #2f353d;
+
+    --accent: #6aa5d6;      /* lightened and desaturated for dark surfaces */
+    --on-accent: #0e1319;   /* dark text on the light accent */
+    --accent-soft: #1e2a35;
+
+    --success: #5cae99;
+    --warn: #e0b45c;
+    --warn-bg: rgba(224, 180, 92, 0.14);
+    --danger: #e08b86;
+    --danger-bg: rgba(224, 139, 134, 0.13);
+    --ai: #a184c4;
+
+    --navy-dark: #0d1116;
+    --mustard: #e0b45c;
   }
-  /* Surfaces that were hardcoded white in the light theme. */
-  .tabbar { background: var(--card); }
-  .settings-input,
-  .pick-note,
-  .plan-time,
-  .plan-add-row select,
-  .explore-centre-row select,
-  .explore-radius select {
-    background: #232830;
-    color: var(--ink);
-    border-color: var(--line);
+
+  /* Shadows read as murk on dark; a border carries the edge instead. */
+  .card { box-shadow: none; }
+  .tabbar { box-shadow: none; border-top-color: var(--border); }
+  .modal-sheet { box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.5); }
+  .modal-backdrop { background: rgba(0, 0, 0, 0.65); }
+
+  /* The header gradient loses its point when both stops are near-black. */
+  .topbar {
+    background: var(--surface);
+    color: var(--text);
+    border-bottom: 1px solid var(--border);
   }
-  .tab.active { color: #7fb0e0; }
-  .item-tag, .day-share { background: #232830; }
-  .day-share { color: #8fc0f0; }
-  .settings-result { background: rgba(255, 255, 255, 0.06); }
+  .topbar-settings { background: var(--surface-2); color: var(--text); }
+  .hero { background: linear-gradient(135deg, #1f4a5e, #23303f); color: var(--text); }
 }
 
 /* ---------- One-tap adding ----------
@@ -940,7 +982,7 @@ button, select, input[type="text"], input[type="file"] { font-family: inherit; }
   font-family: inherit;
   min-height: 34px;
 }
-.day-chip.on { background: var(--navy); border-color: var(--navy); color: #fff; }
+.day-chip.on { background: var(--navy); border-color: var(--navy); color: var(--on-accent); }
 
 /* Toast carrying a single corrective action ("Change"), so a reversible
    choice is offered after the fact rather than prompted for beforehand. */
@@ -995,8 +1037,8 @@ button, select, input[type="text"], input[type="file"] { font-family: inherit; }
   border: 1px solid var(--line);
   color: var(--ink-soft);
 }
-.row-badge.day { background: var(--navy); border-color: var(--navy); color: #fff; }
-.row-badge.booked { background: var(--teal); border-color: var(--teal); color: #fff; }
+.row-badge.day { background: var(--navy); border-color: var(--navy); color: var(--on-accent); }
+.row-badge.booked { background: var(--teal); border-color: var(--teal); color: var(--on-accent); }
 .pick-row-chevron { color: var(--ink-soft); font-size: 20px; flex-shrink: 0; }
 
 .detail-map {
@@ -1041,7 +1083,7 @@ button, select, input[type="text"], input[type="file"] { font-family: inherit; }
   top: -9px;
   left: 14px;
   background: var(--teal);
-  color: #fff;
+  color: var(--on-accent);
   font-size: 9.5px;
   font-weight: 700;
   letter-spacing: 0.8px;

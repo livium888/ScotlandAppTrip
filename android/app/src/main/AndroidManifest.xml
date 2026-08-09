@@ -46,4 +46,11 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- "Where I am" in Explore needs these. Without them the browser
+         geolocation call has nothing to grant and the button silently does
+         nothing, which is exactly how it behaved before they were added.
+         Coarse is enough - we're picking a neighbourhood, not navigating. -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
 </manifest>
