@@ -2437,6 +2437,78 @@
   let placeFilter = "All";
   let eatsFilter = "All";
 
+  // The list was in whatever order things happened to be saved, which is the
+  // one order that means nothing by the time there are twenty of them.
+  const SORT_KEY = "places-sort-v1";
+  const SORTS = [
+    { key: "recent", label: "Newest" },
+    { key: "name", label: "A–Z" },
+    { key: "near", label: "Nearest" },
+    { key: "day", label: "By day" },
+  ];
+
+  function loadSort() {
+    const v = readJson(SORT_KEY, "recent");
+    return SORTS.some((s) => s.key === v) ? v : "recent";
+  }
+
+  function saveSort(key) {
+    localStorage.setItem(SORT_KEY, JSON.stringify(key));
+  }
+
+  // "Nearest" needs somewhere to be near. The first scheduled stop is the
+  // best answer - that's where the day starts - then anything saved with
+  // coordinates, then the board's own destination.
+  function sortOrigin() {
+    const plan = loadPlan();
+    const picks = loadPicks();
+    const byId = {};
+    picks.forEach((p) => (byId[p.id] = p));
+    for (const day of plan.days) {
+      for (const it of plan.items[day.id] || []) {
+        const p = byId[it.pickId];
+        if (p && p.lat != null) return p;
+      }
+    }
+    return picks.find((p) => p.lat != null) || destinationAnchor(null);
+  }
+
+  function sortPicks(list, sortKey, origin) {
+    const copy = list.slice();
+    if (sortKey === "name") {
+      return copy.sort((a, b) => a.name.localeCompare(b.name, "en-GB"));
+    }
+    if (sortKey === "near" && origin) {
+      return copy.sort((a, b) => {
+        // Anything without coordinates sinks rather than pretending to be
+        // nearby - it genuinely isn't known.
+        if (a.lat == null) return 1;
+        if (b.lat == null) return -1;
+        return (
+          haversineKm(origin.lat, origin.lon, a.lat, a.lon) -
+          haversineKm(origin.lat, origin.lon, b.lat, b.lon)
+        );
+      });
+    }
+    if (sortKey === "day") {
+      const plan = loadPlan();
+      const dayIndex = {};
+      plan.days.forEach((d, i) => {
+        (plan.items[d.id] || []).forEach((it) => {
+          if (dayIndex[it.pickId] === undefined) dayIndex[it.pickId] = i;
+        });
+      });
+      // Scheduled things first, in the order you'll do them; everything not
+      // yet placed collects at the bottom, which is where the work is.
+      return copy.sort((a, b) => {
+        const ai = dayIndex[a.id] === undefined ? 999 : dayIndex[a.id];
+        const bi = dayIndex[b.id] === undefined ? 999 : dayIndex[b.id];
+        return ai - bi || a.name.localeCompare(b.name, "en-GB");
+      });
+    }
+    return copy.sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0));
+  }
+
   function renderPlaces() {
     renderPlaceTab({
       kind: "place",
@@ -2446,7 +2518,7 @@
       searchHint: "Opens Google Maps. To keep a place, add it in Picks — it'll appear here.",
       heading: "Places to go",
       empty: "No places saved on this board yet. Add one in Picks — anything that isn't a café or restaurant lands here.",
-      filter: placeFilter,
+      getFilter: () => placeFilter,
       setFilter: (v) => (placeFilter = v),
       guide: () => renderGuidePlaces(),
       guideLabel: "Edinburgh guide",
@@ -2462,7 +2534,7 @@
       searchHint: 'Opens Google Maps already searching "restaurants near" whatever you type.',
       heading: "Places to eat",
       empty: "No food places saved on this board yet. Add a café or restaurant in Picks and it'll appear here.",
-      filter: eatsFilter,
+      getFilter: () => eatsFilter,
       setFilter: (v) => (eatsFilter = v),
       guide: () => renderGuideEats(),
       guideLabel: "Edinburgh eats guide",
@@ -2489,7 +2561,10 @@
       const f = p.city || "Unsorted";
       if (!folders.includes(f)) folders.push(f);
     });
-    const active = folders.includes(cfg.filter) ? cfg.filter : "All";
+    // Read through a getter, never a snapshot: this function re-renders
+    // itself, and a captured value would be one tap out of date forever.
+    const current = cfg.getFilter();
+    const active = folders.includes(current) ? current : "All";
 
     if (folders.length > 2) {
       html += `<div class="filter-row">`;
@@ -2499,18 +2574,35 @@
       html += `</div>`;
     }
 
-    const list = mine.filter((p) => active === "All" || (p.city || "Unsorted") === active);
+    const filtered = mine.filter((p) => active === "All" || (p.city || "Unsorted") === active);
+    const sortKey = loadSort();
+    const origin = sortKey === "near" ? sortOrigin() : null;
+    const list = sortPicks(filtered, sortKey, origin);
 
     html += `<div class="section-label">${esc(cfg.heading)}${
       mine.length ? ` · ${list.length}` : ""
     }</div>`;
+
+    // Sorting only earns its space once there is enough to sort.
+    if (list.length > 2) {
+      html += `<div class="sort-row">${SORTS.map(
+        (s) =>
+          `<button class="map-chip${s.key === sortKey ? " on" : ""}" data-sort="${s.key}">${esc(
+            s.label
+          )}</button>`
+      ).join("")}</div>`;
+    }
 
     if (!list.length) {
       html += `<div class="card"><p class="pick-status">${esc(cfg.empty)}</p>
         <button class="modal-btn modal-btn-primary" data-goto-picks="1" style="margin-top:12px;">＋ Add a place</button></div>`;
     } else {
       list.forEach((p) => {
-        html += renderPickRow(p);
+        const away =
+          origin && p.lat != null && p.id !== origin.id
+            ? formatDistance(haversineKm(origin.lat, origin.lon, p.lat, p.lon))
+            : null;
+        html += renderPickRow(p, away);
       });
       html += `<button class="modal-btn" data-goto-picks="1" style="width:100%;margin-top:12px;">＋ Add another</button>`;
     }
@@ -2535,6 +2627,22 @@
       btn.addEventListener("click", () => showView("picks"))
     );
 
+    view.querySelectorAll("[data-sort]").forEach((btn) =>
+      btn.addEventListener("click", () => {
+        saveSort(btn.getAttribute("data-sort"));
+        renderPlaceTab(cfg);
+      })
+    );
+
+    // Guide entries open the same sheet a search result does, so everything
+    // on this screen behaves the same way.
+    view.querySelectorAll("[data-preview-guide]").forEach((btn) =>
+      btn.addEventListener("click", () => {
+        const [source, index] = btn.getAttribute("data-preview-guide").split("|");
+        openGuidePreview(source, Number(index));
+      })
+    );
+
     view.querySelectorAll("[data-open-pick]").forEach((row) =>
       row.addEventListener("click", () => openPickDetail(row.getAttribute("data-open-pick")))
     );
@@ -2543,70 +2651,63 @@
     wireSearchBar(cfg.searchFormId, cfg.searchInputId, cfg.searchTransform);
   }
 
+  // A guide entry rendered the same way a saved place is: tappable body that
+  // opens the full details, one control on the right. Previously these were
+  // large cards where only the ♥ responded to a tap, sitting directly below
+  // rows that opened a sheet - two behaviours, no way to tell them apart.
+  function renderGuideRow(item, source, index) {
+    const picked = isPicked(source, item.name);
+    const meta = [item.category || item.meal, item.area, item.price].filter(Boolean).join(" · ");
+    return `
+      <div class="guide-row">
+        <button class="guide-row-main" data-preview-guide="${source}|${index}">
+          <div class="pick-row-name">${esc(item.name)}</div>
+          ${meta ? `<div class="pick-row-meta">${esc(meta)}</div>` : ""}
+          <div class="pick-row-badges">
+            <span class="row-badge">${esc(item.city)}</span>
+            ${picked ? `<span class="row-badge day">saved</span>` : ""}
+          </div>
+          <div class="search-result-more">Details ›</div>
+        </button>
+        <button class="pick-toggle${picked ? " picked" : ""}" data-toggle-pick="${source}" data-name="${esc(
+      item.name
+    )}" aria-label="${picked ? "Remove from your places" : "Save " + esc(item.name)}">${picked ? "♥" : "♡"}</button>
+      </div>
+    `;
+  }
+
+  // Opens a bundled guide entry in the same sheet a search result uses, so
+  // the whole screen behaves one way. Saving goes through togglePick with the
+  // guide's own source, not quickAdd - otherwise the sheet would save it as
+  // "custom:Name" while the ♥ looks for "places:Name", and you would end up
+  // holding the same place twice with neither control aware of the other.
+  function openGuidePreview(source, index) {
+    const item = (source === "places" ? PLACES : EATS)[index];
+    if (!item) return;
+    const candidate = {
+      name: item.name,
+      displayName: [item.area, item.city].filter(Boolean).join(", "),
+      city: item.city,
+      category: item.category || item.meal || "",
+      description: item.notes || "",
+      website: item.website || "",
+      price: item.price || null,
+      mapsQuery: item.mapsQuery || item.name,
+      guideSource: source,
+    };
+    // Slots into the same list-and-index machinery the search results use.
+    openCandidatePreview(0, [candidate]);
+  }
+
   function renderGuidePlaces() {
-    let html = "";
-    PLACES.forEach((p) => {
-      const mapsUrl = mapsUrlFor(p.mapsQuery);
-      const picked = isPicked("places", p.name);
-      html += `
-        <div class="card place-card">
-          <div style="flex:1;">
-            <div class="place-name">${esc(p.name)}</div>
-            <div class="place-meta">
-              <span class="pill" style="background:${cityColor(p.city)}">${esc(p.city)}</span>${esc(p.category)}
-            </div>
-            <div class="place-notes">${esc(p.notes)}</div>
-            <div class="place-links">
-              ${p.website ? `<a href="${esc(p.website)}" target="_blank" rel="noopener">🌐 Website</a>` : ""}
-              ${mapsUrl ? `<a href="${mapsUrl}" target="_blank" rel="noopener">📍 Map</a>` : ""}
-            </div>
-          </div>
-          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px;">
-            <button class="pick-toggle${picked ? " picked" : ""}" data-toggle-pick="places" data-name="${esc(p.name)}" aria-label="Bookmark">${picked ? "♥" : "♡"}</button>
-            <div class="place-price">${esc(p.price)}</div>
-          </div>
-        </div>
-      `;
-    });
-    return html;
+    return PLACES.map((p, i) => renderGuideRow(p, "places", i)).join("");
   }
 
   function renderGuideEats() {
-    let html = `
-      <div class="card">
-        <p>Independent, well-reviewed picks near each stop — not fast-food chains, not fine-dining prices.
-        £ = casual/cheap, ££ = mid-range, £££ = a step up but still no white tablecloths.</p>
-      </div>
-    `;
-    EATS.forEach((e) => {
-      const mapsUrl = mapsUrlFor(e.mapsQuery);
-      const picked = isPicked("eats", e.name);
-      html += `
-        <div class="card place-card">
-          <div style="flex:1;">
-            <div class="place-name">${esc(e.name)}</div>
-            <div class="place-meta">
-              <span class="pill" style="background:${cityColor(e.city)}">${esc(e.city)}</span>${esc(e.area)} · ${esc(e.meal)}
-            </div>
-            ${
-              e.nearAttraction
-                ? `<div class="place-distance">📍 ${esc(e.distance)} — near ${esc(e.nearAttraction)}</div>`
-                : ""
-            }
-            <div class="place-notes">${esc(e.notes)}</div>
-            <div class="place-links">
-              ${e.website ? `<a href="${esc(e.website)}" target="_blank" rel="noopener">🌐 Website</a>` : ""}
-              ${mapsUrl ? `<a href="${mapsUrl}" target="_blank" rel="noopener">📍 Map</a>` : ""}
-            </div>
-          </div>
-          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px;">
-            <button class="pick-toggle${picked ? " picked" : ""}" data-toggle-pick="eats" data-name="${esc(e.name)}" aria-label="Bookmark">${picked ? "♥" : "♡"}</button>
-            <div class="place-price">${esc(e.price)}</div>
-          </div>
-        </div>
-      `;
-    });
-    return html;
+    return (
+      `<p class="search-hint">Independent, well-reviewed picks near each stop. £ casual · ££ mid-range · £££ a step up.</p>` +
+      EATS.map((e, i) => renderGuideRow(e, "eats", i)).join("")
+    );
   }
 
   // ---------- Budget ----------
@@ -3904,13 +4005,15 @@
   // nothing to scan and no hierarchy. The row below carries only what you
   // need to recognise and triage it; everything else lives one tap away in
   // openPickDetail(), which also means only one map exists at a time.
-  function renderPickRow(p) {
+  function renderPickRow(p, away) {
     const plan = loadPlan();
     const days = plan.days
       .filter((d) => (plan.items[d.id] || []).some((it) => it.pickId === p.id))
       .map((d) => shortDayLabel(d.label));
 
-    const meta = [p.category, p.rating != null ? `⭐ ${p.rating}` : null].filter(Boolean).join(" · ");
+    const meta = [p.category, away, p.rating != null ? `⭐ ${p.rating}` : null]
+      .filter(Boolean)
+      .join(" · ");
 
     return `
       <button class="pick-row" data-open-pick="${esc(p.id)}">
@@ -4438,7 +4541,9 @@
   function renderCandidatePreview() {
     const r = previewList ? previewList[previewIndex] : null;
     if (!r) return;
-    const already = loadPicks().some((p) => p.id === pickId("custom", r.name));
+    const already = loadPicks().some(
+      (p) => p.id === pickId(r.guideSource || "custom", r.name)
+    );
     const mapsUrl = r.googleUrl || mapsUrlFor(r.displayName || r.name);
     const facts = [
       r.address || r.displayName ? `📍 ${esc(r.address || r.displayName)}` : "",
@@ -4524,12 +4629,12 @@
     const addBtn = document.getElementById("previewAdd");
     if (addBtn && !already) {
       addBtn.addEventListener("click", () => {
-        quickAdd(r);
+        if (r.guideSource) togglePick(r.guideSource, r);
+        else quickAdd(r);
         previewIndex = null;
         closePlaceModal();
         // The list behind needs to show it as saved now.
         if (searchOverlay.classList.contains("open")) renderSearchOverlay();
-        else if (view.dataset.activeTab === "picks") renderPicks();
         else if (view.dataset.activeTab) showView(view.dataset.activeTab);
       });
     }

@@ -555,6 +555,44 @@ body {
   width: 100%;
 }
 
+/* ---- Guide entries, shaped like everything else ----
+   These used to be tall cards whose body did nothing, sitting under rows that
+   opened a sheet. Same row, same chevron, same behaviour - with the ♥ kept
+   because saving one is still a single tap. */
+.guide-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 12px 14px;
+  margin-bottom: 8px;
+}
+.guide-row-main {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: none;
+  padding: 0;
+  margin: 0;
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+  text-align: left;
+}
+.guide-row-main:active { opacity: 0.6; }
+.guide-row .pick-toggle { flex-shrink: 0; }
+
+.sort-row {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 10px;
+  scrollbar-width: none;
+}
+.sort-row::-webkit-scrollbar { display: none; }
+
 /* ---- Suggestions while you type ----
    Sits directly under the field it belongs to, as a list rather than a
    floating layer: on a phone there is nothing to float over, and a popup
