@@ -1101,6 +1101,31 @@ body {
 
 .map-canvas { flex: 1; min-height: 0; background: var(--surface-2); }
 
+/* Pointing at a place: the pin is fixed to the centre of the screen and the
+   map moves under it. Steadier than tapping - your finger isn't covering the
+   thing you're aiming at. */
+.map-pick-canvas { position: relative; }
+.map-crosshair {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -100%);
+  z-index: 500; /* over Leaflet's panes, under its controls */
+  font-size: 34px;
+  line-height: 1;
+  pointer-events: none;
+  filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.4));
+}
+.map-pick-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  text-align: center;
+  margin-bottom: 10px;
+  min-height: 20px;
+}
+.search-chip-wide { width: 100%; text-align: center; }
+
 .map-foot {
   flex-shrink: 0;
   padding: 12px 14px calc(12px + var(--safe-bottom));

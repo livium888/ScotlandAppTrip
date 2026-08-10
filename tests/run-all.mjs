@@ -32,6 +32,7 @@ const SUITES = [
   "test_prompts.mjs",
   "test_search.mjs",
   "test_weather.mjs",
+  "test_mappick.mjs",
 ];
 
 const MIME = {

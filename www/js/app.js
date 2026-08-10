@@ -1727,9 +1727,10 @@
         html += `<div class="section-label">Days</div><div class="card">`;
         plan.days.forEach((d) => {
           const count = (plan.items[d.id] || []).length;
-          const f = forecastForDay(d.label, dayWeatherAnchor(d.id), () => {
+          const redrawOverview = () => {
             if (view.dataset.activeTab === "overview") renderOverview();
-          });
+          };
+          const f = forecastForDay(d.label, dayWeatherAnchor(d.id, redrawOverview), redrawOverview);
           const look = f && f.day ? weatherLook(f.day.code == null ? 3 : f.day.code) : null;
           html += `
             <button class="overview-day" data-goto="itinerary">
@@ -2085,9 +2086,10 @@
       const items = planItems(plan, day.id);
       // Quiet here: on a list of days, "forecast lands nearer the time"
       // repeated six times is noise, and a rain nudge per day is nagging.
-      const forecast = forecastForDay(day.label, dayWeatherAnchor(day.id), () => {
+      const redrawItinerary = () => {
         if (view.dataset.activeTab === "itinerary") renderItinerary();
-      });
+      };
+      const forecast = forecastForDay(day.label, dayWeatherAnchor(day.id, redrawItinerary), redrawItinerary);
       html += `
         <div class="card day-card">
           <div class="plan-day-head">
@@ -2306,7 +2308,17 @@
 
   function renderSuggestedItinerary() {
     let html = "";
+    const redraw = () => {
+      if (view.dataset.activeTab === "itinerary") renderItinerary();
+    };
     DAYS.forEach((d, i) => {
+      // The bundled days name their own city, which is a better anchor than
+      // anything saved - Day 4 is in Glasgow whatever is bookmarked.
+      const city = CITY_COORDS[d.city];
+      const anchor = city
+        ? { name: d.city, lat: city.lat, lon: city.lon }
+        : dayWeatherAnchor(`d${i}`, redraw);
+      const forecast = forecastForDay(`${d.day} · ${d.date}`, anchor, redraw);
       html += `
         <div class="card day-card" data-idx="${i}">
           <div class="day-head" data-toggle="${i}">
@@ -2317,6 +2329,7 @@
             </div>
             <span class="chevron">▶</span>
           </div>
+          ${weatherLine(forecast, { quiet: true })}
           <div class="day-summary">${esc(d.summary)}</div>
           <div class="day-items">
             ${d.items
@@ -3292,6 +3305,7 @@
       </form>
       <div class="explore-centre-row">
         <button class="move-chip" id="exploreGpsBtn">📍 Where I am</button>
+        <button class="move-chip" id="exploreMapBtn">🗺 Point on a map</button>
         ${pickOptions ? `<select id="exploreFromPick"><option value="">From a saved place…</option>${pickOptions}</select>` : ""}
       </div>
     `;
@@ -3415,6 +3429,22 @@
     }
     const gps = document.getElementById("exploreGpsBtn");
     if (gps) gps.addEventListener("click", setExploreCentreFromGps);
+
+    const mapPick = document.getElementById("exploreMapBtn");
+    if (mapPick) {
+      mapPick.addEventListener("click", () =>
+        openMapPicker(
+          (spot) => {
+            explore.centre = { name: spot.name, lat: spot.lat, lon: spot.lon };
+            explore.error = "";
+            explore.open = true;
+            if (explore.category) runExplore();
+            else renderPicks();
+          },
+          { title: "Search around here", centre: explore.centre }
+        )
+      );
+    }
 
     const fromPick = document.getElementById("exploreFromPick");
     if (fromPick) {
@@ -3904,6 +3934,13 @@
         (r) => `<button class="search-chip" data-recent="${esc(r)}">${esc(r)}</button>`
       ).join("");
       body += `</div>`;
+
+      // Not everything has a name you'd type. Somewhere you drove past, a
+      // stretch of coast, the far side of a loch - point at it instead.
+      body += `
+        <div class="section-label">No name for it?</div>
+        <button class="search-chip search-chip-wide" id="searchMapPick">🗺 Point at it on a map</button>
+      `;
       body += `
         <div class="card search-tip">
           <p class="settings-hint">Describe what you want in your own words — "somewhere quiet for lunch
@@ -4202,6 +4239,27 @@
     searchOverlay.querySelectorAll("[data-recent]").forEach((btn) => {
       btn.addEventListener("click", () => runSearch(btn.getAttribute("data-recent")));
     });
+
+    // Pointing at a spot searches for what's there, by name of the area -
+    // which is what you'd have typed if you'd known what it was called.
+    const mapPick = document.getElementById("searchMapPick");
+    if (mapPick) {
+      mapPick.addEventListener("click", () => {
+        closeSearchOverlay();
+        openMapPicker(
+          (spot) => {
+            explore.open = true;
+            explore.centre = { name: spot.name, lat: spot.lat, lon: spot.lon };
+            explore.error = "";
+            showView("picks");
+            // Straight into the category picker: having pointed at a place,
+            // the only question left is what you're after there.
+            openCategoryPicker();
+          },
+          { title: "Where do you want to look?" }
+        );
+      });
+    }
 
     searchOverlay.querySelectorAll("[data-search-kind]").forEach((btn) => {
       btn.addEventListener("click", () => {
@@ -4706,6 +4764,142 @@
     });
   }
 
+  // ---------- Choosing a place by pointing at it ----------
+  // Every other way in needs a name: type one, use a saved one, or be
+  // standing in it. But "the bit of coast north of the bridge" and "that
+  // village we drove through" have no name you'd type - and on a trip
+  // that's most of the map. Drag, drop the pin, done. The name is looked up
+  // afterwards so the result still reads like a place rather than a
+  // coordinate.
+  let mapPickTarget = null; // callback for the chosen point
+
+  function openMapPicker(onPick, opts) {
+    const options = opts || {};
+    mapPickTarget = onPick;
+
+    const picks = loadPicks().filter((p) => p.lat != null);
+    const start =
+      options.centre ||
+      (picks.length ? { lat: picks[0].lat, lon: picks[0].lon } : null) ||
+      destinationAnchor(null) ||
+      { lat: 55.9533, lon: -3.1883 };
+
+    mapOverlay.innerHTML = `
+      <div class="map-head">
+        <button class="map-close" data-mappick-close="1" aria-label="Cancel">✕</button>
+        <div class="map-head-text">
+          <div class="map-title">${esc(options.title || "Point at a place")}</div>
+          <div class="map-sub">Drag the map — the pin stays in the middle</div>
+        </div>
+        <button class="map-locate" id="mapPickLocate" aria-label="Find me">◎</button>
+      </div>
+      <div class="map-canvas map-pick-canvas" id="mapPickCanvas">
+        <div class="map-crosshair" aria-hidden="true">📍</div>
+      </div>
+      <div class="map-foot">
+        <div class="map-pick-label" id="mapPickLabel">Move the map to choose a spot</div>
+        <button class="map-open-btn" id="mapPickConfirm">Use this spot</button>
+      </div>
+    `;
+    mapOverlay.classList.add("open");
+
+    mapOverlay.querySelectorAll("[data-mappick-close]").forEach((b) =>
+      b.addEventListener("click", () => {
+        mapPickTarget = null;
+        closeAllMap();
+      })
+    );
+
+    if (allMap) {
+      allMap.remove();
+      allMap = null;
+    }
+    const map = L.map(document.getElementById("mapPickCanvas"), {
+      scrollWheelZoom: true,
+      attributionControl: false,
+    });
+    allMap = map; // so closeAllMap tears it down
+    addTileLayer(map);
+    map.setView([start.lat, start.lon], options.zoom || 13);
+    requestAnimationFrame(() => map.invalidateSize());
+
+    // The name lags behind the map on purpose: reverse geocoding on every
+    // frame of a drag would hammer a free service for answers nobody reads.
+    let nameTimer = null;
+    const labelEl = () => document.getElementById("mapPickLabel");
+    let currentName = "";
+
+    const refreshName = () => {
+      const c = map.getCenter();
+      const el = labelEl();
+      if (el) el.textContent = "Looking up where that is…";
+      clearTimeout(nameTimer);
+      nameTimer = setTimeout(async () => {
+        const name = await reverseGeocode(c.lat, c.lng);
+        currentName = name || "";
+        const e2 = labelEl();
+        if (e2) {
+          e2.textContent = name || `${c.lat.toFixed(4)}, ${c.lng.toFixed(4)}`;
+        }
+      }, 550);
+    };
+
+    map.on("moveend", refreshName);
+    refreshName();
+
+    const locate = document.getElementById("mapPickLocate");
+    if (locate) {
+      locate.addEventListener("click", async () => {
+        locate.disabled = true;
+        try {
+          const pos = await currentPosition();
+          map.setView([pos.lat, pos.lon], 15);
+        } catch (e) {
+          toast((e && e.message) || "Couldn't get your location");
+        } finally {
+          locate.disabled = false;
+        }
+      });
+    }
+
+    document.getElementById("mapPickConfirm").addEventListener("click", () => {
+      const c = map.getCenter();
+      const cb = mapPickTarget;
+      mapPickTarget = null;
+      closeAllMap();
+      if (cb) {
+        cb({
+          lat: c.lat,
+          lon: c.lng,
+          name: currentName || `${c.lat.toFixed(3)}, ${c.lng.toFixed(3)}`,
+        });
+      }
+    });
+  }
+
+  // Turns a point back into a name. Zoom 14 asks for the neighbourhood or
+  // village rather than a house number, which is the right grain for "search
+  // around here".
+  async function reverseGeocode(lat, lon) {
+    try {
+      const res = await fetch(
+        `https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=14&lat=${lat}&lon=${lon}`,
+        { headers: { Accept: "application/json" } }
+      );
+      if (!res.ok) return null;
+      const data = await res.json();
+      const a = data.address || {};
+      const parts = [
+        a.neighbourhood || a.suburb || a.village || a.town || a.hamlet,
+        a.city || a.county,
+      ].filter(Boolean);
+      const unique = parts.filter((p, i) => parts.indexOf(p) === i);
+      return unique.length ? unique.join(", ") : data.name || null;
+    } catch (e) {
+      return null;
+    }
+  }
+
   // Opening the map from Today or the Itinerary almost always means "these
   // ones", not "all 40 things I've ever saved" - so it starts on the day in
   // view. The All chip is right there when that guess is wrong.
@@ -5051,13 +5245,53 @@
 
   // The point on the map a day's weather is about: the first scheduled place
   // with coordinates, falling back to anything else saved on the board.
-  function dayWeatherAnchor(dayId) {
+  // Where the board is, for when nothing saved has coordinates yet. Geocoded
+  // once and remembered - "Edinburgh" does not move.
+  const DEST_COORDS_KEY = "destination-coords-v1";
+  const destLookups = {};
+
+  function destinationAnchor(onUpdate) {
+    const board = activeBoard();
+    const dest = (board.destination || loadTripSettings().destination || "").trim();
+    if (!dest) return null;
+
+    const cache = readJson(DEST_COORDS_KEY, {}) || {};
+    const hit = cache[dest.toLowerCase()];
+    if (hit) return { name: dest, lat: hit.lat, lon: hit.lon };
+
+    if (!destLookups[dest]) {
+      destLookups[dest] = geocodePlace(dest, null)
+        .then((geo) => {
+          if (!geo) return;
+          const c = readJson(DEST_COORDS_KEY, {}) || {};
+          c[dest.toLowerCase()] = { lat: geo.lat, lon: geo.lon };
+          localStorage.setItem(DEST_COORDS_KEY, JSON.stringify(c));
+          if (onUpdate) onUpdate();
+        })
+        .catch(() => {})
+        .finally(() => {
+          delete destLookups[dest];
+        });
+    }
+    return null;
+  }
+
+  // The point a day's weather is about. This used to stop at the saved
+  // places, so a board with nothing saved - or nothing saved *with
+  // coordinates* - showed no weather at all and gave no clue why. "What's the
+  // weather where I'm going" shouldn't depend on having already bookmarked a
+  // café there, so it falls back to the board's own destination.
+  function dayWeatherAnchor(dayId, onUpdate) {
     const plan = loadPlan();
     const picks = loadPicks();
     const byId = {};
     picks.forEach((p) => (byId[p.id] = p));
     const scheduled = (plan.items[dayId] || []).map((it) => byId[it.pickId]).filter(Boolean);
-    return scheduled.find((p) => p.lat != null) || picks.find((p) => p.lat != null) || null;
+    return (
+      scheduled.find((p) => p.lat != null) ||
+      picks.find((p) => p.lat != null) ||
+      destinationAnchor(onUpdate)
+    );
   }
 
   function forecastForDay(dayLabel, anchor, onUpdate) {
@@ -5170,13 +5404,10 @@
 
     // Weather belongs at the top of Today: it's the one thing that changes a
     // plan before you've left the flat.
-    const forecast = forecastForDay(
-      current.day.label,
-      dayWeatherAnchor(current.day.id),
-      () => {
-        if (view.dataset.activeTab === "today") renderToday();
-      }
-    );
+    const redrawToday = () => {
+      if (view.dataset.activeTab === "today") renderToday();
+    };
+    const forecast = forecastForDay(current.day.label, dayWeatherAnchor(current.day.id, redrawToday), redrawToday);
 
     let html = `
       <div class="today-head">

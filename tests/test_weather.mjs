@@ -165,6 +165,49 @@ await page.waitForTimeout(800);
 check('no coordinates means no weather, and no crash', await page.evaluate(() =>
   !document.querySelector('.weather-line') && !!document.getElementById('view').textContent.trim()));
 
+// --- Weather must not depend on having saved anything ---
+// This is the case that was actually broken: the anchor was picked from the
+// saved places, so a board with nothing saved showed no weather at all and
+// gave no clue why. A board knows where it is; that's enough.
+await page.route(/nominatim\.openstreetmap\.org/, (route) =>
+  route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([{
+    lat: '55.9533', lon: '-3.1883', display_name: 'Edinburgh, Scotland', type: 'city',
+    namedetails: { name: 'Edinburgh' }, address: { city: 'Edinburgh' }, extratags: {} }]) }));
+weatherDown = false;
+
+await page.evaluate(({ l1 }) => {
+  localStorage.clear();
+  localStorage.setItem('boards-v1', JSON.stringify({
+    activeId: 'b-empty',
+    boards: [{ id: 'b-empty', name: 'Nothing saved yet', destination: 'Edinburgh', dated: true, hasGuide: false, createdAt: 1 }],
+  }));
+  localStorage.setItem('board:b-empty:picks', JSON.stringify([]));
+  localStorage.setItem('board:b-empty:plan', JSON.stringify({
+    days: [{ id: 'd1', label: l1 }], items: { d1: [] },
+  }));
+}, { l1: label(tomorrow, 1) });
+await page.reload({ waitUntil: 'load' });
+await page.waitForTimeout(2500);
+
+const emptyBoard = await page.evaluate(() => document.getElementById('view').textContent);
+check('weather shows with nothing saved at all', /Rain|14°/.test(emptyBoard), emptyBoard.slice(0, 200));
+check('the destination was geocoded once and kept', await page.evaluate(() =>
+  /edinburgh/.test((localStorage.getItem('destination-coords-v1') || '').toLowerCase())));
+
+// A board with no destination and nothing saved genuinely has no location -
+// that must be silent, not broken.
+await page.evaluate(() => {
+  const s = JSON.parse(localStorage.getItem('boards-v1'));
+  s.boards[0].destination = '';
+  localStorage.setItem('boards-v1', JSON.stringify(s));
+  localStorage.removeItem('destination-coords-v1');
+  localStorage.setItem('trip-settings-v1', JSON.stringify({ destination: '' }));
+});
+await page.reload({ waitUntil: 'load' });
+await page.waitForTimeout(1200);
+check('no destination means no weather, and no crash', await page.evaluate(() =>
+  !!document.getElementById('view').textContent.trim()));
+
 await browser.close();
 console.log(failures === 0 ? '\nALL TESTS PASSED' : `\n${failures} FAILED`);
 process.exit(failures ? 1 : 0);
