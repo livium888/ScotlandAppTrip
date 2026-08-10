@@ -35,6 +35,7 @@ const SUITES = [
   "test_mappick.mjs",
   "test_suggest.mjs",
   "test_back.mjs",
+  "test_range.mjs",
 ];
 
 const MIME = {

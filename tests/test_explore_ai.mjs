@@ -97,7 +97,7 @@ await page.waitForTimeout(300);
 
 check('Gemini was asked for the category', /caf[eé]s/i.test(promptSeen), promptSeen.slice(0, 80));
 check('traveller context included', /4-year-old/.test(promptSeen));
-check('radius expressed in the prompt', /1\.5 km|1500 m/.test(promptSeen), promptSeen.slice(0, 140));
+check('radius expressed in the prompt, in miles', /\b\d+ miles\b|\byards\b/.test(promptSeen), promptSeen.slice(0, 140));
 check('Overpass not used while Gemini works', overpassCalls === 0, String(overpassCalls));
 
 const text = await page.evaluate(() => document.getElementById('view').textContent);
@@ -106,7 +106,7 @@ check('wrongly-placed suggestion filtered out', !/Wrong City Cafe/.test(text));
 check('AI badge shown in Explore', await page.evaluate(() => !!document.querySelector('.explore-result .ai-badge')));
 check('citation link shown', await page.evaluate(() =>
   !!Array.from(document.querySelectorAll('.explore-result a')).find((a) => a.href.includes('lovecrumbs'))));
-check('distance computed from the centre', /\d+\s*(m|km) away/.test(text), text.slice(0, 300));
+check('distance computed from the centre, in miles', /\d+(\.\d+)?\s*(yd|mi) away/.test(text), text.slice(0, 300));
 
 // --- Saving one keeps the AI description and OSM position ---
 await page.evaluate(() => document.querySelector('[data-explore-add]').click());

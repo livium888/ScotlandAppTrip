@@ -123,7 +123,7 @@ await page.waitForFunction(() => !/Looking for/.test(document.getElementById('vi
 check('the reworded question is what gets asked', prompts.some((p) => /poke bowls and salad bars only/.test(p)), (prompts[0] || '').slice(0, 200));
 check('the old wording is gone', !prompts.some((p) => /grain bowls/.test(p)));
 check('the formatting rules are still added by the app', prompts.every((p) => /ONLY a JSON array/.test(p)));
-check('and the radius still is too', prompts.some((p) => /1\.5 km|1500 m/.test(p)), (prompts[0] || '').slice(0, 200));
+check('and the radius still is too', prompts.some((p) => /\b\d+ miles\b/.test(p)), (prompts[0] || '').slice(0, 200));
 
 check('the rewrite is stored', await page.evaluate(() =>
   /poke bowls/.test(JSON.parse(localStorage.getItem('trip-settings-v1')).catPrompts.healthy)));

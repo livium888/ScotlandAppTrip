@@ -2054,11 +2054,56 @@
   const WALK_KMH = 3.5; // slower than an adult's pace, this is with a 4-year-old
   const DETOUR_FACTOR = 1.3; // streets aren't straight lines
 
+  // ---------- Distance ----------
+  // This is a UK trip planned by someone who thinks in miles, and the app was
+  // quoting kilometres at them. Every distance goes through here so there is
+  // one place that decides, rather than six sites each formatting their own.
+  const MILES_PER_KM = 0.621371;
+
+  function toMiles(km) {
+    return km * MILES_PER_KM;
+  }
+
+  // Under about a quarter of a mile, a fraction is harder to picture than
+  // yards - "0.2 miles" versus "350 yards".
+  function formatDistance(km) {
+    const mi = toMiles(km);
+    if (mi < 0.25) return `${Math.round(mi * 1760 / 10) * 10} yd`;
+    if (mi < 10) return `${mi.toFixed(1)} mi`;
+    return `${Math.round(mi)} mi`;
+  }
+
+  function formatDuration(mins) {
+    if (mins < 60) return `${mins} min`;
+    const h = Math.floor(mins / 60);
+    const m = mins % 60;
+    return m ? `${h} h ${m} min` : `${h} h`;
+  }
+
+  // Beyond this, a leg is a drive. Two miles is about the furthest that
+  // reads as "we'll walk it" with a four-year-old who has already done a
+  // castle that morning.
+  const WALK_MAX_KM = 3.2;
+  // Deliberately conservative: a UK average across single carriageways,
+  // towns and the odd motorway stretch. Better to over-estimate a drive than
+  // to promise Stirling in forty minutes.
+  const DRIVE_KMH = 60;
+  const ROAD_FACTOR = 1.35; // roads wander more than streets do
+
+  // A leg between two stops, walked or driven depending on how far it is.
+  // The old version assumed walking at any distance, so two places forty
+  // miles apart came out as "🚶 690 min".
   function walkLeg(a, b) {
     if (!a || !b || a.lat == null || b.lat == null) return null;
-    const km = haversineKm(a.lat, a.lon, b.lat, b.lon) * DETOUR_FACTOR;
-    const mins = Math.round((km / WALK_KMH) * 60);
-    return { km, mins };
+    const straight = haversineKm(a.lat, a.lon, b.lat, b.lon);
+    const driving = straight * DETOUR_FACTOR > WALK_MAX_KM;
+    const km = straight * (driving ? ROAD_FACTOR : DETOUR_FACTOR);
+    const mins = Math.round((km / (driving ? DRIVE_KMH : WALK_KMH)) * 60);
+    return { km, mins, driving, icon: driving ? "🚗" : "🚶" };
+  }
+
+  function legLabel(leg) {
+    return `${leg.icon} ${formatDuration(leg.mins)} · ${formatDistance(leg.km)}`;
   }
 
   function renderMyPlan() {
@@ -2112,9 +2157,9 @@
         const prev = idx > 0 ? byId[items[idx - 1].pickId] : null;
         const leg = walkLeg(prev, p);
         if (leg && leg.mins >= 5) {
-          html += `<div class="plan-leg${leg.mins >= 25 ? " far" : ""}">🚶 ${leg.mins} min · ${
-            leg.km < 1 ? Math.round(leg.km * 1000) + " m" : leg.km.toFixed(1) + " km"
-          } from previous stop</div>`;
+          html += `<div class="plan-leg${leg.mins >= 25 ? " far" : ""}">${legLabel(
+            leg
+          )} from previous stop</div>`;
         }
 
         const mayBeClosed = closedOnDay(p.openingHours, dayCode);
@@ -2898,13 +2943,26 @@
   // This lets any point be the centre - a saved place, a typed location, or
   // where you actually are - which is what you want when deciding where to
   // base yourself for an afternoon.
+  // Half a mile up to fifty: walking distance at one end, a day's drive out
+  // and back at the other.
+  const RADIUS_OPTIONS_MI = [0.5, 1, 2, 5, 10, 25, 50];
+  const RADIUS_KEY = "explore-radius-v1";
+  const DEFAULT_RADIUS_M = Math.round((2 / MILES_PER_KM) * 1000);
+
+  // Remembered across sessions rather than reset to a default: someone
+  // roaming by car sets fifty miles once and means it.
+  function storedRadius() {
+    const v = Number(readJson(RADIUS_KEY, null));
+    return Number.isFinite(v) && v > 0 ? v : DEFAULT_RADIUS_M;
+  }
+
   let explore = {
     open: false,
     centre: null, // { name, lat, lon }
     category: "",
     customQuery: "", // used when category === "custom"
     showPrompt: false,
-    radius: 1500,
+    radius: storedRadius(),
     status: "idle", // idle | locating | loading | done | error
     results: [],
     error: "",
@@ -2995,6 +3053,21 @@
         };
       })
       .filter((s) => s.name && Number.isFinite(s.lat));
+  }
+
+  // Two different kinds of fact wearing the same star. A rating from the
+  // Places API is a measurement; one from a language model is a recollection.
+  // The "~" and the title text are the whole difference, and they matter when
+  // you are choosing where to take a tired four-year-old for lunch.
+  function ratingBadge(r) {
+    if (r.rating == null) return "";
+    const count = r.ratingCount ? ` (${r.ratingCount.toLocaleString("en-GB")})` : "";
+    if (r.ratingFromAi) {
+      return `<span class="candidate-rating ai-rating" title="Reported by AI search - worth checking, not a verified score">⭐ ~${esc(
+        String(r.rating)
+      )}${esc(count)}</span>`;
+    }
+    return `<span class="candidate-rating">⭐ ${esc(String(r.rating))}${esc(count)}</span>`;
   }
 
   function suggestionIcon(kind) {
@@ -3187,7 +3260,17 @@
   // names candidates and OSM is then used only to place them.
   async function exploreWithGemini(centre, category, radiusMetres, key) {
     const who = aiContextBlock();
-    const distance = radiusMetres >= 1000 ? `${radiusMetres / 1000} km` : `${radiusMetres} m`;
+    const miles = toMiles(radiusMetres / 1000);
+    const distance = miles < 1 ? `${Math.round(miles * 1760)} yards` : `${Math.round(miles)} miles`;
+    // Past walking range the trip itself is the cost, so the model is told
+    // that plainly. Without it a fifty-mile search returns the nearest café
+    // that happens to be forty miles away, rather than somewhere worth the
+    // drive - which is the entire point of searching that far out.
+    const byCar =
+      radiusMetres / 1000 > WALK_MAX_KM
+        ? `\n\nThis is a drive, not a walk. Suggest places worth the journey - somewhere ` +
+          `we would be glad we drove to - rather than the nearest thing that fits.`
+        : "";
     // The category's own phrasing is the question. It's written as a
     // description rather than a label ("healthy places to eat - salads,
     // grain bowls…") because that's what makes the model return the right
@@ -3197,7 +3280,7 @@
 
     const prompt =
       `List up to 6 real, currently-open places matching: ${looking}. ` +
-      `They must be within about ${distance} of ${centre.name}.${who}\n\n` +
+      `They must be within about ${distance} of ${centre.name}.${who}${byCar}\n\n` +
       `Use search to confirm each one exists and is still trading. ` +
       // Only the default when the user hasn't said what they want. Their own
       // words replace this rather than fighting it - someone who asks for
@@ -3205,9 +3288,17 @@
       (loadTripSettings().preferences.trim()
         ? ""
         : `Prefer independent, well-regarded places over chains. `) +
-      `Reply with ONLY a JSON array, ` +
-      `each item {"name": exact official name, "area": street or neighbourhood, ` +
-      `"why": one short sentence saying why it fits}. No other text.`;
+      `Reply with ONLY a JSON array, each item ` +
+      `{"name": exact official name, "area": street or neighbourhood, ` +
+      `"why": one short sentence saying why it fits, ` +
+      // Asked for, but never trusted: ratings move, and a model reporting one
+      // from memory is a guess wearing a number. Null is an acceptable answer
+      // and a better one than an invention, so it's asked for explicitly.
+      `"rating": the review score out of 5 if you can confirm one from search, otherwise null, ` +
+      `"ratingCount": roughly how many reviews that score is based on, otherwise null, ` +
+      `"price": one of "£", "££", "£££" if it costs money, otherwise null, ` +
+      `"booking": true only if booking ahead is normally needed, otherwise false}. ` +
+      `Do not invent a rating. No other text.`;
 
     const { text, sources } = await callGemini(key, prompt, { grounded: true });
     const parsed = extractJson(text);
@@ -3230,8 +3321,16 @@
         // city. Anything absurdly outside the requested radius is dropped
         // rather than shown as "nearby".
         const km = haversineKm(centre.lat, centre.lon, geo.lat, geo.lon);
-        if (km > (radiusMetres / 1000) * 3 + 2) continue;
+        // A quarter over the asked-for radius, plus a little slack for
+        // geocoding. The old 3x + 2km was a 150-mile net at a 50-mile
+        // radius, which caught nothing at all.
+        if (km > (radiusMetres / 1000) * 1.25 + 2) continue;
       }
+      // A rating is only carried through if it looks like a rating. It is
+      // also flagged as coming from the model rather than from a ratings API,
+      // because the two are not the same kind of fact and the app should not
+      // present them as though they were.
+      const rating = Number(item.rating);
       out.push({
         name: item.name,
         lat: geo ? geo.lat : null,
@@ -3240,6 +3339,11 @@
         openingHours: geo ? geo.openingHours : null,
         address: geo ? geo.address : item.area || "",
         description: item.why || "",
+        rating: Number.isFinite(rating) && rating > 0 && rating <= 5 ? Math.round(rating * 10) / 10 : null,
+        ratingCount: Number.isFinite(Number(item.ratingCount)) ? Number(item.ratingCount) : null,
+        ratingFromAi: true,
+        price: typeof item.price === "string" && /^£{1,3}$/.test(item.price) ? item.price : null,
+        booking: item.booking === true,
         aiSuggested: true,
         sources,
       });
@@ -3291,6 +3395,10 @@
           findCategory(explore.category),
           explore.radius
         );
+        if (explore.radius > OVERPASS_MAX_RADIUS_M && !explore.error) {
+          explore.error =
+            "Without the AI search this looks within 10 miles — OpenStreetMap can't answer a wider one.";
+        }
       }
       explore.status = "done";
     } catch (e) {
@@ -3514,14 +3622,12 @@
         <div class="explore-radius">
           <label for="exploreRadius">Within</label>
           <select id="exploreRadius">
-            ${[500, 1000, 1500, 3000, 5000]
-              .map(
-                (m) =>
-                  `<option value="${m}"${explore.radius === m ? " selected" : ""}>${
-                    m < 1000 ? m + " m" : m / 1000 + " km"
-                  }</option>`
-              )
-              .join("")}
+            ${RADIUS_OPTIONS_MI.map((mi) => {
+              const m = Math.round((mi / MILES_PER_KM) * 1000);
+              return `<option value="${m}"${explore.radius === m ? " selected" : ""}>${
+                mi < 1 ? "½ mile" : `${mi} miles`
+              }</option>`;
+            }).join("")}
           </select>
         </div>
       `;
@@ -3566,8 +3672,17 @@
           // finds nothing; they're still worth offering, just without a
           // distance.
           const km = r.lat != null ? haversineKm(explore.centre.lat, explore.centre.lon, r.lat, r.lon) : null;
-          const distance = km == null ? "" : km < 1 ? Math.round(km * 1000) + " m away" : km.toFixed(1) + " km away";
-          const meta = [distance, r.openingHours].filter(Boolean).join(" · ");
+          // Past a few miles the useful number is how long the drive is, not
+          // how far it is in a straight line.
+          const distance =
+            km == null
+              ? ""
+              : km * ROAD_FACTOR > WALK_MAX_KM
+              ? `🚗 ${formatDuration(Math.round((km * ROAD_FACTOR) / DRIVE_KMH * 60))} · ${formatDistance(km)}`
+              : `${formatDistance(km)} away`;
+          const meta = [distance, r.price, r.openingHours, r.booking ? "book ahead" : null]
+            .filter(Boolean)
+            .join(" · ");
           // Same bargain as the search results: tap to read it properly,
           // + to take it on trust.
           body += `
@@ -3576,7 +3691,7 @@
                 <button class="result-tap" data-preview-explore="${i}">
                   <div class="place-name">${esc(r.name)}${
                     r.aiSuggested ? ` <span class="ai-badge">AI</span>` : ""
-                  }</div>
+                  }${ratingBadge(r)}</div>
                   ${meta ? `<div class="place-notes">${esc(meta)}</div>` : ""}
                   ${r.description ? `<div class="place-notes">${esc(r.description)}</div>` : ""}
                   <div class="search-result-more">Details ›</div>
@@ -3670,6 +3785,7 @@
     if (radius) {
       radius.addEventListener("change", () => {
         explore.radius = Number(radius.value);
+        localStorage.setItem(RADIUS_KEY, JSON.stringify(explore.radius));
         if (explore.category) runExplore();
       });
     }
@@ -3729,8 +3845,14 @@
     "https://overpass.openstreetmap.ru/api/interpreter",
   ];
 
+  // Overpass is a free community service running unbounded geo queries. A
+  // 50-mile "all restaurants" is the kind of request that either times out or
+  // gets you blocked, so the fallback is capped and the cap is announced
+  // rather than silently returning a smaller area than was asked for.
+  const OVERPASS_MAX_RADIUS_M = Math.round((10 / MILES_PER_KM) * 1000); // 10 miles
+
   async function overpassNearby(lat, lon, cat, radius) {
-    radius = radius || 1200;
+    radius = Math.min(radius || 1200, OVERPASS_MAX_RADIUS_M);
     const filter = `["${cat.tag}"="${cat.value}"]`;
     const q = `[out:json][timeout:20];(node${filter}(around:${radius},${lat},${lon});way${filter}(around:${radius},${lat},${lon}););out center 25;`;
 
@@ -4215,7 +4337,7 @@
               <button class="result-tap" data-preview-candidate="${i}">
                 <div class="place-name">${esc(r.name)}${
                   r.aiSuggested ? ` <span class="ai-badge">AI</span>` : ""
-                }${r.rating != null ? ` <span class="candidate-rating">⭐ ${esc(String(r.rating))}</span>` : ""}</div>
+                }${ratingBadge(r)}</div>
                 <div class="place-notes">${esc(r.displayName || "")}</div>
                 ${r.description ? `<div class="place-notes">${esc(r.description)}</div>` : ""}
                 <div class="search-result-more">Details ›</div>
@@ -4322,7 +4444,13 @@
       r.address || r.displayName ? `📍 ${esc(r.address || r.displayName)}` : "",
       r.openingHours ? `🕒 ${esc(r.openingHours)}` : "",
       r.phone ? `📞 ${esc(r.phone)}` : "",
-      r.rating != null ? `⭐ ${esc(String(r.rating))}${r.ratingCount ? ` (${esc(String(r.ratingCount))})` : ""}` : "",
+      r.rating != null
+        ? `⭐ ${r.ratingFromAi ? "~" : ""}${esc(String(r.rating))}${
+            r.ratingCount ? ` from ${esc(r.ratingCount.toLocaleString("en-GB"))} reviews` : ""
+          }${r.ratingFromAi ? ' <span class="rating-caveat">— reported by AI search, worth a check</span>' : ""}`
+        : "",
+      r.price ? `💷 ${esc(r.price)}` : "",
+      r.booking ? "📅 Usually needs booking ahead" : "",
     ].filter(Boolean);
 
     placeModal.innerHTML = `
@@ -4751,9 +4879,19 @@
     const capped = pts.slice(0, MAPS_MAX_STOPS);
     const at = (p) => `${p.lat},${p.lon}`;
     const waypoints = capped.slice(1, -1).map(at).join("|");
+    // One long hop makes the whole day a drive - handing Google a walking
+    // route between towns is no use to anyone.
+    let mode = "walking";
+    for (let i = 1; i < capped.length; i++) {
+      const km = haversineKm(capped[i - 1].lat, capped[i - 1].lon, capped[i].lat, capped[i].lon);
+      if (km * ROAD_FACTOR > WALK_MAX_KM) {
+        mode = "driving";
+        break;
+      }
+    }
     return (
       `https://www.google.com/maps/dir/?api=1&origin=${at(capped[0])}` +
-      `&destination=${at(capped[capped.length - 1])}&travelmode=walking` +
+      `&destination=${at(capped[capped.length - 1])}&travelmode=${mode}` +
       (waypoints ? `&waypoints=${encodeURIComponent(waypoints)}` : "")
     );
   }
@@ -5618,9 +5756,7 @@
         const isNext = idx === 0;
 
         if (leg && leg.mins >= 5) {
-          html += `<div class="today-leg">🚶 ${leg.mins} min · ${
-            leg.km < 1 ? Math.round(leg.km * 1000) + " m" : leg.km.toFixed(1) + " km"
-          }</div>`;
+          html += `<div class="today-leg">${legLabel(leg)}</div>`;
         }
 
         html += `
@@ -5643,7 +5779,9 @@
             }
             ${p.note ? `<div class="today-note">📝 ${esc(p.note)}</div>` : ""}
             <div class="today-actions">
-              <button class="modal-btn modal-btn-primary" data-open-maps="${esc(directionsUrl(p))}">↗ Directions</button>
+              <button class="modal-btn modal-btn-primary" data-open-maps="${esc(
+                directionsUrl(p, prev)
+              )}">↗ ${leg && leg.driving ? "Drive there" : "Directions"}</button>
               <button class="modal-btn" data-open-pick="${esc(p.id)}">Details</button>
             </div>
           </div>
@@ -5684,13 +5822,25 @@
   // Walking directions to a place. Uses the exact Google place when the share
   // gave us its id, so navigation lands on the real venue rather than a
   // name-matched guess.
-  function directionsUrl(p) {
+  // Walking was hardcoded, which is right across Edinburgh and absurd to
+  // Stirling. When we know where the day starts, the mode follows the
+  // distance; with nothing to measure from, walking stays the safer guess
+  // for a city break.
+  function travelModeTo(p, from) {
+    if (!from || from.lat == null || p.lat == null) return "walking";
+    return haversineKm(from.lat, from.lon, p.lat, p.lon) * ROAD_FACTOR > WALK_MAX_KM
+      ? "driving"
+      : "walking";
+  }
+
+  function directionsUrl(p, from) {
+    const mode = travelModeTo(p, from);
     if (p.lat != null && p.lon != null) {
-      return `https://www.google.com/maps/dir/?api=1&destination=${p.lat},${p.lon}&travelmode=walking`;
+      return `https://www.google.com/maps/dir/?api=1&destination=${p.lat},${p.lon}&travelmode=${mode}`;
     }
     return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(
       pickMapsQuery(p)
-    )}&travelmode=walking`;
+    )}&travelmode=${mode}`;
   }
 
   // Subtitles are computed, not fixed strings: "Edinburgh · Stirling ·

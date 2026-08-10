@@ -137,7 +137,7 @@ const browser = await chromium.launch(LAUNCH_OPTS);
   await page.waitForTimeout(700);
   const resText = await page.evaluate(() => document.getElementById('view').textContent);
   check('results listed', /Castle Cafe/.test(resText), resText.slice(0, 250));
-  check('distance shown', /m away|km away/.test(resText), resText.slice(0, 250));
+  check('distance shown in miles, not kilometres', /yd away|mi away|🚗/.test(resText), resText.slice(0, 250));
 
   // add one
   await page.evaluate(() => document.querySelector('[data-explore-add]').click());
