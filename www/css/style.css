@@ -551,6 +551,64 @@ body {
   width: 100%;
 }
 
+/* ---- Weather ----
+   A quiet line, not a widget. It's context for a decision you're already
+   making, so it sits with the day rather than competing with it. */
+.weather-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  margin: 0 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-2);
+  font-size: 13.5px;
+  color: var(--text);
+}
+.weather-line.muted { color: var(--text-muted); font-size: 12.5px; }
+.weather-line.wet {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+.weather-bits { font-weight: 600; }
+.weather-line.muted .weather-bits { font-weight: 400; }
+.weather-stale { font-size: 11px; color: var(--text-muted); font-weight: 400; }
+.weather-suggest {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  margin: -4px 0 12px;
+  padding: 10px 14px;
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--accent);
+  font-family: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+.weather-suggest:active { opacity: 0.7; }
+
+/* Inside a day card the line is flush with the card's own padding. */
+.day-card .weather-line { margin: 0 0 10px; }
+
+.detail-weather { display: flex; align-items: center; gap: 10px; margin: 12px 0 0; }
+.detail-weather-day {
+  flex-shrink: 0;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.detail-weather .weather-line { flex: 1; margin: 0; }
+
+.overview-day-right { display: flex; align-items: center; gap: 12px; }
+.overview-day-weather { font-size: 12.5px; color: var(--text); }
+
 /* ---- Search, on its own screen ----
    The app's most-used action, given the whole display: keyboard on arrival,
    results with room to breathe, and no saved list being shoved down the page

@@ -1039,7 +1039,10 @@
     // dropped the boards you weren't looking at would be worse than none.
     // The legacy single-trip keys ride along so a backup taken now still
     // restores onto an older build.
-    const keys = [BOARDS_KEY, TRIP_KEY, STORAGE_KEY, LEGACY.picks, LEGACY.folders, LEGACY.plan];
+    // The weather cache is deliberately not in here: it's derived data with a
+    // shelf life of hours, and restoring last week's forecast onto a new
+    // phone would be worse than fetching it again.
+    const keys = [BOARDS_KEY, TRIP_KEY, STORAGE_KEY, RECENT_KEY, LEGACY.picks, LEGACY.folders, LEGACY.plan];
     loadBoards().boards.forEach((b) => {
       keys.push(
         boardKey(b.id, "picks"),
@@ -1724,10 +1727,23 @@
         html += `<div class="section-label">Days</div><div class="card">`;
         plan.days.forEach((d) => {
           const count = (plan.items[d.id] || []).length;
+          const f = forecastForDay(d.label, dayWeatherAnchor(d.id), () => {
+            if (view.dataset.activeTab === "overview") renderOverview();
+          });
+          const look = f && f.day ? weatherLook(f.day.code == null ? 3 : f.day.code) : null;
           html += `
             <button class="overview-day" data-goto="itinerary">
               <span class="overview-day-label">${esc(d.label)}</span>
-              <span class="overview-day-count">${count ? `${count} stop${count === 1 ? "" : "s"}` : "empty"}</span>
+              <span class="overview-day-right">
+                ${
+                  look
+                    ? `<span class="overview-day-weather">${look.icon} ${f.day.max != null ? f.day.max + "°" : ""}${
+                        f.day.rainChance != null && f.day.rainChance >= 50 ? ` 💧${f.day.rainChance}%` : ""
+                      }</span>`
+                    : ""
+                }
+                <span class="overview-day-count">${count ? `${count} stop${count === 1 ? "" : "s"}` : "empty"}</span>
+              </span>
             </button>
           `;
         });
@@ -2067,12 +2083,18 @@
 
     plan.days.forEach((day) => {
       const items = planItems(plan, day.id);
+      // Quiet here: on a list of days, "forecast lands nearer the time"
+      // repeated six times is noise, and a rain nudge per day is nagging.
+      const forecast = forecastForDay(day.label, dayWeatherAnchor(day.id), () => {
+        if (view.dataset.activeTab === "itinerary") renderItinerary();
+      });
       html += `
         <div class="card day-card">
           <div class="plan-day-head">
             <span class="day-title">${esc(day.label)}</span>
             <button class="plan-day-remove" data-remove-day="${esc(day.id)}" aria-label="Remove day">✕</button>
           </div>
+          ${weatherLine(forecast, { quiet: true })}
           <div class="plan-items">
       `;
       if (!items.length) {
@@ -3530,6 +3552,22 @@
     `;
   }
 
+  // A place's own forecast is only meaningful for the day it's scheduled on -
+  // that's the day you'd be standing there in it.
+  function weatherForPick(p) {
+    if (p.lat == null) return "";
+    const plan = loadPlan();
+    const day = plan.days.find((d) => (plan.items[d.id] || []).some((it) => it.pickId === p.id));
+    if (!day) return "";
+    const f = forecastForDay(day.label, p, () => {
+      if (placeModal.classList.contains("open")) openPickDetail(p.id);
+    });
+    if (!f) return "";
+    return `<div class="detail-weather"><span class="detail-weather-day">${esc(
+      shortDayLabel(day.label)
+    )}</span>${weatherLine(f, { quiet: true })}</div>`;
+  }
+
   // Everything about one place, opened from a row. This is where the map,
   // the full facts and all the editing controls live.
   function openPickDetail(id) {
@@ -3562,6 +3600,8 @@
             ${p.openingHours ? `<div class="place-fact">🕒 ${esc(p.openingHours)}</div>` : ""}
             ${p.phone ? `<div class="place-fact">📞 <a href="tel:${esc(p.phone)}">${esc(p.phone)}</a></div>` : ""}
             ${p.website ? `<div class="place-fact">🌐 <a href="${esc(p.website)}" target="_blank" rel="noopener">Website</a></div>` : ""}
+
+            ${weatherForPick(p)}
 
             ${p.lat != null ? `<div class="detail-map" id="detailMap"></div>` : ""}
             ${mapsUrl ? `<button class="modal-btn modal-btn-primary" data-open-maps="${esc(mapsUrl)}">📍 ${
@@ -4727,6 +4767,172 @@
     });
   }
 
+  // ---------- Weather ----------
+  // Open-Meteo: free, no API key, no account, 16 days of daily forecast. That
+  // matters as much as accuracy here - the app works with no setup, and a
+  // weather feature that first demanded a signup would be the only part that
+  // didn't.
+  //
+  // Forecasts are cached because the Today screen, a day card and a place
+  // sheet all want the same answer, and because a cached number is still
+  // worth showing on a road with no signal - labelled with its age rather
+  // than passed off as current.
+  const WEATHER_KEY = "weather-cache-v1";
+  const WEATHER_TTL_MS = 60 * 60 * 1000; // an hour; daily forecasts don't move faster
+  const WEATHER_HORIZON_DAYS = 16; // as far as Open-Meteo forecasts
+
+  // WMO weather codes, grouped to the differences you'd actually change plans
+  // over rather than all 28 of them.
+  const WMO = [
+    { max: 0, icon: "☀️", label: "Clear" },
+    { max: 2, icon: "🌤️", label: "Mostly sunny" },
+    { max: 3, icon: "☁️", label: "Cloudy" },
+    { max: 48, icon: "🌫️", label: "Fog" },
+    { max: 55, icon: "🌦️", label: "Drizzle" },
+    { max: 57, icon: "🌧️", label: "Freezing drizzle" },
+    { max: 65, icon: "🌧️", label: "Rain" },
+    { max: 67, icon: "🌧️", label: "Freezing rain" },
+    { max: 77, icon: "🌨️", label: "Snow" },
+    { max: 82, icon: "🌦️", label: "Showers" },
+    { max: 86, icon: "🌨️", label: "Snow showers" },
+    { max: 99, icon: "⛈️", label: "Thunderstorms" },
+  ];
+
+  function weatherLook(code) {
+    return WMO.find((w) => code <= w.max) || { icon: "🌡️", label: "" };
+  }
+
+  function isoDate(d) {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }
+
+  function daysFromNow(date) {
+    const a = new Date();
+    a.setHours(0, 0, 0, 0);
+    const b = new Date(date);
+    b.setHours(0, 0, 0, 0);
+    return Math.round((b - a) / 86400000);
+  }
+
+  // Rounded so places in the same town share one forecast and one request -
+  // about 1km, far finer than a daily forecast actually varies.
+  function weatherCacheKey(lat, lon) {
+    return `${lat.toFixed(2)},${lon.toFixed(2)}`;
+  }
+
+  function loadWeatherCache() {
+    const c = readJson(WEATHER_KEY, {});
+    return c && typeof c === "object" ? c : {};
+  }
+
+  const weatherInFlight = {};
+
+  // Returns what's cached straight away, even if stale, and refreshes in the
+  // background - a screen should never block on the network for something
+  // this peripheral.
+  function weatherFor(lat, lon, onUpdate) {
+    if (lat == null || lon == null) return null;
+    const key = weatherCacheKey(lat, lon);
+    const entry = loadWeatherCache()[key];
+    const fresh = entry && Date.now() - entry.fetchedAt < WEATHER_TTL_MS;
+
+    if (!fresh && !weatherInFlight[key]) {
+      weatherInFlight[key] = fetchWeather(lat, lon)
+        .then((days) => {
+          const c = loadWeatherCache();
+          c[key] = { fetchedAt: Date.now(), days };
+          localStorage.setItem(WEATHER_KEY, JSON.stringify(c));
+          if (onUpdate) onUpdate();
+        })
+        .catch(() => {
+          /* keep whatever is cached; its age is shown alongside it */
+        })
+        .finally(() => {
+          delete weatherInFlight[key];
+        });
+    }
+
+    return entry ? { days: entry.days, fetchedAt: entry.fetchedAt, stale: !fresh } : null;
+  }
+
+  async function fetchWeather(lat, lon) {
+    const url =
+      `https://api.open-meteo.com/v1/forecast?latitude=${lat.toFixed(4)}&longitude=${lon.toFixed(4)}` +
+      `&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,` +
+      `precipitation_sum,wind_speed_10m_max&timezone=auto&forecast_days=${WEATHER_HORIZON_DAYS}`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`open-meteo ${res.status}`);
+    const data = await res.json();
+    const d = data.daily || {};
+    return (d.time || []).map((date, i) => ({
+      date,
+      code: d.weather_code ? d.weather_code[i] : null,
+      max: d.temperature_2m_max ? Math.round(d.temperature_2m_max[i]) : null,
+      min: d.temperature_2m_min ? Math.round(d.temperature_2m_min[i]) : null,
+      rainChance: d.precipitation_probability_max ? d.precipitation_probability_max[i] : null,
+      rainMm: d.precipitation_sum ? d.precipitation_sum[i] : null,
+      wind: d.wind_speed_10m_max ? Math.round(d.wind_speed_10m_max[i]) : null,
+    }));
+  }
+
+  // The point on the map a day's weather is about: the first scheduled place
+  // with coordinates, falling back to anything else saved on the board.
+  function dayWeatherAnchor(dayId) {
+    const plan = loadPlan();
+    const picks = loadPicks();
+    const byId = {};
+    picks.forEach((p) => (byId[p.id] = p));
+    const scheduled = (plan.items[dayId] || []).map((it) => byId[it.pickId]).filter(Boolean);
+    return scheduled.find((p) => p.lat != null) || picks.find((p) => p.lat != null) || null;
+  }
+
+  function forecastForDay(dayLabel, anchor, onUpdate) {
+    if (!anchor || anchor.lat == null) return null;
+    const date = dayLabelToDate(dayLabel, new Date().getFullYear());
+    if (!date) return null; // an undated day like "Day 1" has no weather to give
+    const ahead = daysFromNow(date);
+    if (ahead < 0) return null;
+    if (ahead >= WEATHER_HORIZON_DAYS) {
+      // Beyond the horizon, saying so is honest. Dressing up a seasonal
+      // average as a forecast is not, and this is a trip people will pack for.
+      return { tooFar: true, ahead };
+    }
+    const w = weatherFor(anchor.lat, anchor.lon, onUpdate);
+    if (!w) return null;
+    const day = w.days.find((d) => d.date === isoDate(date));
+    return day ? { day, stale: w.stale, place: anchor.name } : null;
+  }
+
+  function weatherLine(f, opts) {
+    if (!f) return "";
+    const options = opts || {};
+    if (f.tooFar) {
+      return options.quiet
+        ? ""
+        : `<div class="weather-line muted">🗓️ Forecast lands nearer the time — ${f.ahead} days away</div>`;
+    }
+    const d = f.day;
+    const look = weatherLook(d.code == null ? 3 : d.code);
+    const wet = d.rainChance != null && d.rainChance >= 50;
+    const bits = [
+      `${look.icon} ${esc(look.label)}`,
+      d.max != null ? `${d.max}°/${d.min}°` : null,
+      d.rainChance != null ? `💧 ${d.rainChance}%` : null,
+      d.wind != null && d.wind >= 40 ? `💨 ${d.wind} km/h` : null,
+    ].filter(Boolean);
+    return `
+      <div class="weather-line${wet ? " wet" : ""}">
+        <span class="weather-bits">${bits.join(" · ")}</span>
+        ${f.stale ? `<span class="weather-stale">saved earlier</span>` : ""}
+      </div>
+      ${
+        wet && !options.quiet
+          ? `<button class="weather-suggest" data-rainy-day="1">🌧️ Wet day — find something indoors</button>`
+          : ""
+      }
+    `;
+  }
+
   // ---------- Today ----------
   // The screen the app opens on, and the only one that matters while you're
   // actually out: what's next, how far, is it open. Everything else in the
@@ -4788,11 +4994,22 @@
     const items = (plan.items[current.day.id] || []).filter((it) => byId[it.pickId]);
     const dayCode = dayCodeFromLabel(current.day.label);
 
+    // Weather belongs at the top of Today: it's the one thing that changes a
+    // plan before you've left the flat.
+    const forecast = forecastForDay(
+      current.day.label,
+      dayWeatherAnchor(current.day.id),
+      () => {
+        if (view.dataset.activeTab === "today") renderToday();
+      }
+    );
+
     let html = `
       <div class="today-head">
         <div class="today-label">${current.isToday ? "Today" : "Next up"}</div>
         <div class="today-date">${esc(current.day.label)}</div>
       </div>
+      ${weatherLine(forecast)}
     `;
 
     if (!items.length) {
@@ -4853,6 +5070,26 @@
     view.querySelectorAll("[data-open-pick]").forEach((btn) =>
       btn.addEventListener("click", () => openPickDetail(btn.getAttribute("data-open-pick")))
     );
+    wireRainyDayButtons();
+  }
+
+  // A wet forecast is only useful if it leads somewhere. This drops you into
+  // Explore already asking for indoor things, centred on the day's first stop.
+  function wireRainyDayButtons() {
+    document.querySelectorAll("[data-rainy-day]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const current = currentPlanDay();
+        const anchor = current ? dayWeatherAnchor(current.day.id) : null;
+        explore.open = true;
+        explore.category = "rainy";
+        explore.customQuery = "";
+        if (anchor && anchor.lat != null) {
+          explore.centre = { name: anchor.name, lat: anchor.lat, lon: anchor.lon };
+        }
+        showView("picks");
+        if (explore.centre) runExplore();
+      });
+    });
   }
 
   // Walking directions to a place. Uses the exact Google place when the share
