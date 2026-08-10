@@ -294,7 +294,11 @@ body {
 .modal {
   position: fixed;
   inset: 0;
-  z-index: 50;
+  /* Above the map (60) and search (65) overlays: a sheet is always opened
+     from something, so it has to sit on top of whatever opened it. At 50 the
+     search-result preview rendered underneath the search screen and looked
+     like a dead tap. */
+  z-index: 80;
   display: none;
 }
 .modal.open { display: block; }
@@ -735,7 +739,31 @@ body {
   border-radius: 14px;
   padding: 14px;
 }
-.search-result-main { flex: 1; min-width: 0; }
+/* The body of a result opens its full details before you commit to saving.
+   The tap target is a button, but the citation link sits outside it - a link
+   nested in a button is neither valid nor reliably clickable. */
+.search-result-main,
+.explore-result-main { flex: 1; min-width: 0; }
+.result-tap {
+  display: block;
+  width: 100%;
+  border: none;
+  background: none;
+  padding: 0;
+  margin: 0;
+  font-family: inherit;
+  font-size: inherit;
+  text-align: left;
+  color: inherit;
+}
+.result-tap:active { opacity: 0.6; }
+.search-result-more {
+  margin-top: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.preview-loading { color: var(--text-muted); font-style: italic; }
 .search-add {
   flex-shrink: 0;
   width: 44px;

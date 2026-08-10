@@ -3357,14 +3357,19 @@
           const km = r.lat != null ? haversineKm(explore.centre.lat, explore.centre.lon, r.lat, r.lon) : null;
           const distance = km == null ? "" : km < 1 ? Math.round(km * 1000) + " m away" : km.toFixed(1) + " km away";
           const meta = [distance, r.openingHours].filter(Boolean).join(" · ");
+          // Same bargain as the search results: tap to read it properly,
+          // + to take it on trust.
           body += `
             <div class="candidate-card explore-result">
-              <div style="flex:1;">
-                <div class="place-name">${esc(r.name)}${
-                  r.aiSuggested ? ` <span class="ai-badge">AI</span>` : ""
-                }</div>
-                ${meta ? `<div class="place-notes">${esc(meta)}</div>` : ""}
-                ${r.description ? `<div class="place-notes">${esc(r.description)}</div>` : ""}
+              <div class="explore-result-main">
+                <button class="result-tap" data-preview-explore="${i}">
+                  <div class="place-name">${esc(r.name)}${
+                    r.aiSuggested ? ` <span class="ai-badge">AI</span>` : ""
+                  }</div>
+                  ${meta ? `<div class="place-notes">${esc(meta)}</div>` : ""}
+                  ${r.description ? `<div class="place-notes">${esc(r.description)}</div>` : ""}
+                  <div class="search-result-more">Details ›</div>
+                </button>
                 ${
                   r.aiSuggested && r.sources && r.sources.length
                     ? `<div class="place-links"><a href="${esc(r.sources[0].uri)}" target="_blank" rel="noopener">🔗 source</a></div>`
@@ -3437,6 +3442,12 @@
         renderPicks();
       });
     }
+
+    view.querySelectorAll("[data-preview-explore]").forEach((btn) => {
+      btn.addEventListener("click", () =>
+        openCandidatePreview(Number(btn.getAttribute("data-preview-explore")), explore.results)
+      );
+    });
 
     view.querySelectorAll("[data-explore-add]").forEach((btn) => {
       btn.addEventListener("click", () => {
@@ -3953,14 +3964,20 @@
       filtered.forEach((r) => {
         const i = results.indexOf(r);
         const already = saved.has(pickId("custom", r.name));
+        // The row opens the full details; the ＋ is the shortcut for when you
+        // already know. Tapping straight to "add" was the only option before,
+        // which made every add a guess.
         body += `
           <div class="search-result" data-candidate="${i}">
             <div class="search-result-main">
-              <div class="place-name">${esc(r.name)}${
-                r.aiSuggested ? ` <span class="ai-badge">AI</span>` : ""
-              }${r.rating != null ? ` <span class="candidate-rating">⭐ ${esc(String(r.rating))}</span>` : ""}</div>
-              <div class="place-notes">${esc(r.displayName || "")}</div>
-              ${r.description ? `<div class="place-notes">${esc(r.description)}</div>` : ""}
+              <button class="result-tap" data-preview-candidate="${i}">
+                <div class="place-name">${esc(r.name)}${
+                  r.aiSuggested ? ` <span class="ai-badge">AI</span>` : ""
+                }${r.rating != null ? ` <span class="candidate-rating">⭐ ${esc(String(r.rating))}</span>` : ""}</div>
+                <div class="place-notes">${esc(r.displayName || "")}</div>
+                ${r.description ? `<div class="place-notes">${esc(r.description)}</div>` : ""}
+                <div class="search-result-more">Details ›</div>
+              </button>
               ${
                 r.sources && r.sources.length
                   ? `<div class="place-links"><a href="${esc(r.sources[0].uri)}" target="_blank" rel="noopener">🔗 source</a></div>`
@@ -3974,7 +3991,7 @@
         `;
       });
       body += `</div>`;
-      body += `<p class="settings-hint search-foot">Add as many as you like — this stays open.</p>`;
+      body += `<p class="settings-hint search-foot">Tap a place to read about it first, or ＋ to save it straight away.</p>`;
     }
 
     searchOverlay.innerHTML = `
@@ -4004,6 +4021,157 @@
   // to the same guess the saved place would get.
   function resultKind(r) {
     return pickKind({ category: r.category || r.type, description: r.description });
+  }
+
+  // ---------- Reading a result before deciding on it ----------
+  // The ＋ was the only thing you could do with a search result, which made
+  // every add a guess: a name and one line of address is not enough to know
+  // whether somewhere is right for a wet Tuesday with a four-year-old. This
+  // is the same information the place would have *after* saving, shown
+  // before - map, description, hours, website - so the decision happens
+  // before the list fills up with things you then have to weed out.
+  let previewIndex = null;
+  let previewList = null; // whichever list of results is being previewed
+  let previewEnriching = false;
+
+  function openCandidatePreview(index, list) {
+    previewList = list || pickSearch.results;
+    const r = previewList[index];
+    if (!r) return;
+    previewIndex = index;
+    renderCandidatePreview();
+
+    // Search results arrive thin - an AI suggestion may be a name and a
+    // sentence. Fill in the rest on opening rather than for every result in
+    // the list, which would be dozens of requests for one you'll actually read.
+    if (!r.enriched && !previewEnriching) {
+      previewEnriching = true;
+      Promise.all([
+        r.description && r.website ? null : wikiEnrich(r.name).catch(() => null),
+        r.lat == null ? geocodePlace(r.name, r.city || null).catch(() => null) : null,
+      ])
+        .then(([wiki, geo]) => {
+          if (wiki) {
+            if (!r.description) r.description = wiki.description || "";
+            if (!r.website) r.website = wiki.website || "";
+          }
+          if (geo) {
+            r.lat = geo.lat;
+            r.lon = geo.lon;
+            if (!r.website) r.website = geo.website || "";
+            if (!r.address) r.address = geo.address || "";
+            if (!r.openingHours) r.openingHours = geo.openingHours || "";
+          }
+          r.enriched = true;
+        })
+        .finally(() => {
+          previewEnriching = false;
+          if (previewIndex === index) renderCandidatePreview();
+        });
+    }
+  }
+
+  function renderCandidatePreview() {
+    const r = previewList ? previewList[previewIndex] : null;
+    if (!r) return;
+    const already = loadPicks().some((p) => p.id === pickId("custom", r.name));
+    const mapsUrl = r.googleUrl || mapsUrlFor(r.displayName || r.name);
+    const facts = [
+      r.address || r.displayName ? `📍 ${esc(r.address || r.displayName)}` : "",
+      r.openingHours ? `🕒 ${esc(r.openingHours)}` : "",
+      r.phone ? `📞 ${esc(r.phone)}` : "",
+      r.rating != null ? `⭐ ${esc(String(r.rating))}${r.ratingCount ? ` (${esc(String(r.ratingCount))})` : ""}` : "",
+    ].filter(Boolean);
+
+    placeModal.innerHTML = `
+      <div class="modal-backdrop" data-close="1">
+        <div class="modal-sheet" role="dialog" aria-label="${esc(r.name)}">
+          <div class="modal-handle"></div>
+          <button class="modal-close" data-close="1" aria-label="Close">✕</button>
+          <div class="modal-body">
+            <h2 class="modal-title">${esc(r.name)}${
+              r.aiSuggested ? ` <span class="ai-badge">AI</span>` : ""
+            }</h2>
+            <div class="modal-subtitle">${esc(
+              [r.category || r.type, r.city].filter(Boolean).join(" · ")
+            )}</div>
+
+            ${r.description ? `<p class="place-notes" style="margin-top:10px;">${esc(r.description)}</p>` : ""}
+            ${facts.map((f) => `<div class="place-fact">${f}</div>`).join("")}
+            ${
+              previewEnriching
+                ? `<div class="place-fact preview-loading">Looking up details…</div>`
+                : ""
+            }
+
+            ${r.lat != null ? `<div class="detail-map" id="previewMap"></div>` : ""}
+
+            <div class="settings-btn-row" style="margin-top:12px;">
+              ${
+                r.website
+                  ? `<button class="modal-btn" data-open-maps="${esc(r.website)}">🌐 Website</button>`
+                  : ""
+              }
+              ${mapsUrl ? `<button class="modal-btn" data-open-maps="${esc(mapsUrl)}">📍 Google Maps</button>` : ""}
+            </div>
+
+            ${
+              r.sources && r.sources.length
+                ? `<div class="place-links" style="margin-top:10px;">${r.sources
+                    .slice(0, 2)
+                    .map(
+                      (s) =>
+                        `<a href="${esc(s.uri)}" target="_blank" rel="noopener">🔗 ${esc(s.title || "source")}</a>`
+                    )
+                    .join(" ")}</div>`
+                : ""
+            }
+
+            <button class="modal-btn modal-btn-primary" id="previewAdd" ${already ? "disabled" : ""}
+                    style="width:100%;margin-top:16px;">
+              ${already ? "✓ Already saved" : "＋ Save this place"}
+            </button>
+            <p class="settings-hint" style="text-align:center;">You can change the folder, add a note or a cost after saving.</p>
+          </div>
+        </div>
+      </div>
+    `;
+    placeModal.classList.add("open");
+
+    placeModal.querySelectorAll("[data-close]").forEach((el) => {
+      el.addEventListener("click", (e) => {
+        if (e.target === el) {
+          previewIndex = null;
+          closePlaceModal();
+        }
+      });
+    });
+
+    placeModal.querySelectorAll("[data-open-maps]").forEach((btn) =>
+      btn.addEventListener("click", () => openExternal(btn.getAttribute("data-open-maps")))
+    );
+
+    const addBtn = document.getElementById("previewAdd");
+    if (addBtn && !already) {
+      addBtn.addEventListener("click", () => {
+        quickAdd(r);
+        previewIndex = null;
+        closePlaceModal();
+        // The list behind needs to show it as saved now.
+        if (searchOverlay.classList.contains("open")) renderSearchOverlay();
+        else if (view.dataset.activeTab === "picks") renderPicks();
+        else if (view.dataset.activeTab) showView(view.dataset.activeTab);
+      });
+    }
+
+    const mapEl = document.getElementById("previewMap");
+    if (mapEl && r.lat != null) {
+      const map = L.map(mapEl, { scrollWheelZoom: false, attributionControl: false });
+      addTileLayer(map);
+      map.setView([r.lat, r.lon], 15);
+      L.marker([r.lat, r.lon]).addTo(map);
+      setTimeout(() => map.invalidateSize(), 60);
+    }
   }
 
   function wireSearchOverlay() {
@@ -4040,6 +4208,12 @@
         searchKindFilter = btn.getAttribute("data-search-kind");
         renderSearchOverlay();
       });
+    });
+
+    searchOverlay.querySelectorAll("[data-preview-candidate]").forEach((btn) => {
+      btn.addEventListener("click", () =>
+        openCandidatePreview(Number(btn.getAttribute("data-preview-candidate")))
+      );
     });
 
     // Adding doesn't close the screen: on a trip you rarely want exactly one

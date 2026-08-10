@@ -17,13 +17,22 @@ const page = await browser.newPage();
 await page.setViewportSize({ width: 390, height: 800 });
 page.on('pageerror', (e) => { console.log('PAGEERROR:', e.message); failures++; });
 
-await page.route(/nominatim\.openstreetmap\.org/, (route) =>
-  route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([
-    { lat: '55.9486', lon: '-3.1999', display_name: 'Camera Obscura, Edinburgh', type: 'attraction',
-      namedetails: { name: 'Camera Obscura' }, address: { city: 'Edinburgh' }, extratags: {} },
-    { lat: '55.9463', lon: '-3.2010', display_name: 'Lovecrumbs, Edinburgh', type: 'cafe',
-      namedetails: { name: 'Lovecrumbs' }, address: { city: 'Edinburgh' }, extratags: {} },
-  ]) }));
+await page.route(/nominatim\.openstreetmap\.org/, (route) => {
+  // Query-aware, so a later search returns something not already saved.
+  const url = decodeURIComponent(route.request().url());
+  const body = /museum/i.test(url)
+    ? [{ lat: '55.9469', lon: '-3.1897', display_name: 'National Museum of Scotland, Chambers Street, Edinburgh',
+        type: 'museum', namedetails: { name: 'National Museum of Scotland' },
+        address: { road: 'Chambers Street', city: 'Edinburgh', postcode: 'EH1 1JF' },
+        extratags: { opening_hours: 'Mo-Su 10:00-17:00', website: 'https://nms.ac.uk' } }]
+    : [
+        { lat: '55.9486', lon: '-3.1999', display_name: 'Camera Obscura, Edinburgh', type: 'attraction',
+          namedetails: { name: 'Camera Obscura' }, address: { city: 'Edinburgh' }, extratags: {} },
+        { lat: '55.9463', lon: '-3.2010', display_name: 'Lovecrumbs, Edinburgh', type: 'cafe',
+          namedetails: { name: 'Lovecrumbs' }, address: { city: 'Edinburgh' }, extratags: {} },
+      ];
+  route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
+});
 await page.route(/wikidata|wikipedia|overpass|googleapis|tile\./, (r) => r.abort());
 
 await page.goto(BASE, { waitUntil: 'load' });
@@ -118,6 +127,64 @@ check('Android back closes the search screen', await page.evaluate(() =>
   !document.getElementById('searchOverlay').classList.contains('open')));
 check('and the app is still there behind it', await page.evaluate(() =>
   !!document.getElementById('view').textContent.trim()));
+
+// --- Reading a result before deciding on it ---
+// Adding used to be the only thing you could do with a result, which made
+// every add a guess off a name and one line of address.
+await page.click('#pickSearchTrigger');
+await page.waitForSelector('#pickSearchInput');
+await page.fill('#pickSearchInput', 'museum');
+await page.evaluate(() => document.getElementById('pickSearchForm').requestSubmit());
+await page.waitForSelector('[data-preview-candidate]', { timeout: 6000 });
+
+check('a result can be opened, not only added', await page.evaluate(() =>
+  document.querySelectorAll('[data-preview-candidate]').length > 0));
+
+await page.evaluate(() => document.querySelector('[data-preview-candidate]').click());
+await page.waitForSelector('#placeModal.open', { timeout: 3000 });
+await page.waitForTimeout(900);
+const preview = await page.evaluate(() => document.getElementById('placeModal').textContent);
+check('the sheet names the place', /National Museum of Scotland/.test(preview), preview.slice(0, 160));
+// In the DOM is not the same as on screen: at the wrong z-index the sheet
+// opened underneath the search screen and read as a dead tap.
+check('the sheet is actually on top of the search screen', await page.evaluate(() => {
+  const sheet = document.querySelector('#placeModal .modal-sheet');
+  if (!sheet) return false;
+  const r = sheet.getBoundingClientRect();
+  const hit = document.elementFromPoint(r.left + r.width / 2, r.top + 20);
+  return !!hit && !!hit.closest('#placeModal');
+}));
+check('it shows where it is', /Chambers Street/.test(preview), preview.slice(0, 200));
+check('it shows opening hours before you commit', /10:00-17:00/.test(preview), preview.slice(0, 250));
+check('and links out to the website', /Website/.test(preview), preview.slice(0, 250));
+check('it maps it before you commit', await page.evaluate(() => !!document.getElementById('previewMap')));
+check('and offers a way to save from there', await page.evaluate(() => !!document.getElementById('previewAdd')));
+
+// Reading it must not save it - that was the whole complaint.
+const savedDuringRead = await page.evaluate(() => JSON.parse(localStorage.getItem('board:' + JSON.parse(localStorage.getItem('boards-v1')).activeId + ':picks') || '[]').length);
+await page.evaluate(() => document.getElementById('previewAdd').click());
+await page.waitForTimeout(800);
+const savedAfterAdd = await page.evaluate(() => JSON.parse(localStorage.getItem('board:' + JSON.parse(localStorage.getItem('boards-v1')).activeId + ':picks') || '[]').length);
+check('opening a result does not save it', savedAfterAdd === savedDuringRead + 1, `${savedDuringRead} -> ${savedAfterAdd}`);
+check('saving from the sheet closes it', await page.evaluate(() =>
+  !document.getElementById('placeModal').classList.contains('open')));
+check('and the list behind shows it as saved', await page.evaluate(() =>
+  !!document.querySelector('.search-add.added')));
+
+// A place already saved says so rather than offering to add it twice.
+await page.evaluate(() => document.querySelector('[data-preview-candidate]').click());
+await page.waitForSelector('#placeModal.open');
+await page.waitForTimeout(300);
+check('an already-saved place says so in the sheet', await page.evaluate(() => {
+  const b = document.getElementById('previewAdd');
+  return b && b.disabled && /Already saved/.test(b.textContent);
+}));
+await page.evaluate(() => document.querySelector('#placeModal .modal-close').click());
+await page.waitForTimeout(200);
+
+// The + is still there for when you already know what you want.
+check('the one-tap add survives alongside it', await page.evaluate(() =>
+  document.querySelectorAll('[data-add-candidate]').length > 0));
 
 await browser.close();
 console.log(failures === 0 ? '\nALL TESTS PASSED' : `\n${failures} FAILED`);
