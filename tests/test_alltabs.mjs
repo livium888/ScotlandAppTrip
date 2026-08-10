@@ -22,6 +22,16 @@ const tab = async (name) => {
   await page.evaluate((t) => document.querySelector(`[data-view="${t}"]`).click(), name);
   await page.waitForTimeout(250);
 };
+// Places and Eats stopped being destinations and became a filter on the one
+// list they always read from.
+const kindFilter = async (kind) => {
+  await tab('picks');
+  await page.evaluate((k) => {
+    const b = document.querySelector(`[data-pick-kind-filter="${k}"]`);
+    if (b) b.click();
+  }, kind);
+  await page.waitForTimeout(250);
+};
 const text = () => page.evaluate(() => document.getElementById('view').textContent);
 
 // A board of the user's own making, with places added by hand - one to see,
@@ -43,29 +53,29 @@ await page.evaluate(() => {
 await page.reload({ waitUntil: 'load' });
 await page.waitForTimeout(400);
 
-// --- Places and Eats are filled by what you saved, and split sensibly ---
-await tab('places');
+// --- The kind filter splits what you saved, sensibly ---
+await kindFilter('place');
 const placesText = await text();
-check('a manually added attraction appears under Places', /Castlerigg Stone Circle/.test(placesText), placesText.slice(0, 200));
+check('a manually added attraction appears under To do', /Castlerigg Stone Circle/.test(placesText), placesText.slice(0, 200));
 check('a pub is not filed as a place to go', !/Dog and Gun/.test(placesText), placesText.slice(0, 200));
-check('an unrelated category still lands in Places', /Booths/.test(placesText), placesText.slice(0, 200));
+check('an unrelated category still lands under To do', /Booths/.test(placesText), placesText.slice(0, 200));
 
-await tab('eats');
+await kindFilter('eat');
 const eatsText = await text();
-check('the pub appears under Eats', /Dog and Gun/.test(eatsText), eatsText.slice(0, 200));
+check('the pub appears under Eat', /Dog and Gun/.test(eatsText), eatsText.slice(0, 200));
 check('the stone circle is not offered as dinner', !/Castlerigg/.test(eatsText), eatsText.slice(0, 200));
 
 // The guess is overridable from the place's own sheet.
-await tab('places');
+await kindFilter('place');
 await page.evaluate(() => Array.from(document.querySelectorAll('[data-open-pick]'))
   .find((r) => /Booths/.test(r.textContent)).click());
 await page.waitForSelector('#placeModal.open [data-pick-kind]', { timeout: 3000 });
 await page.evaluate(() => document.querySelector('[data-pick-kind$="|eat"]').click());
 await page.waitForTimeout(200);
 await page.evaluate(() => document.querySelector('#placeModal .modal-close').click());
-await tab('eats');
+await kindFilter('eat');
 check('a place can be moved to Eats by hand', /Booths/.test(await text()), (await text()).slice(0, 200));
-await tab('places');
+await kindFilter('place');
 check('and leaves Places when it does', !/Booths/.test(await text()), (await text()).slice(0, 200));
 
 // --- The itinerary works without dates, on a board of your own ---
@@ -160,7 +170,13 @@ await page.evaluate(() => {
 });
 await page.reload({ waitUntil: 'load' });
 await page.waitForTimeout(400);
-await tab('places');
+await kindFilter('place');
+// The guide moved into Picks and is collapsed until asked for - it is
+// suggestions, not your list, so it no longer occupies a screen of its own.
+check('the Scotland board still offers its guide', await page.evaluate(() => !!document.getElementById('guideToggle')));
+check('but it is folded away until wanted', !/Edinburgh Castle/.test(await text()), (await text()).slice(0, 200));
+await page.evaluate(() => document.getElementById('guideToggle').click());
+await page.waitForTimeout(300);
 check('the Scotland board still has its guide', /Edinburgh Castle/.test(await text()), (await text()).slice(0, 200));
 await tab('itinerary');
 check('and still offers the suggested itinerary', await page.evaluate(() =>

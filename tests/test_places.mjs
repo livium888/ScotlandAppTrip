@@ -1,4 +1,5 @@
-// The Places tab had two kinds of entry side by side: saved places as rows
+// The Places tab (now the Picks list, since Places and Eats became a filter
+// on it rather than tabs of their own) had two kinds of entry side by side: saved places as rows
 // that opened a sheet, and bundled guide entries as tall cards where only a
 // small ♥ responded to a tap. Same screen, two behaviours, nothing to tell
 // them apart - eleven of the cards did nothing at all when tapped. There was
@@ -49,8 +50,18 @@ await page.evaluate(() => {
   }));
 });
 await page.reload({ waitUntil: 'load' });
-await page.evaluate(() => document.querySelector('[data-view="places"]').click());
-await page.waitForTimeout(500);
+const openPicks = async () => {
+  await page.evaluate(() => document.querySelector('[data-view="picks"]').click());
+  await page.waitForTimeout(400);
+  // The bundled guide moved in here and starts folded, so open it - these
+  // checks are largely about guide entries responding to a tap.
+  await page.evaluate(() => {
+    const g = document.getElementById('guideToggle');
+    if (g && !document.querySelector('.guide-row')) g.click();
+  });
+  await page.waitForTimeout(400);
+};
+await openPicks();
 
 // --- Every entry on the screen responds to a tap ---
 const dead = await page.evaluate(() => {
@@ -118,23 +129,27 @@ check('By day puts the scheduled place first', (await names())[0] === 'Edinburgh
 
 // The choice sticks, rather than resetting every time you come back.
 await page.reload({ waitUntil: 'load' });
-await page.evaluate(() => document.querySelector('[data-view="places"]').click());
-await page.waitForTimeout(500);
+await openPicks();
 check('the chosen order is remembered', await page.evaluate(() =>
   !!document.querySelector('[data-sort="day"].on')));
 
-// --- Filtering still works alongside it ---
-await page.evaluate(() => document.querySelector('[data-city="Stirling"]').click());
-await page.waitForTimeout(300);
-const filtered = await names();
-check('filtering to a folder still narrows the list', filtered.length === 1 && /Wallace/.test(filtered[0]), JSON.stringify(filtered));
+// --- Folders separate the list instead of filtering it ---
+// The folder chips went with the tab. Every folder is a heading on one
+// screen now, which answers the same question - what is where - without
+// hiding the rest of the list to do it.
+const sections = await page.evaluate(() =>
+  Array.from(document.querySelectorAll('.section-label, .area-head-name')).map((e) => e.textContent.trim()));
+check('every folder is a heading of its own', sections.includes('Edinburgh') && sections.includes('Stirling'), JSON.stringify(sections));
+// Everything saved is on screen at once - counted against storage rather than
+// a literal, since a guide entry was saved earlier in this run.
+const savedCount = await page.evaluate(() => JSON.parse(localStorage.getItem('board:b-p:picks')).length);
+check('and nothing is hidden to achieve it', (await names()).length === savedCount, `${(await names()).length} shown of ${savedCount}`);
 
-// --- Eats gets the same treatment ---
-await page.evaluate(() => document.querySelector('[data-view="eats"]').click());
-await page.waitForTimeout(400);
+// --- The eats side of the guide is on the same screen, and just as tappable ---
 check('Eats guide entries are tappable too', await page.evaluate(() =>
   document.querySelectorAll('.guide-row-main[data-preview-guide^="eats"]').length > 0));
-await page.click('.guide-row-main');
+await page.evaluate(() => document.querySelector('.guide-row-main[data-preview-guide^="eats"]').scrollIntoView());
+await page.evaluate(() => document.querySelector('.guide-row-main[data-preview-guide^="eats"]').click());
 await page.waitForSelector('#placeModal.open', { timeout: 3000 });
 check('and open their own sheet', await page.evaluate(() => !!document.getElementById('previewAdd')));
 

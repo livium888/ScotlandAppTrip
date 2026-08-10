@@ -224,8 +224,7 @@ check('the area heading counts what is under it', /1 place saved here/.test(
   await page.evaluate(() => (document.querySelector('.area-head') || {}).textContent || ''));
 
 // A town is not a thing to do in the town.
-await page.evaluate(() => document.querySelector('[data-view="places"]').click());
-await page.waitForTimeout(600);
+await page.waitForTimeout(300);
 const placeRows = await page.evaluate(() =>
   Array.from(document.querySelectorAll('.pick-row-name')).map((n) => n.textContent.trim()));
 check('the town is not listed among the things to do', !placeRows.includes('Pitlochry'), JSON.stringify(placeRows));

@@ -35,14 +35,14 @@ await page.reload({ waitUntil: 'load' });
 await page.waitForTimeout(500);
 
 // --- Back retraces the tabs you came through ---
-await page.evaluate(() => document.querySelector('[data-view="places"]').click());
+await page.evaluate(() => document.querySelector('[data-view="itinerary"]').click());
 await page.waitForTimeout(200);
 await page.evaluate(() => document.querySelector('[data-view="budget"]').click());
 await page.waitForTimeout(200);
 check('a few tabs in', await tabNow() === 'budget');
 
 await back();
-check('back goes to the tab you came from, not out of the app', await tabNow() === 'places', await tabNow());
+check('back goes to the tab you came from, not out of the app', await tabNow() === 'itinerary', await tabNow());
 await back();
 const rootTab = await tabNow();
 check('and keeps stepping back', rootTab !== 'places', rootTab);

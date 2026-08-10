@@ -78,7 +78,7 @@ const sized = await page.evaluate(() => {
 check('map canvas fills the screen', sized.w > 300 && sized.h > 300, JSON.stringify(sized));
 
 // --- Filters: days and folders ---
-const chips = await page.evaluate(() => Array.from(document.querySelectorAll('.map-chip')).map((c) => c.textContent.trim()));
+const chips = await page.evaluate(() => Array.from(document.querySelectorAll('#mapOverlay .map-chip')).map((c) => c.textContent.trim()));
 check('All, the planned day and each folder are offered', chips[0] === 'All' && chips.includes('Wed 19') && chips.includes('Edinburgh') && chips.includes('Glasgow'), JSON.stringify(chips));
 check('an empty day is not offered as a filter', !chips.includes('Thu 20'), JSON.stringify(chips));
 
@@ -127,7 +127,7 @@ await page.waitForTimeout(300);
 await page.click('#mapBtn');
 await page.waitForSelector('#mapOverlay.open');
 await page.waitForTimeout(500);
-const activeChip = await page.evaluate(() => document.querySelector('.map-chip.on').textContent.trim());
+const activeChip = await page.evaluate(() => document.querySelector('#mapOverlay .map-chip.on').textContent.trim());
 check('map opened from Today starts on that day', activeChip === 'Wed 19', activeChip);
 
 // --- An empty board says so instead of showing a blank grey rectangle ---

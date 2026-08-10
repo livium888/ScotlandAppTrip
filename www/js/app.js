@@ -85,23 +85,6 @@
     return PLACES.find((p) => p.name === name) || EATS.find((e) => e.name === name);
   }
 
-  function goToMapsSearch(query) {
-    const q = (query || "").trim();
-    if (!q) return;
-    window.open(mapsUrlFor(q), "_blank", "noopener");
-  }
-
-  function wireSearchBar(formId, inputId, buildQuery) {
-    const form = document.getElementById(formId);
-    if (!form) return;
-    form.addEventListener("submit", (e) => {
-      e.preventDefault();
-      const raw = document.getElementById(inputId).value;
-      if (!raw.trim()) return;
-      goToMapsSearch(buildQuery ? buildQuery(raw) : raw);
-    });
-  }
-
   // ---------- Trip settings ----------
   // Everything location-specific lives here rather than being baked into the
   // code. The bundled Scotland itinerary is just the default content; the
@@ -947,6 +930,34 @@
     savePicks(loadPicks().filter((p) => p.id !== id));
   }
 
+  // Deleting a place used to be the one action with no way back: no warning,
+  // no confirmation, and a toast that only said it had happened. Deleting a
+  // whole board asks first, so the small destructive action was the
+  // unrecoverable one and the large one was safe - exactly backwards.
+  //
+  // A confirm dialog would be the obvious fix and the wrong one: it interrupts
+  // every deletion, including the ninety-nine correct ones, to guard against
+  // the hundredth. Restoring the place is the better answer, since everything
+  // about it is already in hand.
+  function removePickWithUndo(id, after) {
+    const picks = loadPicks();
+    const index = picks.findIndex((p) => p.id === id);
+    if (index < 0) return;
+    const removed = picks[index];
+    removePick(id);
+    if (after) after();
+    toastWithAction(`Removed ${removed.name}`, "Undo", () => {
+      const now = loadPicks();
+      if (now.some((p) => p.id === removed.id)) return; // saved again in the meantime
+      // Back where it was, not appended to the end - a place reappearing
+      // somewhere else in the list reads as a second mistake.
+      now.splice(Math.min(index, now.length), 0, removed);
+      savePicks(now);
+      if (after) after();
+      toast(`${removed.name} is back`);
+    });
+  }
+
   // Small per-pick edits: a personal note ("buggy access round the back") and
   // whether it's actually booked - which matters when the trip lands in
   // festival season and half the plan needs reserving in advance.
@@ -1427,13 +1438,76 @@
     if (del) {
       del.addEventListener("click", () => {
         const b = activeBoard();
-        if (!confirm(`Delete "${b.name}" and everything saved in it? This can't be undone.`)) return;
-        deleteBoard(b.id);
-        closePlaceModal();
-        refreshForBoard();
-        toast(`Deleted “${b.name}”`);
+        // The one action that really cannot be undone - a board takes its
+        // places, plan, budget and packing list with it - so this is the one
+        // place a confirmation earns its interruption. It is the app's own
+        // sheet rather than a system confirm(), and it names what is at stake
+        // rather than asking "are you sure".
+        confirmDestructive({
+          title: `Delete "${b.name}"?`,
+          detail: boardDeletionSummary(b),
+          confirmLabel: "Delete it",
+          onConfirm: () => {
+            deleteBoard(b.id);
+            closePlaceModal();
+            refreshForBoard();
+            toast(`Deleted “${b.name}”`);
+          },
+        });
       });
     }
+  }
+
+  // Counts what would go, so the warning is about this board rather than
+  // boards in general. "Everything saved in it" is easy to agree to; "9 places
+  // and a 7-day plan" is not.
+  function boardDeletionSummary(board) {
+    const key = (part) => readJson(boardKey(board.id, part), null);
+    const picks = key("picks") || [];
+    const plan = key("plan") || {};
+    const days = (plan.days || []).length;
+    const bits = [];
+    if (picks.length) bits.push(`${picks.length} saved place${picks.length === 1 ? "" : "s"}`);
+    if (days) bits.push(`a ${days}-day plan`);
+    const packing = (key("packing") || []).length;
+    if (packing) bits.push(`a packing list of ${packing}`);
+    if (!bits.length) return "Nothing is saved in it yet.";
+    return `This also deletes ${bits.join(", ")}. It can't be undone.`;
+  }
+
+  // One sheet for "this cannot be undone", so destructive confirmation looks
+  // the same everywhere and never falls back to a system dialog.
+  function confirmDestructive(opts) {
+    placeModal.innerHTML = `
+      <div class="modal-backdrop" data-close="1">
+        <div class="modal-sheet" role="dialog" aria-label="${esc(opts.title)}">
+          <div class="modal-handle"></div>
+          <button class="modal-close" data-close="1" aria-label="Close">✕</button>
+          <div class="modal-body">
+            <h2 class="modal-title">${esc(opts.title)}</h2>
+            <p class="place-notes" style="margin-top:10px;">${esc(opts.detail)}</p>
+            <div class="settings-btn-row" style="margin-top:16px;">
+              <button class="modal-btn" id="confirmCancel">Keep it</button>
+              <button class="modal-btn danger" id="confirmGo">${esc(opts.confirmLabel)}</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+    placeModal.classList.add("open");
+
+    placeModal.querySelectorAll("[data-close]").forEach((el) =>
+      el.addEventListener("click", (e) => {
+        if (e.target === el) closePlaceModal();
+      })
+    );
+    // Cancel is listed first and styled plainly; the destructive one is not
+    // the default and not the easiest thing to hit.
+    document.getElementById("confirmCancel").addEventListener("click", closePlaceModal);
+    document.getElementById("confirmGo").addEventListener("click", () => {
+      closePlaceModal();
+      opts.onConfirm();
+    });
   }
 
   function refreshForBoard() {
@@ -1887,7 +1961,53 @@
         // fall through
       }
     }
-    window.prompt("Copy this to share:", text);
+    // Last resort, when neither the share sheet nor the clipboard is available.
+    // Was a window.prompt, which on Android is a system dialog titled with the
+    // page's origin, in a font the app never uses, with the text crammed into
+    // one unscrollable line. This is the app's own sheet, and the text can be
+    // read and selected properly.
+    openCopyFallback(title, text);
+  }
+
+  function openCopyFallback(title, text) {
+    placeModal.innerHTML = `
+      <div class="modal-backdrop" data-close="1">
+        <div class="modal-sheet" role="dialog" aria-label="Copy this to share">
+          <div class="modal-handle"></div>
+          <button class="modal-close" data-close="1" aria-label="Close">✕</button>
+          <div class="modal-body">
+            <h2 class="modal-title">${esc(title)}</h2>
+            <div class="modal-subtitle">Sharing isn't available here — copy this instead</div>
+            <textarea class="settings-input notes-box" id="copyFallbackText" rows="8" readonly>${esc(text)}</textarea>
+            <button class="modal-btn modal-btn-primary" id="copyFallbackBtn" style="width:100%;margin-top:12px;">Select all</button>
+          </div>
+        </div>
+      </div>
+    `;
+    placeModal.classList.add("open");
+
+    placeModal.querySelectorAll("[data-close]").forEach((el) => {
+      el.addEventListener("click", (e) => {
+        if (e.target === el) closePlaceModal();
+      });
+    });
+
+    const box = document.getElementById("copyFallbackText");
+    const btn = document.getElementById("copyFallbackBtn");
+    if (btn && box) {
+      btn.addEventListener("click", () => {
+        box.focus();
+        box.select();
+        // execCommand is deprecated but is the only copy route left once
+        // navigator.clipboard has already failed - and this is the fallback
+        // path, so failing quietly here is fine.
+        try {
+          if (document.execCommand("copy")) toast("Copied");
+        } catch (e) {
+          /* the text is selected either way - a long-press copy still works */
+        }
+      });
+    }
   }
 
   let toastTimer = null;
@@ -2678,9 +2798,6 @@
   // by what they are: somewhere to go, or somewhere to eat. The bundled
   // Edinburgh guide still appears underneath, but only on the board it came
   // with, and only as suggestions to save.
-  let placeFilter = "All";
-  let eatsFilter = "All";
-
   // The list was in whatever order things happened to be saved, which is the
   // one order that means nothing by the time there are twenty of them.
   const SORT_KEY = "places-sort-v1";
@@ -2753,147 +2870,11 @@
     return copy.sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0));
   }
 
-  function renderPlaces() {
-    renderPlaceTab({
-      kind: "place",
-      searchFormId: "placesSearchForm",
-      searchInputId: "placesSearchInput",
-      searchPlaceholder: "Search Google Maps for a place…",
-      searchHint: "Opens Google Maps. To keep a place, add it in Picks — it'll appear here.",
-      heading: "Places to go",
-      empty: "No places saved on this board yet. Add one in Picks — anything that isn't a café or restaurant lands here.",
-      getFilter: () => placeFilter,
-      setFilter: (v) => (placeFilter = v),
-      guide: () => renderGuidePlaces(),
-      guideLabel: "Edinburgh guide",
-    });
-  }
-
-  function renderEats() {
-    renderPlaceTab({
-      kind: "eat",
-      searchFormId: "eatsSearchForm",
-      searchInputId: "eatsSearchInput",
-      searchPlaceholder: "Search restaurants near…",
-      searchHint: 'Opens Google Maps already searching "restaurants near" whatever you type.',
-      heading: "Places to eat",
-      empty: "No food places saved on this board yet. Add a café or restaurant in Picks and it'll appear here.",
-      getFilter: () => eatsFilter,
-      setFilter: (v) => (eatsFilter = v),
-      guide: () => renderGuideEats(),
-      guideLabel: "Edinburgh eats guide",
-      searchTransform: (raw) => `restaurants near ${raw}`,
-    });
-  }
-
-  function renderPlaceTab(cfg) {
-    const mine = picksOfKind(cfg.kind);
-    const board = activeBoard();
-
-    let html = `
-      <form class="search-bar" id="${cfg.searchFormId}">
-        <input type="search" id="${cfg.searchInputId}" placeholder="${esc(cfg.searchPlaceholder)}" autocomplete="off" />
-        <button type="submit" aria-label="Search on Google Maps">🔍</button>
-      </form>
-      <p class="search-hint">${esc(cfg.searchHint)}</p>
-    `;
-
-    // Folders are the board's own, so the chips match how this user files
-    // things rather than three hardcoded Scottish cities.
-    const folders = ["All"];
-    mine.forEach((p) => {
-      const f = p.city || "Unsorted";
-      if (!folders.includes(f)) folders.push(f);
-    });
-    // Read through a getter, never a snapshot: this function re-renders
-    // itself, and a captured value would be one tap out of date forever.
-    const current = cfg.getFilter();
-    const active = folders.includes(current) ? current : "All";
-
-    if (folders.length > 2) {
-      html += `<div class="filter-row">`;
-      folders.forEach((f) => {
-        html += `<button class="filter-chip ${f === active ? "active" : ""}" data-city="${esc(f)}">${esc(f)}</button>`;
-      });
-      html += `</div>`;
-    }
-
-    const filtered = mine.filter((p) => active === "All" || (p.city || "Unsorted") === active);
-    const sortKey = loadSort();
-    const origin = sortKey === "near" ? sortOrigin() : null;
-    const list = sortPicks(filtered, sortKey, origin);
-
-    html += `<div class="section-label">${esc(cfg.heading)}${
-      mine.length ? ` · ${list.length}` : ""
-    }</div>`;
-
-    // Sorting only earns its space once there is enough to sort.
-    if (list.length > 2) {
-      html += `<div class="sort-row">${SORTS.map(
-        (s) =>
-          `<button class="map-chip${s.key === sortKey ? " on" : ""}" data-sort="${s.key}">${esc(
-            s.label
-          )}</button>`
-      ).join("")}</div>`;
-    }
-
-    if (!list.length) {
-      html += `<div class="card"><p class="pick-status">${esc(cfg.empty)}</p>
-        <button class="modal-btn modal-btn-primary" data-goto-picks="1" style="margin-top:12px;">＋ Add a place</button></div>`;
-    } else {
-      list.forEach((p) => {
-        const away =
-          origin && p.lat != null && p.id !== origin.id
-            ? formatDistance(haversineKm(origin.lat, origin.lon, p.lat, p.lon))
-            : null;
-        html += renderPickRow(p, away);
-      });
-      html += `<button class="modal-btn" data-goto-picks="1" style="width:100%;margin-top:12px;">＋ Add another</button>`;
-    }
-
-    // The bundled guide is suggestions, not the user's list, so it sits below
-    // their own places and only on the board that came with it.
-    if (board.hasGuide) {
-      html += `<div class="section-label">${esc(cfg.guideLabel)}</div>`;
-      html += cfg.guide();
-    }
-
-    view.innerHTML = html;
-
-    view.querySelectorAll("[data-city]").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        cfg.setFilter(btn.getAttribute("data-city"));
-        renderPlaceTab(cfg);
-      });
-    });
-
-    view.querySelectorAll("[data-goto-picks]").forEach((btn) =>
-      btn.addEventListener("click", () => showView("picks"))
-    );
-
-    view.querySelectorAll("[data-sort]").forEach((btn) =>
-      btn.addEventListener("click", () => {
-        saveSort(btn.getAttribute("data-sort"));
-        renderPlaceTab(cfg);
-      })
-    );
-
-    // Guide entries open the same sheet a search result does, so everything
-    // on this screen behaves the same way.
-    view.querySelectorAll("[data-preview-guide]").forEach((btn) =>
-      btn.addEventListener("click", () => {
-        const [source, index] = btn.getAttribute("data-preview-guide").split("|");
-        openGuidePreview(source, Number(index));
-      })
-    );
-
-    view.querySelectorAll("[data-open-pick]").forEach((row) =>
-      row.addEventListener("click", () => openPickDetail(row.getAttribute("data-open-pick")))
-    );
-
-    wirePickToggles(() => renderPlaceTab(cfg));
-    wireSearchBar(cfg.searchFormId, cfg.searchInputId, cfg.searchTransform);
-  }
+  // renderPlaces / renderEats / renderPlaceTab lived here. They rendered the
+  // same saved list the Picks tab does, filtered by kind, with their own
+  // folder chips and sort row - a second and third implementation of one
+  // screen. Picks absorbed the filter, the sorting and the guide, so they are
+  // gone rather than left as an unreachable copy that drifts out of step.
 
   // A guide entry rendered the same way a saved place is: tappable body that
   // opens the full details, one control on the right. Previously these were
@@ -4566,16 +4547,19 @@
       });
     });
 
+    // Was a window.prompt - a system dialog in the wrong font, labelled with
+    // the page origin, for a task the app already has a proper field for.
+    // This reuses the folder sheet, so naming a new folder looks the same
+    // wherever you do it.
     placeModal.querySelectorAll("[data-new-folder-for]").forEach((btn) => {
       btn.addEventListener("click", () => {
         const id = btn.getAttribute("data-new-folder-for");
-        const name = prompt("New folder name");
-        const created = addFolder(name);
-        if (!created) return;
-        setPickCity(id, created);
-        closePlaceModal();
-        renderPicks();
-        toast(`Moved to ${created}`);
+        const p = loadPicks().find((x) => x.id === id);
+        openFolderPicker(p ? p.name : "this place", p ? p.city : null, (folder) => {
+          setPickCity(id, folder);
+          renderPicks();
+          toast(`Moved to ${folder}`);
+        });
       });
     });
 
@@ -4590,12 +4574,10 @@
 
     placeModal.querySelectorAll("[data-remove-pick]").forEach((btn) => {
       btn.addEventListener("click", () => {
-        const id = btn.getAttribute("data-remove-pick");
-        const removed = loadPicks().find((x) => x.id === id);
-        removePick(id);
         closePlaceModal();
-        renderPicks();
-        toast(`Removed ${removed ? removed.name : "pick"}`);
+        removePickWithUndo(btn.getAttribute("data-remove-pick"), () =>
+          showView(view.dataset.activeTab || "picks")
+        );
       });
     });
   }
@@ -5781,8 +5763,30 @@
     if (view.dataset.activeTab === "picks") renderPicks();
   }
 
+  // Places and Eats used to be tabs of their own. They were never separate
+  // collections - both read the same saved list and split it with a regex over
+  // the category text - so the app offered three destinations for one thing and
+  // spent three of its eight tab slots saying so. Eight tabs on a 390px screen
+  // is a 48px target with the label shrunk to fit; the guidance is five.
+  //
+  // They are a filter here instead. Same lists, same rows, one destination.
+  let pickKindFilter = "all";
+  let guideOpen = false;
+  const KIND_FILTERS = [
+    { key: "all", label: "All" },
+    { key: "place", label: "🏛️ To do" },
+    { key: "eat", label: "🍽️ Eat" },
+  ];
+
+  // Entry point for the old Places/Eats routes: same screen, filter preset.
+  function renderPicksFiltered(kind) {
+    pickKindFilter = kind;
+    renderPicks();
+  }
+
   function renderPicks() {
-    const picks = loadPicks();
+    const all = loadPicks();
+    const picks = pickKindFilter === "all" ? all : all.filter((p) => p.major || pickKind(p) === pickKindFilter);
 
     let html = `
       <button class="search-trigger" id="pickSearchTrigger">
@@ -5792,7 +5796,21 @@
       ${renderExplore()}
     `;
 
-    if (picks.length === 0) {
+    // Only worth showing once there is a mix to separate. A filter over four
+    // places that are all cafés is a control that can only ever hide things.
+    // Also shown whenever a filter is already on, so an active filter can
+    // never be the reason its own control is hidden.
+    const kinds = new Set(all.filter((p) => !p.major).map((p) => pickKind(p)));
+    if (kinds.size > 1 || pickKindFilter !== "all") {
+      html += `<div class="filter-row kind-row">${KIND_FILTERS.map(
+        (k) =>
+          `<button class="filter-chip${k.key === pickKindFilter ? " active" : ""}" data-pick-kind-filter="${k.key}">${
+            k.label
+          }</button>`
+      ).join("")}</div>`;
+    }
+
+    if (all.length === 0) {
       // Guidance belongs here, where it's actually needed, rather than
       // permanently occupying the top of the screen once you know the app.
       html += `
@@ -5805,9 +5823,11 @@
             <li><b>Explore around a place</b> — cafés, museums, playgrounds nearby</li>
           </ul>
           <button class="modal-btn modal-btn-primary" data-open-search="1" style="width:100%;margin-top:12px;">🔍 Search for a place</button>
-          <p class="settings-hint">Tapping ♡ in Places or Eats saves things here too.</p>
+          <p class="settings-hint">Tapping ♡ on a guide suggestion below saves it here too.</p>
         </div>
       `;
+    } else if (!picks.length) {
+      html += `<div class="card"><p class="pick-status">Nothing saved under that filter yet.</p></div>`;
     } else {
       html += `<button class="hero-share" id="sharePicks" style="color:var(--navy);border-color:var(--line);background:var(--card);margin:16px 0;">↗ Share my picks</button>`;
 
@@ -5836,21 +5856,91 @@
         (groups[p.city] || groups.Unsorted).push(p);
       });
 
+      // Sorting came across from the Places tab. It applies within each
+      // section rather than flattening the list, so the areas keep their
+      // shape and "Nearest" still means something inside a town.
+      const sortKey = loadSort();
+      const origin = sortKey === "near" ? sortOrigin() : null;
+      if (picks.length > 2) {
+        html += `<div class="sort-row">${SORTS.map(
+          (s) => `<button class="sort-chip${s.key === sortKey ? " on" : ""}" data-sort="${s.key}">${esc(s.label)}</button>`
+        ).join("")}</div>`;
+      }
+
       sectionOrder.forEach((city) => {
         const major = majorByName[city];
         if (!groups[city].length && !major) return;
         html += major
           ? renderMajorHeader(major, groups[city].length)
           : `<div class="section-label">${esc(city)}</div>`;
-        groups[city].forEach((p) => {
-          html += renderPickRow(p);
+        sortPicks(groups[city], sortKey, origin).forEach((p) => {
+          const away =
+            origin && p.lat != null && p.id !== origin.id
+              ? formatDistance(haversineKm(origin.lat, origin.lon, p.lat, p.lon))
+              : null;
+          html += renderPickRow(p, away);
         });
       });
+    }
+
+    // The bundled guide came across too, collapsed. It is suggestions rather
+    // than your list, so it sits at the bottom and stays out of the way until
+    // asked for - the same bargain Explore makes at the top.
+    const board = activeBoard();
+    if (board.hasGuide) {
+      html += `
+        <div class="card" style="margin-top:16px;">
+          <div class="explore-head" id="guideToggle">
+            <b>📖 Edinburgh guide</b>
+            <span class="chevron">${guideOpen ? "▼" : "▶"}</span>
+          </div>
+          ${
+            guideOpen
+              ? `<p class="search-hint">Suggestions that came with this trip. Tap ♡ to save one into your list.</p>` +
+                (pickKindFilter !== "eat" ? renderGuidePlaces() : "") +
+                (pickKindFilter !== "place" ? renderGuideEats() : "")
+              : ""
+          }
+        </div>
+      `;
     }
 
     destroyMiniMaps();
     view.innerHTML = html;
     wireExplore();
+
+    view.querySelectorAll("[data-pick-kind-filter]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        pickKindFilter = btn.getAttribute("data-pick-kind-filter");
+        renderPicks();
+      });
+    });
+
+    view.querySelectorAll("[data-sort]").forEach((btn) =>
+      btn.addEventListener("click", () => {
+        saveSort(btn.getAttribute("data-sort"));
+        renderPicks();
+      })
+    );
+
+    const guideToggle = document.getElementById("guideToggle");
+    if (guideToggle) {
+      guideToggle.addEventListener("click", () => {
+        guideOpen = !guideOpen;
+        renderPicks();
+      });
+    }
+
+    // Guide entries open the same sheet a search result does, and the ♡ saves
+    // one straight into the list - both exactly as they behaved on the tabs
+    // these came from.
+    view.querySelectorAll("[data-preview-guide]").forEach((btn) =>
+      btn.addEventListener("click", () => {
+        const [source, index] = btn.getAttribute("data-preview-guide").split("|");
+        openGuidePreview(source, Number(index));
+      })
+    );
+    wirePickToggles(renderPicks);
 
     // Search has its own screen now - these are just the ways in.
     const searchTrigger = document.getElementById("pickSearchTrigger");
@@ -5931,8 +6021,7 @@
 
     view.querySelectorAll("[data-remove-pick]").forEach((btn) => {
       btn.addEventListener("click", () => {
-        removePick(btn.getAttribute("data-remove-pick"));
-        renderPicks();
+        removePickWithUndo(btn.getAttribute("data-remove-pick"), renderPicks);
       });
     });
 
@@ -6359,8 +6448,12 @@
       },
     },
     itinerary: { render: renderItinerary, sub: () => "Your day-by-day plan" },
-    places: { render: renderPlaces, sub: () => `${picksOfKind("place").length} places to go` },
-    eats: { render: renderEats, sub: () => `${picksOfKind("eat").length} places to eat` },
+    // places/eats are no longer destinations of their own, but anything still
+    // asking for them - the hardware-back history, a "＋ Add a place" button
+    // saved in someone's muscle memory - lands on the same list with that
+    // filter applied, rather than on an error.
+    places: { render: () => renderPicksFiltered("place"), sub: () => `${picksOfKind("place").length} places to go` },
+    eats: { render: () => renderPicksFiltered("eat"), sub: () => `${picksOfKind("eat").length} places to eat` },
     picks: { render: renderPicks, sub: () => "Everything you've saved" },
     budget: { render: renderBudget, sub: () => "What this is costing" },
     tips: { render: renderTips, sub: () => "Notes & packing" },
@@ -6376,6 +6469,8 @@
       itinerary: true,
       picks: true,
       overview: true,
+      // Reachable as views, but no longer tabs - there are no buttons for
+      // these to hide or show.
       places: true,
       eats: true,
       budget: true,
@@ -6627,9 +6722,10 @@
   if (shareReceiver) {
     shareReceiver.addListener("sharedPlace", handleSharedPlace);
   } else if (window.Capacitor) {
-    // TEMPORARY DIAGNOSTIC (share-debug-3) - remove once the share flow is
-    // confirmed working end to end. Only fires on native (Capacitor present).
-    alert("share-debug-3: ShareReceiver plugin not found on window.Capacitor.Plugins");
+    // Was a native alert() carrying the string "share-debug-3" - a diagnostic
+    // that shipped. There is nothing a user can do about a missing plugin, and
+    // sharing is not why they opened the app, so this belongs in the log.
+    console.warn("ShareReceiver plugin not found on window.Capacitor.Plugins — sharing into the app will not work.");
   }
 
   const settingsBtn = document.getElementById("settingsBtn");

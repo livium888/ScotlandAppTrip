@@ -606,6 +606,11 @@ body {
 }
 .sort-row::-webkit-scrollbar { display: none; }
 
+/* What used to be two whole tabs. Three chips wide enough to hit, sitting
+   above the list they filter rather than beside it in the tab bar. */
+.kind-row { margin: 14px 0 4px; }
+.kind-row .filter-chip { flex: 1; text-align: center; padding: 9px 8px; }
+
 /* ---- Suggestions while you type ----
    Sits directly under the field it belongs to, as a list rather than a
    floating layer: on a phone there is nothing to float over, and a popup
@@ -1185,6 +1190,26 @@ body {
   min-height: 34px;
 }
 .map-chip.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+  font-weight: 600;
+}
+/* Looks like a map chip, but is not one: the sort row now sits on the same
+   screen the map opens over, and a shared class made "every chip on the page"
+   mean two different sets of controls. */
+.sort-chip {
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 7px 14px;
+  font-size: 13px;
+  font-family: inherit;
+  min-height: 34px;
+}
+.sort-chip.on {
   background: var(--accent);
   border-color: var(--accent);
   color: var(--on-accent);
