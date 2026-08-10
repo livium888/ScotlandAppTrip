@@ -126,10 +126,14 @@ const browser = await chromium.launch(LAUNCH_OPTS);
   const centreText = await page.evaluate(() => document.getElementById('view').textContent);
   check('centre set from search', /Around\s*Edinburgh Castle/.test(centreText.replace(/\s+/g,' ')), centreText.slice(0, 200));
 
-  const cats = await page.evaluate(() => Array.from(document.querySelectorAll('[data-explore-cat]')).map(b => b.getAttribute('data-explore-cat')));
+  // Categories live behind one button now rather than a sideways-scrolling
+  // row, so everything is visible at once when you go looking.
+  await page.click('#exploreCatBtn');
+  await page.waitForSelector('[data-choose-cat]', { timeout: 3000 });
+  const cats = await page.evaluate(() => Array.from(document.querySelectorAll('[data-choose-cat]')).map(b => b.getAttribute('data-choose-cat')));
   check('categories include restaurant/cafe/playground/museum/attraction', ['restaurant','cafe','playground','museum','attraction'].every(k => cats.includes(k)), JSON.stringify(cats));
 
-  await page.evaluate(() => document.querySelector('[data-explore-cat="cafe"]').click());
+  await page.evaluate(() => document.querySelector('[data-choose-cat="cafe"]').click());
   await page.waitForTimeout(700);
   const resText = await page.evaluate(() => document.getElementById('view').textContent);
   check('results listed', /Castle Cafe/.test(resText), resText.slice(0, 250));

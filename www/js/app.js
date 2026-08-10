@@ -2695,18 +2695,85 @@
 
   // ---------- Explore nearby (Overpass / OpenStreetMap) ----------
 
+  // What you can go looking for. Since the AI does the finding, a category is
+  // really just a well-phrased question - which means the list can cover
+  // things OpenStreetMap has no tag for at all ("soft play", "somewhere
+  // healthy", "indoors when it's raining"). `tag`/`value` is only the
+  // fallback used when the AI is unavailable, so some categories fall back to
+  // something broader and say so rather than pretending.
   const NEARBY_CATEGORIES = [
-    { key: "restaurant", label: "Restaurants", icon: "🍽️", tag: "amenity", value: "restaurant" },
-    { key: "cafe", label: "Cafes", icon: "☕", tag: "amenity", value: "cafe" },
-    { key: "parking", label: "Car parks", icon: "🅿️", tag: "amenity", value: "parking" },
-    { key: "museum", label: "Museums", icon: "🏛️", tag: "tourism", value: "museum" },
-    { key: "attraction", label: "Attractions", icon: "🎡", tag: "tourism", value: "attraction" },
-    { key: "playground", label: "Playgrounds", icon: "🛝", tag: "leisure", value: "playground" },
-    { key: "park", label: "Parks", icon: "🌳", tag: "leisure", value: "park" },
-    { key: "toilets", label: "Toilets", icon: "🚻", tag: "amenity", value: "toilets" },
-    { key: "pharmacy", label: "Pharmacies", icon: "💊", tag: "amenity", value: "pharmacy" },
-    { key: "supermarket", label: "Supermarkets", icon: "🛒", tag: "shop", value: "supermarket" },
+    // Eating
+    { key: "healthy", label: "Healthy food", icon: "🥗", group: "Food & drink", tag: "amenity", value: "restaurant", approx: true,
+      prompt: "healthy places to eat - salads, grain bowls, fresh and vegetable-forward cooking, good vegetarian options" },
+    { key: "kidfriendly", label: "Good with kids", icon: "👶", group: "Food & drink", tag: "amenity", value: "restaurant", approx: true,
+      prompt: "restaurants that genuinely welcome young children - children's menu, high chairs, relaxed about noise, quick service" },
+    { key: "cafe", label: "Cafés", icon: "☕", group: "Food & drink", tag: "amenity", value: "cafe",
+      prompt: "cafés good for a coffee and a sit down" },
+    { key: "brunch", label: "Breakfast & brunch", icon: "🥞", group: "Food & drink", tag: "amenity", value: "cafe", approx: true,
+      prompt: "places serving breakfast or brunch" },
+    { key: "bakery", label: "Bakeries", icon: "🥐", group: "Food & drink", tag: "shop", value: "bakery",
+      prompt: "bakeries worth a detour - bread, pastries, cakes" },
+    { key: "icecream", label: "Ice cream", icon: "🍦", group: "Food & drink", tag: "amenity", value: "ice_cream",
+      prompt: "ice cream shops and gelaterias" },
+    { key: "restaurant", label: "Restaurants", icon: "🍽️", group: "Food & drink", tag: "amenity", value: "restaurant",
+      prompt: "well-regarded independent restaurants" },
+    { key: "pub", label: "Pubs", icon: "🍺", group: "Food & drink", tag: "amenity", value: "pub",
+      prompt: "pubs that serve food and allow children" },
+
+    // With a small child in tow
+    { key: "softplay", label: "Soft play", icon: "🧸", group: "With a child", tag: "leisure", value: "playground", approx: true,
+      prompt: "indoor soft play centres and indoor play barns for young children" },
+    { key: "playground", label: "Playgrounds", icon: "🛝", group: "With a child", tag: "leisure", value: "playground",
+      prompt: "outdoor playgrounds" },
+    { key: "rainy", label: "Indoors if it rains", icon: "🌧️", group: "With a child", tag: "tourism", value: "museum", approx: true,
+      prompt: "indoor things to do with a young child on a wet day - hands-on museums, aquariums, indoor attractions" },
+    { key: "animals", label: "Animals & farms", icon: "🐑", group: "With a child", tag: "tourism", value: "attraction", approx: true,
+      prompt: "farms, animal parks, aquariums or zoos where a young child can see animals" },
+    { key: "swim", label: "Swimming", icon: "🏊", group: "With a child", tag: "leisure", value: "swimming_pool",
+      prompt: "public swimming pools, ideally with a shallow or toddler pool" },
+    { key: "library", label: "Libraries", icon: "📚", group: "With a child", tag: "amenity", value: "library",
+      prompt: "public libraries, especially ones with a children's section" },
+
+    // Seeing things
+    { key: "museum", label: "Museums", icon: "🏛️", group: "See & do", tag: "tourism", value: "museum",
+      prompt: "museums" },
+    { key: "attraction", label: "Attractions", icon: "🎡", group: "See & do", tag: "tourism", value: "attraction",
+      prompt: "visitor attractions worth the trip" },
+    { key: "gallery", label: "Galleries", icon: "🖼️", group: "See & do", tag: "tourism", value: "gallery",
+      prompt: "art galleries" },
+    { key: "historic", label: "Historic sites", icon: "🏰", group: "See & do", tag: "historic", value: "castle", approx: true,
+      prompt: "castles, ruins and historic buildings open to visitors" },
+    { key: "viewpoint", label: "Views", icon: "🌄", group: "See & do", tag: "tourism", value: "viewpoint",
+      prompt: "viewpoints and lookouts worth walking to" },
+    { key: "market", label: "Markets", icon: "🧺", group: "See & do", tag: "amenity", value: "marketplace",
+      prompt: "markets - food, farmers' or street markets" },
+
+    // Outside
+    { key: "park", label: "Parks", icon: "🌳", group: "Outdoors", tag: "leisure", value: "park",
+      prompt: "parks and green spaces" },
+    { key: "walk", label: "Easy walks", icon: "🚶", group: "Outdoors", tag: "leisure", value: "park", approx: true,
+      prompt: "short, easy, mostly flat walks a four-year-old could manage" },
+    { key: "garden", label: "Gardens", icon: "🌷", group: "Outdoors", tag: "leisure", value: "garden",
+      prompt: "botanic gardens and gardens open to the public" },
+    { key: "beach", label: "Beaches", icon: "🏖️", group: "Outdoors", tag: "natural", value: "beach",
+      prompt: "beaches and swimmable or walkable shoreline" },
+
+    // The unglamorous but necessary
+    { key: "parking", label: "Car parks", icon: "🅿️", group: "Practical", tag: "amenity", value: "parking",
+      prompt: "car parks" },
+    { key: "toilets", label: "Toilets", icon: "🚻", group: "Practical", tag: "amenity", value: "toilets",
+      prompt: "public toilets, noting any with baby-changing facilities" },
+    { key: "pharmacy", label: "Pharmacies", icon: "💊", group: "Practical", tag: "amenity", value: "pharmacy",
+      prompt: "pharmacies" },
+    { key: "supermarket", label: "Supermarkets", icon: "🛒", group: "Practical", tag: "shop", value: "supermarket",
+      prompt: "supermarkets and food shops" },
   ];
+
+  const CATEGORY_GROUPS = ["Food & drink", "With a child", "See & do", "Outdoors", "Practical"];
+
+  function findCategory(key) {
+    return NEARBY_CATEGORIES.find((c) => c.key === key) || null;
+  }
 
   // ---------- Explore: pick a centre, then browse by category ----------
   // The per-pick "explore nearby" only works from somewhere already saved.
@@ -2717,6 +2784,7 @@
     open: false,
     centre: null, // { name, lat, lon }
     category: "",
+    customQuery: "", // used when category === "custom"
     radius: 1500,
     status: "idle", // idle | locating | loading | done | error
     results: [],
@@ -2805,17 +2873,24 @@
   // cafés and restaurants are the least-mapped things in it - so the model
   // names candidates and OSM is then used only to place them.
   async function exploreWithGemini(centre, category, radiusMetres, key) {
-    const cat = NEARBY_CATEGORIES.find((c) => c.key === category);
+    const cat = findCategory(category);
     const s = loadTripSettings();
     const who = s.travellers.trim() ? `\nTravellers: ${s.travellers.trim()}` : "";
     const distance = radiusMetres >= 1000 ? `${radiusMetres / 1000} km` : `${radiusMetres} m`;
+    // The category's own phrasing is the question. It's written as a
+    // description rather than a label ("healthy places to eat - salads,
+    // grain bowls…") because that's what makes the model return the right
+    // sort of place rather than the nearest twelve restaurants.
+    const looking =
+      category === "custom" ? explore.customQuery : cat ? cat.prompt : String(category);
 
     const prompt =
-      `List up to 6 real, currently-open ${cat ? cat.label.toLowerCase() : category} within about ` +
-      `${distance} of ${centre.name}.${who}\n\n` +
-      `Use search to confirm each one exists and is still trading. Reply with ONLY a JSON array, ` +
+      `List up to 6 real, currently-open places matching: ${looking}. ` +
+      `They must be within about ${distance} of ${centre.name}.${who}\n\n` +
+      `Use search to confirm each one exists and is still trading. Prefer independent, ` +
+      `well-regarded places over chains. Reply with ONLY a JSON array, ` +
       `each item {"name": exact official name, "area": street or neighbourhood, ` +
-      `"why": one short sentence}. No other text.`;
+      `"why": one short sentence saying why it fits}. No other text.`;
 
     const { text, sources } = await callGemini(key, prompt, { grounded: true });
     const parsed = extractJson(text);
@@ -2883,13 +2958,23 @@
       }
     }
 
+    // Without the AI there's no category for "somewhere healthy" - OSM has no
+    // such tag. A described search falls back to a plain name search bounded
+    // to the area; a listed category falls back to its nearest real tag.
     try {
-      explore.results = await overpassNearby(
-        explore.centre.lat,
-        explore.centre.lon,
-        NEARBY_CATEGORIES.find((c) => c.key === explore.category),
-        explore.radius
-      );
+      if (explore.category === "custom") {
+        explore.results = await nominatimNear(explore.customQuery, explore.centre, explore.radius);
+        if (!explore.results.length && !explore.error) {
+          explore.error = "Described searches work best with an AI key set in Settings.";
+        }
+      } else {
+        explore.results = await overpassNearby(
+          explore.centre.lat,
+          explore.centre.lon,
+          findCategory(explore.category),
+          explore.radius
+        );
+      }
       explore.status = "done";
     } catch (e) {
       explore.status = "error";
@@ -2898,13 +2983,118 @@
     renderPicks();
   }
 
+  // A free-text search confined to a box around the centre. Cruder than the
+  // AI - it matches names, not meaning - but it keeps a described search from
+  // returning nothing at all when no key is set or the model is down.
+  async function nominatimNear(query, centre, radiusMetres) {
+    const dLat = radiusMetres / 111000;
+    const dLon = radiusMetres / (111000 * Math.max(0.2, Math.cos((centre.lat * Math.PI) / 180)));
+    const viewbox = [centre.lon - dLon, centre.lat + dLat, centre.lon + dLon, centre.lat - dLat].join(",");
+    const url =
+      `https://nominatim.openstreetmap.org/search?format=json&limit=10&bounded=1` +
+      `&viewbox=${encodeURIComponent(viewbox)}&extratags=1&namedetails=1&q=${encodeURIComponent(query)}`;
+    const res = await fetch(url, { headers: { Accept: "application/json" } });
+    if (!res.ok) throw new Error(`Nominatim returned ${res.status}`);
+    const rows = await res.json();
+    return (Array.isArray(rows) ? rows : [])
+      .map((r) => ({
+        name: (r.namedetails && r.namedetails.name) || String(r.display_name || "").split(",")[0],
+        lat: Number(r.lat),
+        lon: Number(r.lon),
+        website: (r.extratags && (r.extratags.website || r.extratags["contact:website"])) || null,
+        openingHours: (r.extratags && r.extratags.opening_hours) || null,
+        description: r.display_name || "",
+      }))
+      .filter((r) => r.name && Number.isFinite(r.lat));
+  }
+
+  // One button that opens the full list, rather than a row of chips scrolled
+  // sideways past the edge of the screen. A native <select> would have been
+  // the obvious "dropdown", but on Android it opens its own full-screen
+  // picker with no icons and no grouping - the same thing we took out of the
+  // planner. This shows everything at once, grouped, and closes on choosing.
+  function renderExploreCategoryButton() {
+    const cat = findCategory(explore.category);
+    const label = explore.category === "custom" ? `🔎 ${explore.customQuery}` : cat ? `${cat.icon} ${cat.label}` : "";
+    return `
+      <button class="cat-select" id="exploreCatBtn">
+        <span class="cat-select-text">${label ? esc(label) : "What are you looking for?"}</span>
+        <span class="cat-select-caret">⌄</span>
+      </button>
+    `;
+  }
+
+  function openCategoryPicker() {
+    const groups = CATEGORY_GROUPS.map((g) => {
+      const items = NEARBY_CATEGORIES.filter((c) => c.group === g);
+      if (!items.length) return "";
+      return `
+        <div class="cat-group-label">${esc(g)}</div>
+        <div class="cat-grid">
+          ${items
+            .map(
+              (c) => `
+            <button class="cat-tile${explore.category === c.key ? " on" : ""}" data-choose-cat="${esc(c.key)}">
+              <span class="cat-tile-icon">${c.icon}</span>
+              <span class="cat-tile-label">${esc(c.label)}</span>
+            </button>
+          `
+            )
+            .join("")}
+        </div>
+      `;
+    }).join("");
+
+    placeModal.innerHTML = `
+      <div class="modal-backdrop" data-close="1">
+        <div class="modal-sheet" role="dialog" aria-label="What are you looking for?">
+          <div class="modal-handle"></div>
+          <button class="modal-close" data-close="1" aria-label="Close">✕</button>
+          <div class="modal-body">
+            <h2 class="modal-title">What are you looking for?</h2>
+            <form class="search-bar" id="catCustomForm" style="margin:12px 0 4px;">
+              <input type="text" id="catCustomInput" placeholder="Describe it — e.g. vegan lunch with a garden"
+                     autocomplete="off" value="${explore.category === "custom" ? esc(explore.customQuery) : ""}" />
+              <button type="submit" aria-label="Search that">🔍</button>
+            </form>
+            <p class="settings-hint">Anything you can describe, the AI search will look for.</p>
+            ${groups}
+          </div>
+        </div>
+      </div>
+    `;
+    placeModal.classList.add("open");
+
+    placeModal.querySelectorAll("[data-close]").forEach((el) => {
+      el.addEventListener("click", (e) => {
+        if (e.target === el) closePlaceModal();
+      });
+    });
+
+    placeModal.querySelectorAll("[data-choose-cat]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        explore.category = btn.getAttribute("data-choose-cat");
+        explore.customQuery = "";
+        closePlaceModal();
+        runExplore();
+      });
+    });
+
+    const form = document.getElementById("catCustomForm");
+    if (form) {
+      form.addEventListener("submit", (e) => {
+        e.preventDefault();
+        const q = document.getElementById("catCustomInput").value.trim();
+        if (!q) return;
+        explore.category = "custom";
+        explore.customQuery = q;
+        closePlaceModal();
+        runExplore();
+      });
+    }
+  }
+
   function renderExplore() {
-    const cats = NEARBY_CATEGORIES.map(
-      (c) =>
-        `<button class="filter-chip${explore.category === c.key ? " active" : ""}" data-explore-cat="${c.key}">${
-          c.icon
-        } ${esc(c.label)}</button>`
-    ).join("");
 
     const pickOptions = loadPicks()
       .filter((p) => p.lat != null)
@@ -2924,7 +3114,7 @@
 
     if (explore.centre) {
       body += `<p class="explore-centre">Around <b>${esc(explore.centre.name)}</b></p>`;
-      body += `<div class="filter-row">${cats}</div>`;
+      body += renderExploreCategoryButton();
       body += `
         <div class="explore-radius">
           <label for="exploreRadius">Within</label>
@@ -3037,12 +3227,9 @@
         if (explore.category) runExplore();
       });
     }
-    view.querySelectorAll("[data-explore-cat]").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        explore.category = btn.getAttribute("data-explore-cat");
-        runExplore();
-      });
-    });
+    const catBtn = document.getElementById("exploreCatBtn");
+    if (catBtn) catBtn.addEventListener("click", openCategoryPicker);
+
     view.querySelectorAll("[data-explore-add]").forEach((btn) => {
       btn.addEventListener("click", () => {
         const r = explore.results[Number(btn.getAttribute("data-explore-add"))];
@@ -3063,12 +3250,9 @@
   }
 
   function catLabel(key) {
-    const c = NEARBY_CATEGORIES.find((x) => x.key === key);
+    if (key === "custom") return explore.customQuery || "Places";
+    const c = findCategory(key);
     return c ? c.label : "Places";
-  }
-
-  function nearbyMapElId(pickId) {
-    return "nearbymap-" + pickId.replace(/[^a-zA-Z0-9]/g, "_");
   }
 
   // Overpass (OpenStreetMap's "find everything of type X near here" API) -
@@ -3127,79 +3311,6 @@
       .filter(Boolean)
       .sort((a, b) => haversineKm(lat, lon, a.lat, a.lon) - haversineKm(lat, lon, b.lat, b.lon))
       .slice(0, 12);
-  }
-
-  let nearbyState = {};
-
-  function getNearby(pickId) {
-    if (!nearbyState[pickId]) nearbyState[pickId] = { open: false, category: null, status: "idle", results: [] };
-    return nearbyState[pickId];
-  }
-
-  function initNearbyMap(pick, results) {
-    const el = document.getElementById(nearbyMapElId(pick.id));
-    if (!el) return;
-    const map = L.map(el, { scrollWheelZoom: false });
-    pickMiniMaps.push(map);
-    addTileLayer(map);
-    L.marker([pick.lat, pick.lon], {
-      icon: L.divIcon({ className: "center-marker", html: "★", iconSize: [24, 24], iconAnchor: [12, 12] }),
-    }).addTo(map);
-    results.forEach((r, i) => {
-      L.marker([r.lat, r.lon]).addTo(map).bindTooltip(`${i + 1}. ${r.name}`);
-    });
-    const bounds = L.latLngBounds([[pick.lat, pick.lon], ...results.map((r) => [r.lat, r.lon])]);
-    map.fitBounds(bounds.pad(0.2));
-  }
-
-  function renderNearbyPanel(p) {
-    if (p.lat == null) {
-      return `<p class="pick-status" style="padding:0 16px 16px;">Getting location for "explore nearby"…</p>`;
-    }
-    const state = getNearby(p.id);
-    let html = `<div class="nearby-panel">`;
-    html += `<button class="nearby-toggle" data-nearby-toggle="${esc(p.id)}">🔎 ${state.open ? "Hide nearby search" : "Explore nearby"}</button>`;
-    if (state.open) {
-      html += `<div class="filter-row" style="padding:0 16px 10px;">`;
-      NEARBY_CATEGORIES.forEach((c) => {
-        html += `<button class="filter-chip${state.category === c.key ? " active" : ""}" data-nearby-cat="${esc(p.id)}|${c.key}">${c.icon} ${esc(c.label)}</button>`;
-      });
-      html += `</div>`;
-
-      if (state.category) {
-        if (state.status === "loading") {
-          html += `<p class="pick-status" style="padding:0 16px 16px;">Searching OpenStreetMap for ${esc(catLabel(state.category)).toLowerCase()} nearby…</p>`;
-        } else if (state.status === "error") {
-          html += `
-            <div style="padding:0 16px 16px;">
-              <p class="pick-status">Search failed — the free OpenStreetMap server this uses can be slow or overloaded sometimes. Give it a moment and retry.</p>
-              <button class="candidate-add" data-nearby-cat="${esc(p.id)}|${esc(state.category)}">↻ Retry</button>
-            </div>
-          `;
-        } else if (state.status === "done") {
-          if (!state.results.length) {
-            html += `<p class="pick-status" style="padding:0 16px 16px;">No ${esc(catLabel(state.category)).toLowerCase()} found within ~1.2km.</p>`;
-          } else {
-            html += `<div class="nearby-map" id="${nearbyMapElId(p.id)}"></div>`;
-            state.results.forEach((r, i) => {
-              const distKm = haversineKm(p.lat, p.lon, r.lat, r.lon);
-              const distLabel = distKm < 1 ? `${Math.round(distKm * 1000)} m` : `${distKm.toFixed(1)} km`;
-              html += `
-                <div class="candidate-card">
-                  <div style="flex:1;">
-                    <div class="place-name">${i + 1}. ${esc(r.name)}</div>
-                    <div class="place-notes">${esc(distLabel)} away${r.openingHours ? " · " + esc(r.openingHours) : ""}</div>
-                  </div>
-                  <button class="candidate-add" data-add-nearby="${esc(p.id)}|${i}">+</button>
-                </div>
-              `;
-            });
-          }
-        }
-      }
-    }
-    html += `</div>`;
-    return html;
   }
 
   // A pick in the list is a summary, not a dossier. The card used to render
@@ -4184,47 +4295,6 @@
       // Saved on blur so a re-render can't interrupt typing.
       input.addEventListener("blur", () => {
         updatePick(input.getAttribute("data-pick-note"), { note: input.value.trim() });
-      });
-    });
-
-    view.querySelectorAll("[data-nearby-toggle]").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        getNearby(btn.getAttribute("data-nearby-toggle")).open ^= true;
-        renderPicks();
-      });
-    });
-
-    view.querySelectorAll("[data-nearby-cat]").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        const [id, catKey] = btn.getAttribute("data-nearby-cat").split("|");
-        const pick = loadPicks().find((p) => p.id === id);
-        const cat = NEARBY_CATEGORIES.find((c) => c.key === catKey);
-        if (!pick || !cat) return;
-        const state = getNearby(id);
-        state.category = catKey;
-        state.status = "loading";
-        renderPicks();
-        try {
-          state.results = await overpassNearby(pick.lat, pick.lon, cat);
-          state.status = "done";
-        } catch (e) {
-          state.status = "error";
-        }
-        renderPicks();
-      });
-    });
-
-    view.querySelectorAll("[data-add-nearby]").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const [id, idx] = btn.getAttribute("data-add-nearby").split("|");
-        const state = getNearby(id);
-        const r = state.results[Number(idx)];
-        const parentPick = picks.find((p) => p.id === id);
-        if (!r) return;
-        const candidate = { name: r.name, lat: r.lat, lon: r.lon, type: catLabel(state.category), website: r.website };
-        // Inherit the folder of the pick you were exploring around - that's
-        // almost always where a nearby place belongs.
-        quickAdd(candidate, { folder: (parentPick && parentPick.city) || null });
       });
     });
 

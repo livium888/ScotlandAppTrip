@@ -86,11 +86,16 @@ await page.evaluate(() => document.getElementById('exploreSearchForm').requestSu
 await page.waitForTimeout(800);
 
 // --- Gemini powers the category browse ---
-await page.evaluate(() => document.querySelector('[data-explore-cat="cafe"]').click());
+const chooseCategory = async (key) => {
+  await page.click('#exploreCatBtn');
+  await page.waitForSelector(`[data-choose-cat="${key}"]`, { timeout: 3000 });
+  await page.evaluate((k) => document.querySelector(`[data-choose-cat="${k}"]`).click(), key);
+};
+await chooseCategory('cafe');
 await page.waitForFunction(() => !/Looking for/.test(document.getElementById('view').textContent), { timeout: 20000 });
 await page.waitForTimeout(300);
 
-check('Gemini was asked for the category', /cafes/i.test(promptSeen), promptSeen.slice(0, 80));
+check('Gemini was asked for the category', /caf[eé]s/i.test(promptSeen), promptSeen.slice(0, 80));
 check('traveller context included', /4-year-old/.test(promptSeen));
 check('radius expressed in the prompt', /1\.5 km|1500 m/.test(promptSeen), promptSeen.slice(0, 140));
 check('Overpass not used while Gemini works', overpassCalls === 0, String(overpassCalls));
@@ -114,7 +119,7 @@ check('saved with real coordinates', saved && saved.lat != null, saved && String
 // --- Overpass backs it up when Gemini fails ---
 geminiFail = true;
 overpassCalls = 0;
-await page.evaluate(() => document.querySelector('[data-explore-cat="museum"]').click());
+await chooseCategory('museum');
 await page.waitForFunction(() => !/Looking for/.test(document.getElementById('view').textContent), { timeout: 20000 });
 await page.waitForTimeout(300);
 
