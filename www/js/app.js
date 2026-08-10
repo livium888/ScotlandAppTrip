@@ -4085,23 +4085,14 @@
   }
 
   function openSearchOverlay(prefill) {
-    const wasOpen = searchOverlay.classList.contains("open");
     if (prefill !== undefined) pickSearch = { query: prefill, status: "idle", results: [] };
     renderSearchOverlay();
-    if (!wasOpen) {
-      try {
-        history.pushState({ searchOverlay: true }, "");
-      } catch (e) {
-        /* the ✕ still works */
-      }
-    }
     const input = document.getElementById("pickSearchInput");
     if (input && !prefill) input.focus();
   }
 
   function dismissSearchOverlay() {
-    if (history.state && history.state.searchOverlay) history.back();
-    else closeSearchOverlay();
+    closeSearchOverlay();
   }
 
   function closeSearchOverlay() {
@@ -4502,10 +4493,6 @@
     });
   }
 
-  window.addEventListener("popstate", () => {
-    if (searchOverlay.classList.contains("open")) closeSearchOverlay();
-  });
-
   // Searches Google Places when a key is configured, otherwise OpenStreetMap.
   // Google is used because OSM's community data simply doesn't have many
   // smaller businesses; OSM stays as the no-setup default and the fallback
@@ -4772,30 +4759,13 @@
   }
 
   function openAllMap(filter) {
-    const wasOpen = mapOverlay.classList.contains("open");
     allMapFilter = filter || "all";
     renderAllMap();
-    // A full-screen overlay that Android's back button can't dismiss is a
-    // trap - back would close the whole app. A history entry makes back mean
-    // "close the map" instead, with no extra native code.
-    if (!wasOpen) {
-      try {
-        history.pushState({ mapOverlay: true }, "");
-      } catch (e) {
-        /* file:// origins can refuse pushState; the ✕ still works */
-      }
-    }
   }
 
-  // Closing on purpose unwinds that history entry so back doesn't reopen it.
   function dismissAllMap() {
-    if (history.state && history.state.mapOverlay) history.back();
-    else closeAllMap();
+    closeAllMap();
   }
-
-  window.addEventListener("popstate", () => {
-    if (mapOverlay.classList.contains("open")) closeAllMap();
-  });
 
   function closeAllMap() {
     if (allMap) {
@@ -5770,11 +5740,22 @@
     return ["today", "picks", "itinerary", "overview"].find((n) => visible[n]) || "picks";
   }
 
-  function showView(name) {
+  // Where back should return to. Capped because this is a breadcrumb, not an
+  // undo log - twenty presses to leave would be its own kind of trap.
+  const tabHistory = [];
+  const TAB_HISTORY_MAX = 10;
+
+  function showView(name, opts) {
+    const options = opts || {};
     const visible = applyBoardTabs();
     if (visible[name] === false) name = firstVisibleTab();
     const v = VIEWS[name];
     if (!v) return;
+    const previous = view.dataset.activeTab;
+    if (!options.fromBack && previous && previous !== name) {
+      tabHistory.push(previous);
+      if (tabHistory.length > TAB_HISTORY_MAX) tabHistory.shift();
+    }
     view.dataset.activeTab = name;
     // A throw inside a render used to leave the screen blank with no way back
     // - a real risk mid-trip, where the app failing is worse than any single
@@ -5801,6 +5782,111 @@
   tabbar.querySelectorAll(".tab").forEach((t) => {
     t.addEventListener("click", () => showView(t.getAttribute("data-view")));
   });
+
+  // ---------- The back button ----------
+  // Back was leaving the app from anywhere - press it meaning "out of this
+  // section" and the whole thing closes. A confirmation would stop the
+  // accident, but the better answer is that back should have somewhere to go
+  // first: close what's open, then walk back through the tabs you came
+  // through, and only ask about leaving when there is genuinely nothing left.
+  function handleBackIntent() {
+    if (searchOverlay.classList.contains("open")) {
+      closeSearchOverlay();
+      return true;
+    }
+    if (mapOverlay.classList.contains("open")) {
+      mapPickTarget = null;
+      closeAllMap();
+      return true;
+    }
+    if (placeModal.classList.contains("open")) {
+      previewIndex = null;
+      closePlaceModal();
+      return true;
+    }
+    if (tabHistory.length) {
+      const previous = tabHistory.pop();
+      showView(previous, { fromBack: true });
+      return true;
+    }
+    const home = firstVisibleTab();
+    if (view.dataset.activeTab !== home) {
+      showView(home, { fromBack: true });
+      return true;
+    }
+    return false;
+  }
+
+  let exitConfirmOpen = false;
+
+  function confirmExit() {
+    if (exitConfirmOpen) return;
+    exitConfirmOpen = true;
+    placeModal.innerHTML = `
+      <div class="modal-backdrop" data-close="1">
+        <div class="modal-sheet" role="dialog" aria-label="Leave the app?">
+          <div class="modal-handle"></div>
+          <div class="modal-body">
+            <h2 class="modal-title">Leave the app?</h2>
+            <p class="place-notes">Everything you've saved stays on this phone — you'll come back to it exactly as it is.</p>
+            <div class="settings-btn-row" style="margin-top:16px;">
+              <button class="modal-btn modal-btn-primary" id="stayInApp" style="flex:1;">Stay</button>
+              <button class="modal-btn" id="leaveApp" style="flex:1;">Leave</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+    placeModal.classList.add("open");
+
+    const dismiss = () => {
+      exitConfirmOpen = false;
+      closePlaceModal();
+    };
+    placeModal.querySelectorAll("[data-close]").forEach((el) =>
+      el.addEventListener("click", (e) => {
+        if (e.target === el) dismiss();
+      })
+    );
+    document.getElementById("stayInApp").addEventListener("click", dismiss);
+    document.getElementById("leaveApp").addEventListener("click", () => {
+      exitConfirmOpen = false;
+      closePlaceModal();
+      const app = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App;
+      if (app && app.exitApp) app.exitApp();
+      else window.history.back();
+    });
+  }
+
+  // Native first: with a backButton listener registered, Capacitor stops
+  // closing the activity by itself and hands the press over - which is the
+  // only way to put a question in front of it.
+  const capApp = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App;
+  if (capApp && capApp.addListener) {
+    capApp.addListener("backButton", () => {
+      if (exitConfirmOpen) return; // the sheet is already asking
+      if (!handleBackIntent()) confirmExit();
+    });
+  }
+
+  // In a browser (and in the tests) the same intent arrives as a popstate.
+  function armBackButton() {
+    try {
+      history.pushState({ appNav: true }, "");
+    } catch (e) {
+      /* a file:// origin can refuse pushState; the on-screen ✕ still works */
+    }
+  }
+
+  window.addEventListener("popstate", () => {
+    if (exitConfirmOpen) return;
+    if (!handleBackIntent()) confirmExit();
+    // Put the spare back, so the next press lands here too rather than
+    // walking out of the app.
+    armBackButton();
+  });
+
+  armBackButton();
 
   // ---------- Receiving a share from Google Maps ----------
   // Delivered by the native ShareReceiver plugin (MainActivity.java /

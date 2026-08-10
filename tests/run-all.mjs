@@ -34,6 +34,7 @@ const SUITES = [
   "test_weather.mjs",
   "test_mappick.mjs",
   "test_suggest.mjs",
+  "test_back.mjs",
 ];
 
 const MIME = {
