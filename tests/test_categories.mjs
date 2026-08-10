@@ -91,6 +91,11 @@ check('no horizontal scrolling in the picker', overflows === false);
 
 // --- A category asks the question it claims to ---
 await page.evaluate(() => document.querySelector('[data-choose-cat="healthy"]').click());
+// Choosing a category no longer searches - it sets the question, and Search
+// asks it. That is the whole point of the button existing.
+check('choosing a category does not search on its own', promptSeen === '', promptSeen.slice(0, 80));
+await page.waitForSelector('#exploreRunBtn:not([disabled])', { timeout: 3000 });
+await page.click('#exploreRunBtn');
 await page.waitForFunction(() => !/Looking for/.test(document.getElementById('view').textContent), { timeout: 20000 });
 await page.waitForTimeout(300);
 
@@ -107,6 +112,8 @@ check('results come back', /Green Bowl/.test(await page.evaluate(() => document.
 await page.click('#exploreCatBtn');
 await page.waitForSelector('[data-choose-cat="softplay"]');
 await page.evaluate(() => document.querySelector('[data-choose-cat="softplay"]').click());
+await page.waitForSelector('#exploreRunBtn:not([disabled])', { timeout: 3000 });
+await page.click('#exploreRunBtn');
 await page.waitForFunction(() => !/Looking for/.test(document.getElementById('view').textContent), { timeout: 20000 });
 check('"soft play" asks for indoor play, not a playground', /soft play|indoor play/i.test(promptSeen), promptSeen.slice(0, 160));
 
@@ -115,6 +122,8 @@ await page.click('#exploreCatBtn');
 await page.waitForSelector('#catCustomForm');
 await page.fill('#catCustomInput', 'vegan lunch with a garden');
 await page.evaluate(() => document.getElementById('catCustomForm').requestSubmit());
+await page.waitForSelector('#exploreRunBtn:not([disabled])', { timeout: 3000 });
+await page.click('#exploreRunBtn');
 await page.waitForFunction(() => !/Looking for/.test(document.getElementById('view').textContent), { timeout: 20000 });
 await page.waitForTimeout(200);
 
@@ -133,6 +142,8 @@ await page.click('#exploreCatBtn');
 await page.waitForSelector('#catCustomForm');
 await page.fill('#catCustomInput', 'bookshop');
 await page.evaluate(() => document.getElementById('catCustomForm').requestSubmit());
+await page.waitForSelector('#exploreRunBtn:not([disabled])', { timeout: 3000 });
+await page.click('#exploreRunBtn');
 await page.waitForTimeout(1200);
 check('falls back to a bounded map search, not nothing', nominatimQueries.some((u) => /bounded=1/.test(u) && /bookshop/.test(u)), JSON.stringify(nominatimQueries).slice(0, 200));
 

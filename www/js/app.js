@@ -677,8 +677,11 @@
     return FOOD_HINTS.test(hay) ? "eat" : "place";
   }
 
+  // Major places are deliberately absent: Stirling is not one of the things to
+  // do in Stirling, and listing it among the castles and the soft play is what
+  // made a saved town feel like a mistake rather than a heading.
   function picksOfKind(kind) {
-    return loadPicks().filter((p) => pickKind(p) === kind);
+    return loadPicks().filter((p) => !p.major && pickKind(p) === kind);
   }
 
   // Costs are per place and entirely optional. A trip's real budget question
@@ -765,6 +768,92 @@
     return bestDist <= CITY_MATCH_KM ? best : null;
   }
 
+  // ---------- Major places: somewhere you go *to*, not *in* ----------
+  //
+  // A town, a village, an island. Saving one alongside a café was always the
+  // wrong shape: Stirling isn't a thing to do in Stirling, it's the thing the
+  // day is built around. A major place heads its own section instead of
+  // sitting in one, and it collects what you save near it - so the list reads
+  // as places-within-areas rather than one flat run of names.
+  //
+  // The bundled CITY_COORDS anchors still work exactly as before; these are
+  // the ones you add yourself, for the towns the app was never told about.
+  const MAJOR_PLACE_KINDS =
+    /^(city|town|village|hamlet|suburb|borough|municipality|locality|island|isle|administrative|county|region|province|state)$/i;
+
+  // Nominatim reports these in `type`, Google in `category`, the suggestion
+  // list in `kind` - all of them naming the same idea, so all three are read.
+  function looksLikeMajorPlace(candidate) {
+    if (!candidate) return false;
+    return [candidate.type, candidate.category, candidate.kind]
+      .filter(Boolean)
+      .some((k) => MAJOR_PLACE_KINDS.test(String(k).trim()));
+  }
+
+  // Tighter than CITY_MATCH_KM. These anchors are chosen by hand and can sit
+  // close together, so the radius has to be small enough that the nearest one
+  // wins for an obvious reason rather than by a few hundred metres.
+  const MAJOR_MATCH_KM = 25;
+
+  function nearestMajorPlace(lat, lon) {
+    if (lat == null || lon == null) return null;
+    let best = null;
+    let bestDist = Infinity;
+    loadPicks().forEach((p) => {
+      if (!p.major || p.lat == null) return;
+      const d = haversineKm(lat, lon, p.lat, p.lon);
+      if (d < bestDist) {
+        bestDist = d;
+        best = p;
+      }
+    });
+    return best && bestDist <= MAJOR_MATCH_KM ? best.name : null;
+  }
+
+  // Where a newly saved place belongs: a major place you added yourself first,
+  // then the bundled city anchors. Yours wins because you chose it - the
+  // built-in list only knows Edinburgh, Glasgow and Stirling.
+  function suggestedFolderFor(lat, lon) {
+    return nearestMajorPlace(lat, lon) || nearestCity(lat, lon);
+  }
+
+  // Pulls in what's already saved, unfiled and close by. Deliberately leaves
+  // anything that already has a folder alone: that folder was either chosen by
+  // hand or accepted at save time, and silently rearranging someone's own
+  // organisation is worse than leaving a place in the wrong section.
+  function adoptNearbyUnfiled(majorPick, picks) {
+    if (!majorPick || majorPick.lat == null) return 0;
+    let adopted = 0;
+    picks.forEach((other) => {
+      if (other.id === majorPick.id || other.major || other.city || other.lat == null) return;
+      if (haversineKm(other.lat, other.lon, majorPick.lat, majorPick.lon) > MAJOR_MATCH_KM) return;
+      other.city = majorPick.name;
+      adopted++;
+    });
+    return adopted;
+  }
+
+  // Returns how many existing places were adopted, so the caller can say so -
+  // a promotion that quietly moves five things should tell you it did.
+  function setPickMajor(id, on) {
+    const picks = loadPicks();
+    const p = picks.find((x) => x.id === id);
+    if (!p) return 0;
+    p.major = !!on;
+    let adopted = 0;
+    if (on) {
+      // Its own section has to exist before anything can be filed into it,
+      // and the place itself belongs at the head of that section.
+      addFolder(p.name);
+      p.city = p.name;
+      adopted = adoptNearbyUnfiled(p, picks);
+    }
+    // Demoting leaves the folder and its contents alone - the places under it
+    // are still together, which is what the folder was for.
+    savePicks(picks);
+    return adopted;
+  }
+
   function togglePick(source, item) {
     const id = pickId(source, item.name);
     let picks = loadPicks();
@@ -813,7 +902,7 @@
       if (!fresh || fresh.lat != null || !geo) return;
       fresh.lat = geo.lat;
       fresh.lon = geo.lon;
-      if (!fresh.city) fresh.city = nearestCity(geo.lat, geo.lon);
+      if (!fresh.city) fresh.city = suggestedFolderFor(geo.lat, geo.lon);
       savePicks(picks);
       if (view.dataset.activeTab === "picks") renderPicks();
     } catch (e) {
@@ -1561,12 +1650,35 @@
   // with the folder one tap away if the guess was wrong.
   function quickAdd(candidate, opts) {
     const options = opts || {};
+
+    // Saved as an area: it heads a section named after itself, so there is no
+    // folder question to ask and nothing to offer changing.
+    if (options.major) {
+      confirmAddCandidate(candidate, candidate.name, { major: true });
+      toast(`Added “${candidate.name}” as an area`);
+      return;
+    }
+
     const suggested =
       options.folder ||
-      (candidate.lat != null ? nearestCity(candidate.lat, candidate.lon) : null) ||
+      (candidate.lat != null ? suggestedFolderFor(candidate.lat, candidate.lon) : null) ||
       loadFolders()[0] ||
       "Unsorted";
     confirmAddCandidate(candidate, suggested);
+
+    // A town saved from the results list gets the offer here rather than a
+    // prompt before saving - same bargain as the folder: act first, correct
+    // after. Only one action fits on a toast, and for a town "is this an
+    // area?" is the more useful question than which folder it landed in.
+    if (looksLikeMajorPlace(candidate)) {
+      toastWithAction(`Added “${candidate.name}” to ${suggested}`, "Make it an area", () => {
+        const adopted = setPickMajor(pickId("custom", candidate.name), true);
+        renderPicks();
+        toast(majorPromotedMessage(candidate.name, adopted));
+      });
+      return;
+    }
+
     toastWithAction(`Added “${candidate.name}” to ${suggested}`, "Change", () => {
       openFolderPicker(candidate.name, suggested, (folder) => {
         const id = pickId("custom", candidate.name);
@@ -1575,6 +1687,11 @@
         toast(`Moved to ${folder}`);
       });
     });
+  }
+
+  function majorPromotedMessage(name, adopted) {
+    if (!adopted) return `${name} is now an area`;
+    return `${name} is now an area — ${adopted} nearby place${adopted === 1 ? "" : "s"} filed under it`;
   }
 
   // A toast with one tappable action, which is how a reversible choice should
@@ -3142,7 +3259,19 @@
     results: [],
     error: "",
     usedAi: false,
+    stale: false, // criteria changed since the results below were fetched
   };
+
+  // Setting up the question no longer asks it. Choosing a category, moving the
+  // centre or widening the radius used to fire a search immediately, which
+  // meant a half-built query was sent - and paid for, in AI calls and in the
+  // seconds you spend watching a spinner - every time you touched a control on
+  // the way to what you actually wanted. Now those only mark the results as out
+  // of date; the Search button is the only thing that runs a search.
+  function markExploreStale() {
+    if (explore.status === "loading") return;
+    explore.stale = true;
+  }
 
   // ---------- Place suggestions as you type ----------
   // Typing "Bibu" and getting "Bibury, Gloucestershire" beats typing the
@@ -3313,8 +3442,8 @@
     explore.status = "idle";
     explore.error = "";
     renderSuggestions("hidden");
-    if (explore.category) runExplore();
-    else renderPicks();
+    markExploreStale();
+    renderPicks();
   }
 
   function onSuggestInput(value) {
@@ -3362,7 +3491,7 @@
       if (!geo) throw new Error(`Couldn't find "${query}".`);
       explore.centre = { name: query, lat: geo.lat, lon: geo.lon };
       explore.status = "idle";
-      if (explore.category) return runExplore();
+      markExploreStale();
     } catch (e) {
       explore.status = "error";
       explore.error = e && e.message ? e.message : String(e);
@@ -3375,7 +3504,7 @@
     if (!p || p.lat == null) return;
     explore.centre = { name: p.name, lat: p.lat, lon: p.lon };
     explore.error = "";
-    if (explore.category) return runExplore();
+    markExploreStale();
     renderPicks();
   }
 
@@ -3391,8 +3520,8 @@
     const useCentre = (lat, lon) => {
       explore.centre = { name: "Where I am", lat, lon };
       explore.status = "idle";
-      if (explore.category) runExplore();
-      else renderPicks();
+      markExploreStale();
+      renderPicks();
     };
     const fail = (msg) => {
       explore.status = "error";
@@ -3537,6 +3666,7 @@
     explore.status = "loading";
     explore.error = "";
     explore.usedAi = false;
+    explore.stale = false;
     renderPicks();
 
     const key = loadTripSettings().geminiKey.trim();
@@ -3659,7 +3789,7 @@
             </p>
 
             <div class="settings-btn-row" style="margin-top:12px;">
-              <button class="modal-btn modal-btn-primary" id="catPromptSave">Save &amp; search</button>
+              <button class="modal-btn modal-btn-primary" id="catPromptSave">Save</button>
               <button class="modal-btn" id="catPromptReset" ${edited ? "" : "disabled"}>Reset to default</button>
             </div>
           </div>
@@ -3683,7 +3813,8 @@
       else map[key] = text;
       saveTripSettings({ catPrompts: map });
       closePlaceModal();
-      runExplore();
+      markExploreStale();
+      renderPicks();
     });
 
     document.getElementById("catPromptReset").addEventListener("click", () => {
@@ -3691,7 +3822,8 @@
       delete map[key];
       saveTripSettings({ catPrompts: map });
       closePlaceModal();
-      runExplore();
+      markExploreStale();
+      renderPicks();
     });
   }
 
@@ -3729,9 +3861,9 @@
             <form class="search-bar" id="catCustomForm" style="margin:12px 0 4px;">
               <input type="text" id="catCustomInput" placeholder="Describe it — e.g. vegan lunch with a garden"
                      autocomplete="off" value="${explore.category === "custom" ? esc(explore.customQuery) : ""}" />
-              <button type="submit" aria-label="Search that">🔍</button>
+              <button type="submit" aria-label="Use this description">Use</button>
             </form>
-            <p class="settings-hint">Anything you can describe, the AI search will look for.</p>
+            <p class="settings-hint">Anything you can describe, the AI search will look for. Choosing here sets the question — press Search to ask it.</p>
             ${groups}
           </div>
         </div>
@@ -3750,7 +3882,8 @@
         explore.category = btn.getAttribute("data-choose-cat");
         explore.customQuery = "";
         closePlaceModal();
-        runExplore();
+        markExploreStale();
+        renderPicks();
       });
     });
 
@@ -3763,7 +3896,8 @@
         explore.category = "custom";
         explore.customQuery = q;
         closePlaceModal();
-        runExplore();
+        markExploreStale();
+        renderPicks();
       });
     }
   }
@@ -3806,8 +3940,25 @@
           </select>
         </div>
       `;
+
+      // The one control that actually runs a search. Everything above it only
+      // describes what to look for, so the whole question can be built - area,
+      // category, how far - before a single request goes out.
+      const ready = !!explore.category;
+      const searching = explore.status === "loading";
+      const ranBefore = explore.status === "done" || explore.status === "error";
+      body += `
+        <button class="modal-btn modal-btn-primary explore-run" id="exploreRunBtn"${
+          ready && !searching ? "" : " disabled"
+        }>${searching ? "Searching…" : `🔍 ${ranBefore && !explore.stale ? "Search again" : "Search"}`}</button>
+      `;
+      if (!ready) {
+        body += `<p class="settings-hint explore-run-hint">Pick what you're looking for, then press Search.</p>`;
+      } else if (explore.stale && ranBefore) {
+        body += `<p class="settings-hint explore-run-hint">Criteria changed — press Search to update the results below.</p>`;
+      }
     } else {
-      body += `<p class="pick-status">Choose a starting point above, then pick a category.</p>`;
+      body += `<p class="pick-status">Choose a starting point above, then pick a category and press Search.</p>`;
     }
 
     if (explore.status === "locating") body += `<p class="pick-status">Finding that location…</p>`;
@@ -3942,8 +4093,8 @@
             explore.centre = { name: spot.name, lat: spot.lat, lon: spot.lon };
             explore.error = "";
             explore.open = true;
-            if (explore.category) runExplore();
-            else renderPicks();
+            markExploreStale();
+            renderPicks();
           },
           { title: "Search around here", centre: explore.centre }
         )
@@ -3961,9 +4112,13 @@
       radius.addEventListener("change", () => {
         explore.radius = Number(radius.value);
         localStorage.setItem(RADIUS_KEY, JSON.stringify(explore.radius));
-        if (explore.category) runExplore();
+        markExploreStale();
+        renderPicks();
       });
     }
+    const runBtn = document.getElementById("exploreRunBtn");
+    if (runBtn) runBtn.addEventListener("click", () => runExplore());
+
     const catBtn = document.getElementById("exploreCatBtn");
     if (catBtn) catBtn.addEventListener("click", openCategoryPicker);
 
@@ -4106,6 +4261,27 @@
     `;
   }
 
+  // The heading a section of places sits under. It opens the same detail sheet
+  // as any other saved place, but the thing you actually want from a town is
+  // what's around it, so that gets its own control rather than three taps
+  // through the sheet.
+  function renderMajorHeader(p, count) {
+    const meta = count ? `${count} place${count === 1 ? "" : "s"} saved here` : "Nothing saved here yet";
+    return `
+      <div class="area-head">
+        <button class="area-head-main" data-open-pick="${esc(p.id)}">
+          <span class="area-head-icon">🏘️</span>
+          <span class="area-head-text">
+            <span class="area-head-name">${esc(p.name)}</span>
+            <span class="area-head-meta">${esc(meta)}</span>
+          </span>
+          <span class="pick-row-chevron">›</span>
+        </button>
+        <button class="area-head-explore" data-explore-from="${esc(p.id)}">🧭 What's nearby</button>
+      </div>
+    `;
+  }
+
   // A place's own forecast is only meaningful for the day it's scheduled on -
   // that's the day you'd be standing there in it.
   function weatherForPick(p) {
@@ -4180,11 +4356,24 @@
               }
             </div>
 
-            <label class="settings-label">Shows up in</label>
+            ${
+              // An area isn't in either list, so the choice would be a control
+              // that does nothing.
+              p.major
+                ? ""
+                : `<label class="settings-label">Shows up in</label>
             <div class="move-row">
               <button class="move-chip${pickKind(p) === "place" ? " active" : ""}" data-pick-kind="${esc(p.id)}|place">🏛️ Places</button>
               <button class="move-chip${pickKind(p) === "eat" ? " active" : ""}" data-pick-kind="${esc(p.id)}|eat">🍽️ Eats</button>
+            </div>`
+            }
+
+            <label class="settings-label">What this is</label>
+            <div class="move-row">
+              <button class="move-chip${p.major ? "" : " active"}" data-pick-major="${esc(p.id)}|0">📍 Somewhere to go</button>
+              <button class="move-chip${p.major ? " active" : ""}" data-pick-major="${esc(p.id)}|1">🏘️ A town or area</button>
             </div>
+            <p class="settings-hint">A town or area heads its own section in Picks, and places you save near it are filed under it.</p>
 
             <label class="settings-label">Cost (optional)</label>
             <div class="cost-field">
@@ -4276,6 +4465,22 @@
         updatePick(id, { kind });
         placeModal.querySelectorAll("[data-pick-kind]").forEach((b) => b.classList.remove("active"));
         btn.classList.add("active");
+      });
+    });
+
+    // Promotion changes where the place lives in the list, so unlike the
+    // toggles above it closes the sheet and re-renders rather than just
+    // flipping a chip - the answer is the list behind it, not this button.
+    placeModal.querySelectorAll("[data-pick-major]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const [id, flag] = btn.getAttribute("data-pick-major").split("|");
+        const on = flag === "1";
+        const current = loadPicks().find((x) => x.id === id);
+        if (!current || !!current.major === on) return;
+        const adopted = setPickMajor(id, on);
+        closePlaceModal();
+        renderPicks();
+        toast(on ? majorPromotedMessage(current.name, adopted) : `${current.name} is an ordinary place again`);
       });
     });
 
@@ -4680,7 +4885,15 @@
                     style="width:100%;margin-top:16px;">
               ${already ? "✓ Already saved" : "＋ Save this place"}
             </button>
-            <p class="settings-hint" style="text-align:center;">You can change the folder, add a note or a cost after saving.</p>
+            ${
+              // A town is offered as an area, never filed as one behind your
+              // back: a village you only want to remember the name of is a
+              // perfectly ordinary saved place.
+              !already && !r.guideSource && looksLikeMajorPlace(r)
+                ? `<button class="modal-btn" id="previewAddMajor" style="width:100%;margin-top:8px;">🏘️ Save as a town or area</button>
+                   <p class="settings-hint" style="text-align:center;">An area heads its own section in Picks, and places you save nearby are filed under it.</p>`
+                : `<p class="settings-hint" style="text-align:center;">You can change the folder, add a note or a cost after saving.</p>`
+            }
           </div>
         </div>
       </div>
@@ -4708,6 +4921,17 @@
         previewIndex = null;
         closePlaceModal();
         // The list behind needs to show it as saved now.
+        if (searchOverlay.classList.contains("open")) renderSearchOverlay();
+        else if (view.dataset.activeTab) showView(view.dataset.activeTab);
+      });
+    }
+
+    const addMajorBtn = document.getElementById("previewAddMajor");
+    if (addMajorBtn) {
+      addMajorBtn.addEventListener("click", () => {
+        quickAdd(r, { major: true });
+        previewIndex = null;
+        closePlaceModal();
         if (searchOverlay.classList.contains("open")) renderSearchOverlay();
         else if (view.dataset.activeTab) showView(view.dataset.activeTab);
       });
@@ -5418,13 +5642,16 @@
 
   document.getElementById("mapBtn").addEventListener("click", () => openAllMap(defaultMapFilter()));
 
-  async function confirmAddCandidate(candidate, folder) {
+  async function confirmAddCandidate(candidate, folder, opts) {
     const id = pickId("custom", candidate.name);
+    const major = !!(opts && opts.major);
     const picks = loadPicks();
     if (picks.some((p) => p.id === id)) {
       if (view.dataset.activeTab === "picks") renderPicks();
       return;
     }
+    // The section has to exist before the place can head it.
+    if (major) addFolder(candidate.name);
     // Maps query is built from real geographic data (Nominatim's full
     // address, when we have it) - never from the folder, which is just the
     // user's own organisation and may have nothing to do with geography.
@@ -5433,7 +5660,8 @@
       id,
       source: "custom",
       name: candidate.name,
-      city: folder || nearestCity(candidate.lat, candidate.lon),
+      city: folder || suggestedFolderFor(candidate.lat, candidate.lon),
+      major,
       category: candidate.category || candidate.type || "Custom",
       notes: "",
       description: candidate.description || "",
@@ -5482,7 +5710,11 @@
       if (!target.address && geo.address) target.address = geo.address;
       if (!target.phone && geo.phone) target.phone = geo.phone;
       if (!target.openingHours && geo.openingHours) target.openingHours = geo.openingHours;
+      if (!target.city) target.city = suggestedFolderFor(geo.lat, geo.lon);
     }
+    // An area saved without coordinates couldn't adopt anything a moment ago;
+    // now that the geocode has landed, it can.
+    if (target.major) adoptNearbyUnfiled(target, fresh);
     target.enrichStatus = wiki || geo ? "done" : "empty";
     savePicks(fresh);
     if (view.dataset.activeTab === "picks") renderPicks();
@@ -5527,15 +5759,28 @@
       });
       sectionOrder.push("Unsorted");
 
+      // A major place heads the section named after it rather than appearing
+      // as a row inside it - it *is* the section. (If one has been moved into
+      // some other folder by hand, it goes back to being an ordinary row
+      // there, which is the only sensible reading of that move.)
+      const majorByName = {};
+      picks.forEach((p) => {
+        if (p.major && p.city === p.name) majorByName[p.name] = p;
+      });
+
       const groups = {};
       sectionOrder.forEach((c) => (groups[c] = []));
       picks.forEach((p) => {
+        if (majorByName[p.name] === p) return;
         (groups[p.city] || groups.Unsorted).push(p);
       });
 
       sectionOrder.forEach((city) => {
-        if (!groups[city].length) return;
-        html += `<div class="section-label">${esc(city)}</div>`;
+        const major = majorByName[city];
+        if (!groups[city].length && !major) return;
+        html += major
+          ? renderMajorHeader(major, groups[city].length)
+          : `<div class="section-label">${esc(city)}</div>`;
         groups[city].forEach((p) => {
           html += renderPickRow(p);
         });
@@ -5559,6 +5804,18 @@
 
     view.querySelectorAll("[data-open-pick]").forEach((row) => {
       row.addEventListener("click", () => openPickDetail(row.getAttribute("data-open-pick")));
+    });
+
+    // Straight from an area's heading to Explore centred on it - still without
+    // searching, so you choose what you're looking for before anything runs.
+    view.querySelectorAll("[data-explore-from]").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        explore.open = true;
+        setExploreCentreFromPick(btn.getAttribute("data-explore-from"));
+        const panel = document.getElementById("exploreToggle");
+        if (panel) panel.scrollIntoView({ block: "start" });
+      });
     });
 
     view.querySelectorAll("[data-open-maps]").forEach((btn) => {
@@ -5994,8 +6251,11 @@
         if (anchor && anchor.lat != null) {
           explore.centre = { name: anchor.name, lat: anchor.lat, lon: anchor.lon };
         }
+        // Sets the question up and leaves it on the Search button, like every
+        // other route into Explore - a tap on a weather card is a reason to
+        // look, not confirmation that you want to look right now.
+        markExploreStale();
         showView("picks");
-        if (explore.centre) runExplore();
       });
     });
   }

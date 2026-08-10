@@ -101,6 +101,8 @@ await page.waitForTimeout(700);
 await page.click('#exploreCatBtn');
 await page.waitForSelector('[data-choose-cat="healthy"]');
 await page.evaluate(() => document.querySelector('[data-choose-cat="healthy"]').click());
+await page.waitForSelector('#exploreRunBtn:not([disabled])', { timeout: 3000 });
+await page.click('#exploreRunBtn');
 await page.waitForFunction(() => !/Looking for/.test(document.getElementById('view').textContent), { timeout: 20000 });
 check('Explore carries them too', prompts.some((p) => /no chains, nothing needing a car/.test(p)), (prompts[0] || '').slice(0, 200));
 
@@ -119,6 +121,8 @@ check('the JSON rules are not exposed for editing', !/JSON/i.test(shown), shown.
 prompts = [];
 await page.fill('#catPromptBox', 'poke bowls and salad bars only');
 await page.evaluate(() => document.getElementById('catPromptSave').click());
+await page.waitForSelector('#exploreRunBtn:not([disabled])', { timeout: 3000 });
+await page.click('#exploreRunBtn');
 await page.waitForFunction(() => !/Looking for/.test(document.getElementById('view').textContent), { timeout: 20000 });
 check('the reworded question is what gets asked', prompts.some((p) => /poke bowls and salad bars only/.test(p)), (prompts[0] || '').slice(0, 200));
 check('the old wording is gone', !prompts.some((p) => /grain bowls/.test(p)));
@@ -143,6 +147,8 @@ prompts = [];
 await page.click('#exploreCatTune');
 await page.waitForSelector('#catPromptReset');
 await page.evaluate(() => document.getElementById('catPromptReset').click());
+await page.waitForSelector('#exploreRunBtn:not([disabled])', { timeout: 3000 });
+await page.click('#exploreRunBtn');
 await page.waitForFunction(() => !/Looking for/.test(document.getElementById('view').textContent), { timeout: 20000 });
 check('reset restores the default question', prompts.some((p) => /grain bowls/.test(p)), (prompts[0] || '').slice(0, 200));
 check('and clears the stored rewrite', await page.evaluate(() =>

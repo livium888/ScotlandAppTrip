@@ -1528,6 +1528,12 @@ body {
 .explore-results { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
 .explore-result { margin-bottom: 0; }
 
+/* The only control that runs a search, so it looks like the end of the form
+   rather than one more setting in it. */
+.explore-run { width: 100%; margin-top: 12px; }
+.explore-run[disabled] { opacity: 0.5; }
+.explore-run-hint { text-align: center; margin-top: 6px; }
+
 /* ---------- Settings extras ---------- */
 .settings-divider { height: 1px; background: var(--line); margin: 18px 0 4px; }
 .settings-btn-row { display: flex; gap: 8px; margin-top: 8px; }
@@ -1784,6 +1790,56 @@ button, select, input[type="text"], input[type="file"] { font-family: inherit; }
 .row-badge.day { background: var(--navy); border-color: var(--navy); color: var(--on-accent); }
 .row-badge.booked { background: var(--teal); border-color: var(--teal); color: var(--on-accent); }
 .pick-row-chevron { color: var(--ink-soft); font-size: 20px; flex-shrink: 0; }
+
+/* ---------- A major place: the heading its own section sits under ---------- */
+/* Reads as a heading rather than a row - flush to the edge, no card - while
+   the places filed under it keep their cards, so the nesting is obvious at a
+   glance instead of being two identical-looking lists. */
+.area-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 20px 0 10px;
+  padding-bottom: 8px;
+  border-bottom: 2px solid var(--line);
+}
+.area-head:first-child { margin-top: 0; }
+.area-head-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+  background: none;
+  border: 0;
+  padding: 0;
+  text-align: left;
+  font-family: inherit;
+}
+.area-head-icon { font-size: 20px; flex-shrink: 0; }
+.area-head-text { flex: 1; min-width: 0; }
+.area-head-name {
+  display: block;
+  font-size: 17px;
+  font-weight: 800;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.area-head-meta { display: block; font-size: 11.5px; color: var(--ink-soft); margin-top: 1px; }
+.area-head-explore {
+  flex-shrink: 0;
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 700;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  color: var(--ink);
+}
+.area-head-explore:active { background: var(--card); }
 
 .detail-map {
   height: 160px;

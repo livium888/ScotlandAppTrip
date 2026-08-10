@@ -90,6 +90,9 @@ const chooseCategory = async (key) => {
   await page.click('#exploreCatBtn');
   await page.waitForSelector(`[data-choose-cat="${key}"]`, { timeout: 3000 });
   await page.evaluate((k) => document.querySelector(`[data-choose-cat="${k}"]`).click(), key);
+  // Choosing only sets the question now - Search is what asks it.
+  await page.waitForSelector('#exploreRunBtn:not([disabled])', { timeout: 3000 });
+  await page.click('#exploreRunBtn');
 };
 await chooseCategory('cafe');
 await page.waitForFunction(() => !/Looking for/.test(document.getElementById('view').textContent), { timeout: 20000 });

@@ -38,6 +38,7 @@ const SUITES = [
   "test_range.mjs",
   "test_places.mjs",
   "test_security.mjs",
+  "test_major.mjs",
 ];
 
 const MIME = {

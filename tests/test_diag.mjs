@@ -134,6 +134,8 @@ const browser = await chromium.launch(LAUNCH_OPTS);
   check('categories include restaurant/cafe/playground/museum/attraction', ['restaurant','cafe','playground','museum','attraction'].every(k => cats.includes(k)), JSON.stringify(cats));
 
   await page.evaluate(() => document.querySelector('[data-choose-cat="cafe"]').click());
+  await page.waitForSelector('#exploreRunBtn:not([disabled])', { timeout: 3000 });
+  await page.click('#exploreRunBtn');
   await page.waitForTimeout(700);
   const resText = await page.evaluate(() => document.getElementById('view').textContent);
   check('results listed', /Castle Cafe/.test(resText), resText.slice(0, 250));

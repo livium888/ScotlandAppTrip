@@ -162,6 +162,8 @@ check('still 50 miles after restarting the app', await page.evaluate(() =>
 await page.click('#exploreCatBtn');
 await page.waitForSelector('[data-choose-cat="attraction"]');
 await page.evaluate(() => document.querySelector('[data-choose-cat="attraction"]').click());
+await page.waitForSelector('#exploreRunBtn:not([disabled])', { timeout: 3000 });
+await page.click('#exploreRunBtn');
 await page.waitForFunction(() => !/Looking for/.test(document.getElementById('view').textContent), { timeout: 25000 });
 await page.waitForTimeout(400);
 
@@ -192,6 +194,8 @@ await page.evaluate(() => {
 await page.click('#exploreCatBtn');
 await page.waitForSelector('[data-choose-cat="cafe"]');
 await page.evaluate(() => document.querySelector('[data-choose-cat="cafe"]').click());
+await page.waitForSelector('#exploreRunBtn:not([disabled])', { timeout: 3000 });
+await page.click('#exploreRunBtn');
 await page.waitForFunction(() => !/Looking for/.test(document.getElementById('view').textContent), { timeout: 25000 });
 await page.waitForTimeout(400);
 
