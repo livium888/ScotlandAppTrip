@@ -35,7 +35,30 @@
   // Custom Tab is real Chrome, so it reuses the browser's cookies - the
   // Google consent/sign-in already accepted there carries over, which a
   // plain embedded WebView (its own cookie jar) would not do.
+  // Escaping does nothing to "javascript:alert(1)" - it contains no character
+  // that esc() touches - so a website URL from OpenStreetMap (openly
+  // editable) or from a language model could become script running inside the
+  // app, next to the user's saved API keys. Only ordinary web links, phone
+  // numbers and email addresses get through.
+  function safeUrl(url) {
+    const raw = String(url || "").trim();
+    if (!raw) return "";
+    // Protocol-relative and bare domains are treated as https rather than
+    // dropped, since OSM data is full of "www.example.com".
+    if (/^\/\//.test(raw)) return `https:${raw}`;
+    if (/^[\w.-]+\.[a-z]{2,}(\/|$)/i.test(raw)) return `https://${raw}`;
+    try {
+      const u = new URL(raw);
+      return ["http:", "https:", "mailto:", "tel:"].includes(u.protocol) ? u.href : "";
+    } catch (e) {
+      return "";
+    }
+  }
+
   async function openExternal(url) {
+    const safe = safeUrl(url);
+    if (!safe) return; // refuse anything that isn't an ordinary link
+    url = safe;
     const browser = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Browser;
     if (browser) {
       try {
@@ -1001,7 +1024,7 @@
             <div class="modal-actions">
               ${
                 p.website
-                  ? `<a class="modal-btn" href="${esc(p.website)}" target="_blank" rel="noopener">🌐 Official website</a>`
+                  ? `<a class="modal-btn" href="${esc(safeUrl(p.website))}" target="_blank" rel="noopener">🌐 Official website</a>`
                   : ""
               }
               ${
@@ -1056,11 +1079,27 @@
     return keys;
   }
 
+  // The export exists to be moved around - saved to Drive, emailed to a
+  // partner's phone. That makes it the wrong place for API keys, which were
+  // going in with everything else: one forwarded file and someone else is
+  // spending your Gemini quota. Settings travel, credentials don't.
+  function redactSecrets(rawSettings) {
+    try {
+      const s = JSON.parse(rawSettings);
+      delete s.geminiKey;
+      delete s.googleKey;
+      return JSON.stringify(s);
+    } catch (e) {
+      return rawSettings;
+    }
+  }
+
   function buildBackup() {
     const data = {};
     backupKeys().forEach((k) => {
       const v = localStorage.getItem(k);
-      if (v !== null) data[k] = v;
+      if (v === null) return;
+      data[k] = k === TRIP_KEY ? redactSecrets(v) : v;
     });
     return JSON.stringify(
       { format: "scotland-trip-backup", version: 1, exportedAt: new Date().toISOString(), data },
@@ -1138,8 +1177,29 @@
     // Restore every key in the file rather than only the ones this device
     // currently has - otherwise boards present in the backup but not here
     // would be silently dropped, which is exactly what a restore must not do.
+    // Backups carry no keys, so a restore must not blank the one already
+    // entered here - otherwise restoring quietly turns the AI search off.
+    const localSettings = (() => {
+      try {
+        return JSON.parse(localStorage.getItem(TRIP_KEY)) || {};
+      } catch (e) {
+        return {};
+      }
+    })();
+
     Object.keys(parsed.data).forEach((k) => {
       if (k === BOARDS_KEY || k === TRIP_KEY || k === STORAGE_KEY || /^board:/.test(k) || /^scotland-trip-|^trip-plan-/.test(k)) {
+        if (k === TRIP_KEY) {
+          try {
+            const restored = JSON.parse(parsed.data[k]) || {};
+            if (localSettings.geminiKey) restored.geminiKey = localSettings.geminiKey;
+            if (localSettings.googleKey) restored.googleKey = localSettings.googleKey;
+            localStorage.setItem(k, JSON.stringify(restored));
+            return;
+          } catch (e) {
+            /* fall through to a plain restore */
+          }
+        }
         localStorage.setItem(k, parsed.data[k]);
       }
     });
@@ -1343,6 +1403,8 @@
             <p class="settings-hint">
               Everything is stored only on this phone. Export a copy you can keep or send
               to another device — a reinstall or a lost phone loses the lot otherwise.
+              API keys are deliberately left out of the file, so it's safe to send;
+              you'll enter the key again on the other device.
             </p>
             <div class="settings-btn-row">
               <button class="modal-btn" id="exportBackupBtn">⬇ Export</button>
@@ -3799,7 +3861,7 @@
                 </button>
                 ${
                   r.aiSuggested && r.sources && r.sources.length
-                    ? `<div class="place-links"><a href="${esc(r.sources[0].uri)}" target="_blank" rel="noopener">🔗 source</a></div>`
+                    ? `<div class="place-links"><a href="${esc(safeUrl(r.sources[0].uri))}" target="_blank" rel="noopener">🔗 source</a></div>`
                     : ""
                 }
               </div>
@@ -4079,7 +4141,7 @@
             ${p.address ? `<div class="place-fact">📍 ${esc(p.address)}</div>` : ""}
             ${p.openingHours ? `<div class="place-fact">🕒 ${esc(p.openingHours)}</div>` : ""}
             ${p.phone ? `<div class="place-fact">📞 <a href="tel:${esc(p.phone)}">${esc(p.phone)}</a></div>` : ""}
-            ${p.website ? `<div class="place-fact">🌐 <a href="${esc(p.website)}" target="_blank" rel="noopener">Website</a></div>` : ""}
+            ${safeUrl(p.website) ? `<div class="place-fact">🌐 <a href="${esc(safeUrl(p.website))}" target="_blank" rel="noopener">Website</a></div>` : ""}
 
             ${weatherForPick(p)}
 
@@ -4447,7 +4509,7 @@
               </button>
               ${
                 r.sources && r.sources.length
-                  ? `<div class="place-links"><a href="${esc(r.sources[0].uri)}" target="_blank" rel="noopener">🔗 source</a></div>`
+                  ? `<div class="place-links"><a href="${esc(safeUrl(r.sources[0].uri))}" target="_blank" rel="noopener">🔗 source</a></div>`
                   : ""
               }
             </div>
@@ -4583,8 +4645,8 @@
 
             <div class="settings-btn-row" style="margin-top:12px;">
               ${
-                r.website
-                  ? `<button class="modal-btn" data-open-maps="${esc(r.website)}">🌐 Website</button>`
+                safeUrl(r.website)
+                  ? `<button class="modal-btn" data-open-maps="${esc(safeUrl(r.website))}">🌐 Website</button>`
                   : ""
               }
               ${mapsUrl ? `<button class="modal-btn" data-open-maps="${esc(mapsUrl)}">📍 Google Maps</button>` : ""}
@@ -4596,7 +4658,7 @@
                     .slice(0, 2)
                     .map(
                       (s) =>
-                        `<a href="${esc(s.uri)}" target="_blank" rel="noopener">🔗 ${esc(s.title || "source")}</a>`
+                        `<a href="${esc(safeUrl(s.uri))}" target="_blank" rel="noopener">🔗 ${esc(s.title || "source")}</a>`
                     )
                     .join(" ")}</div>`
                 : ""
@@ -4887,7 +4949,9 @@
     const markers = mappable.map(({ r, i }) =>
       L.marker([r.lat, r.lon])
         .addTo(map)
-        .bindTooltip(`${i + 1}. ${r.name}`, { permanent: false })
+        // Escaped, not interpolated: Leaflet treats a string here as HTML,
+        // and this name arrived from a geocoder or a model.
+        .bindTooltip(`${i + 1}. ${esc(r.name)}`, { permanent: false })
     );
     const bounds = L.latLngBounds(mappable.map(({ r }) => [r.lat, r.lon]));
     map.fitBounds(bounds.pad(0.3));
@@ -5156,7 +5220,7 @@
         fillOpacity: 1,
       })
         .addTo(allMap)
-        .bindTooltip("You are here");
+        .bindTooltip("You are here"); // fixed string, nothing to escape
       allMap.setView([pos.lat, pos.lon], Math.max(allMap.getZoom(), 14));
     } catch (e) {
       toast((e && e.message) || "Couldn't get your location");

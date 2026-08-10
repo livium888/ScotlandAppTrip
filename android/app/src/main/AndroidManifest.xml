@@ -1,8 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- Backup is off deliberately. With it on, Android auto-backup copies
+         the app's localStorage to the user's Google Drive, and that store
+         holds the Gemini/Places API keys. It also stops "adb backup" pulling
+         the same data off an unlocked handset. The app's own Export in
+         Settings is the supported way to move a trip, and that file has the
+         keys stripped out. -->
     <application
-        android:allowBackup="true"
+        android:allowBackup="false"
+        android:fullBackupContent="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
