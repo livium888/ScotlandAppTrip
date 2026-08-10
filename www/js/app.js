@@ -2911,6 +2911,200 @@
     usedAi: false,
   };
 
+  // ---------- Place suggestions as you type ----------
+  // Typing "Bibu" and getting "Bibury, Gloucestershire" beats typing the
+  // whole thing and hoping the geocoder guesses which one you meant - it also
+  // settles the ambiguity up front, which is how the app used to file
+  // Manchester under Glasgow.
+  //
+  // Photon rather than Nominatim: Photon exists for exactly this, indexes the
+  // same OpenStreetMap data, and is happy being hit per keystroke. Nominatim
+  // asks people not to use it for autocomplete, so it stays the fallback for
+  // whole-name lookups.
+  const PHOTON_URL = "https://photon.komoot.io/api/";
+  const SUGGEST_MIN_CHARS = 3;
+  const SUGGEST_DEBOUNCE_MS = 280;
+
+  let suggestTimer = null;
+  let suggestAbort = null;
+  let suggestItems = [];
+
+  async function fetchSuggestions(query, signal) {
+    const res = await fetch(
+      `${PHOTON_URL}?q=${encodeURIComponent(query)}&limit=6&lang=en`,
+      { signal }
+    );
+    if (!res.ok) throw new Error(`photon ${res.status}`);
+    const data = await res.json();
+    // A missing "features" array means the response isn't what we expect -
+    // a changed API, or something in the middle answering instead. Treated as
+    // a failure so it falls back, rather than being read as "no such place",
+    // which would look identical to the user and be wrong every time.
+    if (!data || !Array.isArray(data.features)) throw new Error("unexpected suggestion response");
+    return data.features
+      .map((f) => {
+        const p = f.properties || {};
+        const coords = (f.geometry && f.geometry.coordinates) || [];
+        if (coords.length < 2) return null;
+        // "Bibury" then "Gloucestershire, England" - the name you typed,
+        // then just enough to tell two of them apart.
+        const context = [p.city && p.city !== p.name ? p.city : null, p.state, p.country]
+          .filter(Boolean)
+          .filter((v, i, a) => a.indexOf(v) === i)
+          .slice(0, 2)
+          .join(", ");
+        return {
+          name: p.name || p.street || p.city || "",
+          context,
+          kind: p.osm_value || p.osm_key || "",
+          lat: coords[1],
+          lon: coords[0],
+        };
+      })
+      .filter((s) => s && s.name);
+  }
+
+  // Fallback when Photon can't answer. Nominatim asks not to be used for
+  // autocomplete, so it is only reached when the purpose-built service has
+  // already failed - and still behind the same debounce.
+  async function fetchSuggestionsFallback(query, signal) {
+    const res = await fetch(
+      `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=6&addressdetails=1&namedetails=1&q=${encodeURIComponent(
+        query
+      )}`,
+      { signal, headers: { Accept: "application/json" } }
+    );
+    if (!res.ok) throw new Error(`nominatim ${res.status}`);
+    const rows = await res.json();
+    if (!Array.isArray(rows)) throw new Error("unexpected suggestion response");
+    return rows
+      .map((r) => {
+        const a = r.address || {};
+        const name = (r.namedetails && r.namedetails.name) || String(r.display_name || "").split(",")[0];
+        const context = [a.county || a.state, a.country]
+          .filter(Boolean)
+          .filter((v, i, arr) => arr.indexOf(v) === i)
+          .slice(0, 2)
+          .join(", ");
+        return {
+          name,
+          context,
+          kind: r.type || r.category || "",
+          lat: parseFloat(r.lat),
+          lon: parseFloat(r.lon),
+        };
+      })
+      .filter((s) => s.name && Number.isFinite(s.lat));
+  }
+
+  function suggestionIcon(kind) {
+    if (/city|town|village|hamlet|suburb|municipality/.test(kind)) return "🏘️";
+    if (/county|state|region|province|country/.test(kind)) return "🗺️";
+    if (/restaurant|cafe|pub|bar|fast_food/.test(kind)) return "🍽️";
+    if (/museum|attraction|castle|monument|ruins/.test(kind)) return "🏛️";
+    if (/park|garden|forest|nature/.test(kind)) return "🌳";
+    if (/beach|bay|water|river|lake/.test(kind)) return "🏖️";
+    return "📍";
+  }
+
+  function renderSuggestions(state, items, message) {
+    const list = document.getElementById("exploreSuggestList");
+    const input = document.getElementById("exploreSearchInput");
+    if (!list) return;
+
+    if (state === "hidden") {
+      list.hidden = true;
+      list.innerHTML = "";
+      if (input) input.setAttribute("aria-expanded", "false");
+      return;
+    }
+
+    if (state === "message") {
+      list.hidden = false;
+      list.innerHTML = `<div class="suggest-msg">${esc(message)}</div>`;
+      if (input) input.setAttribute("aria-expanded", "false");
+      return;
+    }
+
+    suggestItems = items;
+    list.hidden = false;
+    list.innerHTML = items
+      .map(
+        (s, i) => `
+      <button class="suggest-item" role="option" data-suggest="${i}">
+        <span class="suggest-icon">${suggestionIcon(s.kind)}</span>
+        <span class="suggest-text">
+          <span class="suggest-name">${esc(s.name)}</span>
+          ${s.context ? `<span class="suggest-context">${esc(s.context)}</span>` : ""}
+        </span>
+      </button>
+    `
+      )
+      .join("");
+    if (input) input.setAttribute("aria-expanded", "true");
+
+    // Wired here rather than in wireExplore: this list is rebuilt on every
+    // keystroke, deliberately without re-rendering the view - a full render
+    // would take the keyboard down and lose the caret mid-word.
+    list.querySelectorAll("[data-suggest]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const s = suggestItems[Number(btn.getAttribute("data-suggest"))];
+        if (!s) return;
+        chooseSuggestion(s);
+      });
+    });
+  }
+
+  function chooseSuggestion(s) {
+    clearTimeout(suggestTimer);
+    if (suggestAbort) suggestAbort.abort();
+    const label = s.context ? `${s.name}, ${s.context}` : s.name;
+    // Coordinates come with the suggestion, so there's nothing left to look
+    // up - and no second chance to resolve to the wrong Manchester.
+    explore.centre = { name: label, lat: s.lat, lon: s.lon };
+    explore.status = "idle";
+    explore.error = "";
+    renderSuggestions("hidden");
+    if (explore.category) runExplore();
+    else renderPicks();
+  }
+
+  function onSuggestInput(value) {
+    const q = value.trim();
+    clearTimeout(suggestTimer);
+    if (suggestAbort) suggestAbort.abort();
+
+    if (q.length < SUGGEST_MIN_CHARS) {
+      renderSuggestions("hidden");
+      return;
+    }
+
+    suggestTimer = setTimeout(async () => {
+      suggestAbort = new AbortController();
+      const signal = suggestAbort.signal;
+      let items = null;
+      try {
+        items = await fetchSuggestions(q, signal);
+      } catch (e) {
+        // An aborted request is the expected case while typing, not a fault.
+        if (e && e.name === "AbortError") return;
+        try {
+          items = await fetchSuggestionsFallback(q, signal);
+        } catch (e2) {
+          if (e2 && e2.name === "AbortError") return;
+          renderSuggestions("message", null, "Suggestions unavailable — press search to look it up anyway.");
+          return;
+        }
+      }
+      if (signal.aborted) return;
+      if (!items.length) {
+        renderSuggestions("message", null, `No places matching "${q}" — try fewer letters.`);
+        return;
+      }
+      renderSuggestions("list", items);
+    }, SUGGEST_DEBOUNCE_MS);
+  }
+
   async function setExploreCentreFromSearch(query) {
     explore.status = "locating";
     explore.error = "";
@@ -3299,10 +3493,13 @@
       .join("");
 
     let body = `
-      <form class="search-bar" id="exploreSearchForm" style="margin-bottom:8px;">
-        <input type="text" id="exploreSearchInput" placeholder="Search a place or area…" autocomplete="off" />
+      <form class="search-bar" id="exploreSearchForm" style="margin-bottom:0;">
+        <input type="text" id="exploreSearchInput" placeholder="Start typing a place or area…"
+               autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
+               role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="exploreSuggestList" />
         <button type="submit" aria-label="Set centre">🔍</button>
       </form>
+      <div class="suggest-list" id="exploreSuggestList" role="listbox" hidden></div>
       <div class="explore-centre-row">
         <button class="move-chip" id="exploreGpsBtn">📍 Where I am</button>
         <button class="move-chip" id="exploreMapBtn">🗺 Point on a map</button>
@@ -3424,7 +3621,24 @@
       form.addEventListener("submit", (e) => {
         e.preventDefault();
         const q = document.getElementById("exploreSearchInput").value.trim();
+        renderSuggestions("hidden");
         if (q) setExploreCentreFromSearch(q);
+      });
+    }
+
+    const exploreInput = document.getElementById("exploreSearchInput");
+    if (exploreInput) {
+      exploreInput.addEventListener("input", () => onSuggestInput(exploreInput.value));
+      // Enter with a list open takes the first suggestion - the usual case,
+      // and it saves aiming at a small target with one thumb.
+      exploreInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && suggestItems.length) {
+          const list = document.getElementById("exploreSuggestList");
+          if (list && !list.hidden) {
+            e.preventDefault();
+            chooseSuggestion(suggestItems[0]);
+          }
+        }
       });
     }
     const gps = document.getElementById("exploreGpsBtn");

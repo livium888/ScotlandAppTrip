@@ -555,6 +555,47 @@ body {
   width: 100%;
 }
 
+/* ---- Suggestions while you type ----
+   Sits directly under the field it belongs to, as a list rather than a
+   floating layer: on a phone there is nothing to float over, and a popup
+   would just be a thing that can be dismissed by accident. */
+.suggest-list {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  overflow: hidden;
+  margin: 8px 0 10px;
+}
+.suggest-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 52px;
+  padding: 10px 14px;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: none;
+  color: var(--text);
+  font-family: inherit;
+  text-align: left;
+}
+.suggest-item:last-child { border-bottom: none; }
+.suggest-item:active { background: var(--surface-2); }
+.suggest-icon { flex-shrink: 0; font-size: 17px; }
+.suggest-text { flex: 1; min-width: 0; }
+.suggest-name { display: block; font-size: 15px; font-weight: 600; }
+.suggest-context {
+  display: block;
+  font-size: 12.5px;
+  color: var(--text-muted);
+  margin-top: 1px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.suggest-msg { padding: 12px 14px; font-size: 13px; color: var(--text-muted); }
+
 /* ---- Weather ----
    A quiet line, not a widget. It's context for a decision you're already
    making, so it sits with the day rather than competing with it. */
