@@ -29,6 +29,7 @@ const SUITES = [
   "test_map.mjs",
   "test_alltabs.mjs",
   "test_categories.mjs",
+  "test_prompts.mjs",
 ];
 
 const MIME = {

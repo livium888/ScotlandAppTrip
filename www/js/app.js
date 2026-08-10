@@ -113,8 +113,48 @@
       // Free text about who is travelling, so AI suggestions are tailored
       // rather than generic ("family of 3, 4-year-old who walks, no stroller").
       travellers: stored.travellers !== undefined ? stored.travellers : TRIP.traveler || "",
+      // Standing instructions added to every AI search, in the user's own
+      // words ("avoid chains", "nothing needing a car", "vegetarian
+      // options"). Applies to search, Explore and the day planner alike.
+      preferences: stored.preferences !== undefined ? stored.preferences : "",
+      // Per-category rewrites, keyed by category. Only what the user has
+      // actually changed is stored; everything else uses the built-in
+      // phrasing, so improvements to the defaults still reach them.
+      catPrompts: stored.catPrompts && typeof stored.catPrompts === "object" ? stored.catPrompts : {},
     };
   }
+
+  // Everything the user has told us about how they want results, in one
+  // block that every prompt builder uses - so a preference set once applies
+  // to searching, exploring and planning without being typed three times.
+  function aiContextBlock() {
+    const s = loadTripSettings();
+    const lines = [];
+    if (s.travellers.trim()) lines.push(`Travellers: ${s.travellers.trim()}`);
+    if (s.preferences.trim()) lines.push(`What matters to us: ${s.preferences.trim()}`);
+    return lines.length ? `\n${lines.join("\n")}` : "";
+  }
+
+  // A category's question, with the user's rewrite winning if there is one.
+  function categoryPrompt(key) {
+    const custom = loadTripSettings().catPrompts[key];
+    if (custom && custom.trim()) return custom.trim();
+    const cat = findCategory(key);
+    return cat ? cat.prompt : String(key);
+  }
+
+  // Ready-made phrasings, so the box isn't a blank page. Tapping one adds or
+  // removes that line rather than replacing what's already written.
+  const PREFERENCE_PRESETS = [
+    "Independent places, not chains",
+    "Budget-friendly",
+    "Somewhere a young child is welcome",
+    "Good vegetarian options",
+    "Short walks only, nothing steep",
+    "Quiet over busy",
+    "Say if booking ahead is needed",
+    "Reachable without a car",
+  ];
 
   function saveTripSettings(patch) {
     const next = Object.assign(loadTripSettings(), patch);
@@ -289,7 +329,12 @@
     return chosen;
   }
 
+  // The exact text last sent to the model, so the app can show its working.
+  // A search you can't see the question behind is one you can't correct.
+  let lastAiPrompt = "";
+
   async function callGemini(key, prompt, { grounded = false } = {}) {
+    lastAiPrompt = prompt;
     const model = await resolveGeminiModel(key);
     // Discovered names already include the "models/" prefix.
     const path = model.indexOf("models/") === 0 ? model : `models/${model}`;
@@ -371,7 +416,7 @@
   async function searchWithGemini(query, key) {
     const s = loadTripSettings();
     const where = s.destination.trim() ? ` in ${s.destination.trim()}` : "";
-    const who = s.travellers.trim() ? `\nTravellers: ${s.travellers.trim()}` : "";
+    const who = aiContextBlock();
 
     const prompt =
       `Find up to 5 real, currently-open places matching this request${where}.` +
@@ -1271,6 +1316,25 @@
                    placeholder="e.g. family of 3, 4-year-old who walks" />
             <p class="settings-hint">Used to tailor AI suggestions and day planning.</p>
 
+            <label class="settings-label" for="setPreferences">What matters to you</label>
+            <textarea class="settings-input notes-box" id="setPreferences" rows="3"
+              placeholder="In your own words — e.g. independent places, nothing needing a car, somewhere we can be in and out in half an hour">${esc(
+                s.preferences
+              )}</textarea>
+            <div class="pref-chips">
+              ${PREFERENCE_PRESETS.map(
+                (t) =>
+                  `<button type="button" class="pref-chip${
+                    s.preferences.includes(t) ? " on" : ""
+                  }" data-pref-preset="${esc(t)}">${esc(t)}</button>`
+              ).join("")}
+            </div>
+            <p class="settings-hint">
+              Added to every AI search, in Explore and when planning days. Tap a suggestion
+              to add or remove it, or just write your own. The app still handles the
+              formatting rules itself, so nothing here can break a search.
+            </p>
+
             <div class="settings-divider"></div>
             <label class="settings-label">Backup</label>
             <p class="settings-hint">
@@ -1364,6 +1428,24 @@
       }
     });
 
+    // Presets edit the box rather than replacing it, so tapping one never
+    // discards something already typed.
+    placeModal.querySelectorAll("[data-pref-preset]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const phrase = btn.getAttribute("data-pref-preset");
+        const box = document.getElementById("setPreferences");
+        const lines = box.value
+          .split("\n")
+          .map((l) => l.trim())
+          .filter(Boolean);
+        const at = lines.indexOf(phrase);
+        if (at >= 0) lines.splice(at, 1);
+        else lines.push(phrase);
+        box.value = lines.join("\n");
+        btn.classList.toggle("on", at < 0);
+      });
+    });
+
     // Changing the model takes effect immediately - waiting for Save would
     // mean the next search silently used the old one.
     const modelSel = document.getElementById("setGeminiModel");
@@ -1383,6 +1465,7 @@
         // disabled picker shows before it's been populated.
         geminiModel: selectedGeminiModel() || loadTripSettings().geminiModel,
         travellers: document.getElementById("setTravellers").value,
+        preferences: document.getElementById("setPreferences").value.trim(),
       });
       closePlaceModal();
       showView(view.dataset.activeTab || "overview");
@@ -1842,7 +1925,7 @@
         .map((p) => `- ${p.name}${p.address ? ` (${p.address})` : ""}${p.category ? ` [${p.category}]` : ""}`)
         .join("\n");
       const dayList = plan.days.map((d, i) => `${i + 1}. ${d.label}`).join("\n");
-      const who = s.travellers.trim() ? `\nTravellers: ${s.travellers.trim()}` : "";
+      const who = aiContextBlock();
 
       const prompt =
         `Arrange these saved places into a day-by-day itinerary.${who}\n\n` +
@@ -2785,6 +2868,7 @@
     centre: null, // { name, lat, lon }
     category: "",
     customQuery: "", // used when category === "custom"
+    showPrompt: false,
     radius: 1500,
     status: "idle", // idle | locating | loading | done | error
     results: [],
@@ -2873,22 +2957,26 @@
   // cafés and restaurants are the least-mapped things in it - so the model
   // names candidates and OSM is then used only to place them.
   async function exploreWithGemini(centre, category, radiusMetres, key) {
-    const cat = findCategory(category);
-    const s = loadTripSettings();
-    const who = s.travellers.trim() ? `\nTravellers: ${s.travellers.trim()}` : "";
+    const who = aiContextBlock();
     const distance = radiusMetres >= 1000 ? `${radiusMetres / 1000} km` : `${radiusMetres} m`;
     // The category's own phrasing is the question. It's written as a
     // description rather than a label ("healthy places to eat - salads,
     // grain bowls…") because that's what makes the model return the right
-    // sort of place rather than the nearest twelve restaurants.
-    const looking =
-      category === "custom" ? explore.customQuery : cat ? cat.prompt : String(category);
+    // sort of place rather than the nearest twelve restaurants. The user can
+    // rewrite any of them.
+    const looking = category === "custom" ? explore.customQuery : categoryPrompt(category);
 
     const prompt =
       `List up to 6 real, currently-open places matching: ${looking}. ` +
       `They must be within about ${distance} of ${centre.name}.${who}\n\n` +
-      `Use search to confirm each one exists and is still trading. Prefer independent, ` +
-      `well-regarded places over chains. Reply with ONLY a JSON array, ` +
+      `Use search to confirm each one exists and is still trading. ` +
+      // Only the default when the user hasn't said what they want. Their own
+      // words replace this rather than fighting it - someone who asks for
+      // predictable chains shouldn't be argued with by the scaffolding.
+      (loadTripSettings().preferences.trim()
+        ? ""
+        : `Prefer independent, well-regarded places over chains. `) +
+      `Reply with ONLY a JSON array, ` +
       `each item {"name": exact official name, "area": street or neighbourhood, ` +
       `"why": one short sentence saying why it fits}. No other text.`;
 
@@ -3016,12 +3104,83 @@
   function renderExploreCategoryButton() {
     const cat = findCategory(explore.category);
     const label = explore.category === "custom" ? `🔎 ${explore.customQuery}` : cat ? `${cat.icon} ${cat.label}` : "";
+    const tunable = cat && explore.category !== "custom";
     return `
-      <button class="cat-select" id="exploreCatBtn">
-        <span class="cat-select-text">${label ? esc(label) : "What are you looking for?"}</span>
-        <span class="cat-select-caret">⌄</span>
-      </button>
+      <div class="cat-select-row">
+        <button class="cat-select" id="exploreCatBtn">
+          <span class="cat-select-text">${label ? esc(label) : "What are you looking for?"}</span>
+          <span class="cat-select-caret">⌄</span>
+        </button>
+        ${
+          tunable
+            ? `<button class="cat-tune" id="exploreCatTune" aria-label="Change what ${esc(
+                cat.label
+              )} asks for">✎</button>`
+            : ""
+        }
+      </div>
     `;
+  }
+
+  // Lets the question behind a category be rewritten. Only the description
+  // is editable - the app still adds the "reply with JSON" scaffolding, so
+  // an edit can change what comes back but can't break the search.
+  function openCategoryTuner(key) {
+    const cat = findCategory(key);
+    if (!cat) return;
+    const current = categoryPrompt(key);
+    const edited = current !== cat.prompt;
+
+    placeModal.innerHTML = `
+      <div class="modal-backdrop" data-close="1">
+        <div class="modal-sheet" role="dialog" aria-label="Change what this looks for">
+          <div class="modal-handle"></div>
+          <button class="modal-close" data-close="1" aria-label="Close">✕</button>
+          <div class="modal-body">
+            <h2 class="modal-title">${cat.icon} ${esc(cat.label)}</h2>
+            <div class="modal-subtitle">What this asks the AI to find</div>
+
+            <textarea class="settings-input notes-box" id="catPromptBox" rows="4">${esc(current)}</textarea>
+            <p class="settings-hint">
+              Describe the kind of place you want back. The app adds the rest — how far,
+              who's travelling, what matters to you, and the formatting rules.
+            </p>
+
+            <div class="settings-btn-row" style="margin-top:12px;">
+              <button class="modal-btn modal-btn-primary" id="catPromptSave">Save &amp; search</button>
+              <button class="modal-btn" id="catPromptReset" ${edited ? "" : "disabled"}>Reset to default</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+    placeModal.classList.add("open");
+
+    placeModal.querySelectorAll("[data-close]").forEach((el) => {
+      el.addEventListener("click", (e) => {
+        if (e.target === el) closePlaceModal();
+      });
+    });
+
+    document.getElementById("catPromptSave").addEventListener("click", () => {
+      const text = document.getElementById("catPromptBox").value.trim();
+      const map = Object.assign({}, loadTripSettings().catPrompts);
+      // Storing only real changes means later improvements to the built-in
+      // wording still reach anyone who never edited that category.
+      if (!text || text === cat.prompt) delete map[key];
+      else map[key] = text;
+      saveTripSettings({ catPrompts: map });
+      closePlaceModal();
+      runExplore();
+    });
+
+    document.getElementById("catPromptReset").addEventListener("click", () => {
+      const map = Object.assign({}, loadTripSettings().catPrompts);
+      delete map[key];
+      saveTripSettings({ catPrompts: map });
+      closePlaceModal();
+      runExplore();
+    });
   }
 
   function openCategoryPicker() {
@@ -3032,14 +3191,17 @@
         <div class="cat-group-label">${esc(g)}</div>
         <div class="cat-grid">
           ${items
-            .map(
-              (c) => `
+            .map((c) => {
+              // A category you've reworded is marked, so your own changes
+              // aren't invisible next to the ones still on defaults.
+              const tuned = !!loadTripSettings().catPrompts[c.key];
+              return `
             <button class="cat-tile${explore.category === c.key ? " on" : ""}" data-choose-cat="${esc(c.key)}">
               <span class="cat-tile-icon">${c.icon}</span>
-              <span class="cat-tile-label">${esc(c.label)}</span>
+              <span class="cat-tile-label">${esc(c.label)}${tuned ? ` <span class="cat-tuned" title="You changed what this asks for">✎</span>` : ""}</span>
             </button>
-          `
-            )
+          `;
+            })
             .join("")}
         </div>
       `;
@@ -3143,9 +3305,22 @@
     }
     if (explore.status === "error") body += `<pre class="settings-result bad">${esc(explore.error)}</pre>`;
 
+    // Showing the question makes a disappointing answer fixable: you can see
+    // whether the model was asked the wrong thing before blaming the model.
+    if (explore.usedAi && lastAiPrompt && (explore.status === "done" || explore.status === "error")) {
+      body += `<button class="link-btn" id="exploreShowPrompt">${
+        explore.showPrompt ? "Hide" : "See"
+      } what was asked</button>`;
+      if (explore.showPrompt) {
+        body += `<pre class="settings-result prompt-shown">${esc(lastAiPrompt)}</pre>`;
+      }
+    }
+
     if (explore.status === "done") {
       if (!explore.results.length) {
-        body += `<p class="pick-status">Nothing found in range — try a wider radius.</p>`;
+        body += `<p class="pick-status">Nothing found in range — try a wider radius${
+          explore.category && explore.category !== "custom" ? ", or ✎ to change what this asks for" : ""
+        }.</p>`;
       } else {
         if (explore.error) {
           body += `<p class="pick-status">Fell back to OpenStreetMap — the AI search didn't answer.</p><pre class="settings-result bad">${esc(
@@ -3229,6 +3404,17 @@
     }
     const catBtn = document.getElementById("exploreCatBtn");
     if (catBtn) catBtn.addEventListener("click", openCategoryPicker);
+
+    const tuneBtn = document.getElementById("exploreCatTune");
+    if (tuneBtn) tuneBtn.addEventListener("click", () => openCategoryTuner(explore.category));
+
+    const promptToggle = document.getElementById("exploreShowPrompt");
+    if (promptToggle) {
+      promptToggle.addEventListener("click", () => {
+        explore.showPrompt = !explore.showPrompt;
+        renderPicks();
+      });
+    }
 
     view.querySelectorAll("[data-explore-add]").forEach((btn) => {
       btn.addEventListener("click", () => {

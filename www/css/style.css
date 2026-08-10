@@ -576,6 +576,67 @@ body {
 .cat-select-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cat-select-caret { opacity: 0.6; flex-shrink: 0; }
 
+.cat-select-row { display: flex; align-items: center; gap: 8px; }
+.cat-select-row .cat-select { flex: 1; min-width: 0; }
+.cat-tune {
+  flex-shrink: 0;
+  width: 48px;
+  min-height: 48px;
+  margin: 4px 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 16px;
+}
+.cat-tune:active { opacity: 0.6; }
+.cat-tuned { opacity: 0.7; font-size: 10px; }
+
+/* A quiet inline control for "show me the working" - not a button competing
+   with the ones that actually do something. */
+.link-btn {
+  display: block;
+  width: 100%;
+  margin: 6px 0 2px;
+  padding: 8px 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+  min-height: 36px;
+}
+.prompt-shown {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 11.5px;
+  line-height: 1.5;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+/* Standing preferences: chips edit the box rather than replacing it. */
+.pref-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.pref-chip {
+  border: 1px dashed var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: 999px;
+  padding: 7px 12px;
+  font-family: inherit;
+  font-size: 12px;
+  min-height: 34px;
+}
+.pref-chip.on {
+  background: var(--accent-soft);
+  border-style: solid;
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
 .cat-group-label {
   font-size: 11.5px;
   font-weight: 700;
