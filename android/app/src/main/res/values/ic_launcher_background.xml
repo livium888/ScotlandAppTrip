@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Matches --accent in the app's stylesheet, so the adaptive icon and the
-         legacy square icon are the same thing rather than two designs. -->
+    <!-- Same navy as the accent colour in the app's stylesheet, so the
+         adaptive icon and the legacy square icon are one design rather
+         than two. -->
     <color name="ic_launcher_background">#1D4E6F</color>
 </resources>

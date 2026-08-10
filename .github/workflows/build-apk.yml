@@ -42,8 +42,15 @@ jobs:
       - name: Install Playwright browser
         run: npx playwright install --with-deps chromium
 
+      # A second's check that catches what the browser suites structurally
+      # cannot: Android resource XML, which nothing validates until Gradle
+      # compiles it five minutes into the build. A stray "--" in a comment
+      # cost a build once.
+      - name: Check Android resource XML
+        run: node tests/check-android-xml.mjs
+
       - name: Run browser tests
-        run: npm test
+        run: node tests/run-all.mjs
 
       - name: Sync Capacitor Android project
         run: npx cap sync android

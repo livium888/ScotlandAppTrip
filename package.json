@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "node tests/run-all.mjs"
+    "test": "node tests/check-android-xml.mjs && node tests/run-all.mjs"
   },
   "repository": {
     "type": "git",
