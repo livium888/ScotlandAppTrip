@@ -187,6 +187,27 @@ gap between Nominatim calls to stay within what a free community service asks.
   it stays. It means the key appears in request URLs; over HTTPS that is not
   visible on the network, but it would appear in any proxy log the user's own
   network keeps. Worth knowing rather than worth changing.
-- **Key restriction is the user's to do, not the app's.** An Android-restricted
-  Gemini key is useless to anyone who extracts it. That is one setting in
-  Google Cloud Console and it is the single highest-value thing left.
+- **Key restriction: an earlier version of this document recommended an
+  Android app restriction. That advice was wrong for this architecture** and
+  is corrected here.
+
+  Android application restrictions are enforced by the caller sending
+  `X-Android-Package` and `X-Android-Cert` headers. Google's own client SDKs
+  add them; this app calls the REST endpoint directly with `fetch()` from a
+  WebView, which sends neither. Applying that restriction would make Google
+  refuse the app's own requests. The same is true of HTTP-referrer
+  restrictions — there is no referrer to match.
+
+  What does apply:
+  - **Application restrictions: None.** Not laziness; anything else breaks it.
+  - **API restrictions: Generative Language API only.** This is enforced
+    server-side regardless of client, so a copied key cannot reach any other
+    Google service. This is the control worth setting.
+  - **No billing card on the project.** With a free-tier AI Studio key, the
+    worst case for a leaked key is someone consuming the quota — a service
+    annoyance, not a bill.
+  - **Rotation is cheap.** Delete and reissue in AI Studio, then paste the new
+    one into Settings. Worth doing if the phone is ever lost.
+
+  The app now says this at the key field, and its 403 handler no longer
+  suggests the restriction that would break it.

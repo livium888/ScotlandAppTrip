@@ -252,8 +252,13 @@
     if (status === 403 && /SERVICE_DISABLED|has not been used in project|is disabled/i.test(msg + reason)) {
       return `The Generative Language API isn't enabled on that key's project (403 SERVICE_DISABLED). Open the link in Google's message below and enable it, then wait a minute.\n\n${msg}`;
     }
-    if (status === 403 && /referer|referrer|API_KEY_HTTP_REFERRER|blocked/i.test(msg + reason)) {
-      return `The key has website (HTTP referrer) restrictions, and requests from this app don't send a matching referrer (403). In Google Cloud → Credentials, set Application restrictions to "None" for testing, or add an Android app restriction.\n\n${msg}`;
+    if (status === 403 && /referer|referrer|API_KEY_HTTP_REFERRER|android|ios|blocked/i.test(msg + reason)) {
+      // Deliberately does not suggest an Android app restriction. That kind
+      // is enforced by the caller sending X-Android-Package and
+      // X-Android-Cert headers, which Google's own SDKs add and a plain
+      // fetch() from a WebView does not - so it refuses this app's requests
+      // rather than protecting them.
+      return `The key has application restrictions, and requests from this app can't satisfy them (403). This app calls Google directly from a web view, which sends no referrer and no Android signing headers, so any "Application restriction" will block it. Set Application restrictions to "None" and use "API restrictions" instead — limit the key to the Generative Language API.\n\n${msg}`;
     }
     if (status === 403) {
       return `Google refused the key (403). Often this is API restrictions on the key limiting it to other APIs.\n\n${msg}`;
@@ -1347,6 +1352,13 @@
               lets you search by description ("quiet cafe near the castle") when
               OpenStreetMap finds nothing. Suggested opening hours always need
               checking — verify before relying on them.
+            </p>
+            <p class="settings-hint">
+              Keeping it safe: leave <b>Application restrictions</b> set to None — this
+              app calls Google directly, so any referrer or Android restriction blocks
+              it rather than protecting it. Set <b>API restrictions</b> to the
+              Generative Language API only, so a copied key can't reach anything else.
+              Without a billing card the worst case is a used-up free quota, not a bill.
             </p>
 
             <button class="modal-btn" id="testGeminiBtn" style="margin-top:10px;">Test key & find models</button>
