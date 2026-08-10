@@ -531,7 +531,9 @@
     state.boards = state.boards.filter((b) => b.id !== id);
     if (state.activeId === id) state.activeId = state.boards[0].id;
     saveBoards(state);
-    ["picks", "folders", "plan"].forEach((part) => localStorage.removeItem(boardKey(id, part)));
+    ["picks", "folders", "plan", "budget", "packing", "notes"].forEach((part) =>
+      localStorage.removeItem(boardKey(id, part))
+    );
     return true;
   }
 
@@ -584,6 +586,77 @@
 
   function isPicked(source, name) {
     return loadPicks().some((p) => p.id === pickId(source, name));
+  }
+
+  // Places you eat at want a different screen from places you visit: opening
+  // hours matter more, "which meal" matters at all, and mixing forty cafés
+  // into a list of castles makes both harder to read. Nothing asks the user
+  // to file things by hand - the category that came with the place is enough
+  // to guess, and the guess is overridable from the place's own sheet.
+  const FOOD_HINTS =
+    /restaurant|caf[eé]|coffee|bakery|patisserie|\bbar\b|\bpub\b|bistro|brasserie|deli\b|diner|eatery|food|pizz|takeaway|tea ?room|ice ?cream|gelat|chippy|fish and chips|fast[ _]food|breakfast|brunch|lunch|dinner|creperie|noodle|sushi|tapas|steak|grill|canteen|bagel|sandwich/i;
+
+  function pickKind(p) {
+    if (p.kind === "eat" || p.kind === "place") return p.kind; // user's own call wins
+    if (p.source === "eats") return "eat";
+    if (p.source === "places") return "place";
+    const hay = [p.category, p.type, p.meal, p.description].filter(Boolean).join(" ");
+    return FOOD_HINTS.test(hay) ? "eat" : "place";
+  }
+
+  function picksOfKind(kind) {
+    return loadPicks().filter((p) => pickKind(p) === kind);
+  }
+
+  // Costs are per place and entirely optional. A trip's real budget question
+  // is "what have I already committed to", which only the saved places can
+  // answer - a fixed table of estimates never could.
+  function pickCost(p) {
+    const n = Number(p.cost);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  }
+
+  function money(n) {
+    return `£${Number(n).toFixed(Number.isInteger(n) ? 0 : 2)}`;
+  }
+
+  // Costs that aren't a place: trains, the flat, the car. Per board, because
+  // a weekend in Portsmouth shouldn't inherit Scotland's ferry.
+  function loadBudgetExtras() {
+    const rows = readJson(boardKey(activeBoard().id, "budget"), []);
+    return Array.isArray(rows) ? rows : [];
+  }
+
+  function saveBudgetExtras(rows) {
+    localStorage.setItem(boardKey(activeBoard().id, "budget"), JSON.stringify(rows));
+  }
+
+  // The packing list used to be one global list of fixed Scottish items with
+  // only its ticks stored. It's now per board and fully editable - a
+  // three-day city break and a week in the Highlands need different lists.
+  function loadPacking() {
+    const board = activeBoard();
+    const stored = readJson(boardKey(board.id, "packing"), null);
+    if (Array.isArray(stored)) return stored;
+    if (!board.hasGuide) return [];
+    // Seed the Scotland board from the bundled list, carrying over whatever
+    // was already ticked under the old global key.
+    const checked = readJson(STORAGE_KEY, {}) || {};
+    const seeded = PACKING.map((text, i) => ({ text, done: !!checked[i] }));
+    localStorage.setItem(boardKey(board.id, "packing"), JSON.stringify(seeded));
+    return seeded;
+  }
+
+  function savePacking(items) {
+    localStorage.setItem(boardKey(activeBoard().id, "packing"), JSON.stringify(items));
+  }
+
+  function loadBoardNotes() {
+    return readJson(boardKey(activeBoard().id, "notes"), "") || "";
+  }
+
+  function saveBoardNotes(text) {
+    localStorage.setItem(boardKey(activeBoard().id, "notes"), JSON.stringify(text));
   }
 
   function haversineKm(lat1, lon1, lat2, lon2) {
@@ -923,7 +996,14 @@
     // restores onto an older build.
     const keys = [BOARDS_KEY, TRIP_KEY, STORAGE_KEY, LEGACY.picks, LEGACY.folders, LEGACY.plan];
     loadBoards().boards.forEach((b) => {
-      keys.push(boardKey(b.id, "picks"), boardKey(b.id, "folders"), boardKey(b.id, "plan"));
+      keys.push(
+        boardKey(b.id, "picks"),
+        boardKey(b.id, "folders"),
+        boardKey(b.id, "plan"),
+        boardKey(b.id, "budget"),
+        boardKey(b.id, "packing"),
+        boardKey(b.id, "notes")
+      );
     });
     return keys;
   }
@@ -1497,65 +1577,160 @@
 
   // ---------- Views ----------
 
+  // ---------- Trip ----------
+  // The front page of whichever board is open. It used to describe the
+  // bundled Scotland trip and nothing else, so it was wrong on every other
+  // board; it now summarises the board's own places, days and costs, with
+  // the Scotland briefing kept only on the board it belongs to.
   function renderOverview() {
-    const totalLow = BUDGET.reduce((a, b) => a + b.low, 0);
-    const totalHigh = BUDGET.reduce((a, b) => a + b.high, 0);
-    const cities = ["Edinburgh", "Stirling", "Glasgow"];
+    const board = activeBoard();
+    const picks = loadPicks();
+    const plan = loadPlan();
+    const scheduledIds = new Set();
+    Object.values(plan.items || {}).forEach((list) =>
+      (list || []).forEach((it) => scheduledIds.add(it.pickId))
+    );
+    const scheduled = picks.filter((p) => scheduledIds.has(p.id)).length;
+    const booked = picks.filter((p) => p.booked).length;
+    const eats = picksOfKind("eat").length;
+    const costTotal =
+      picks.reduce((a, p) => a + pickCost(p), 0) +
+      loadBudgetExtras().reduce((a, r) => a + (Number(r.amount) || 0), 0);
+
+    const subtitle = board.hasGuide
+      ? TRIP.subtitle
+      : [board.destination, board.dated ? "trip" : "saved places"].filter(Boolean).join(" · ");
 
     let html = `
       <div class="hero">
-        <h1>${esc(TRIP.title)}</h1>
-        <p>${esc(TRIP.subtitle)}</p>
+        <h1>${esc(board.name)}</h1>
+        <p>${esc(subtitle)}</p>
         <div class="hero-stats">
-          <div class="hero-stat"><b>${TRIP.nights}</b><span>nights</span></div>
-          <div class="hero-stat"><b>${DAYS.length}</b><span>days planned</span></div>
-          <div class="hero-stat"><b>3</b><span>cities</span></div>
+          <div class="hero-stat"><b>${picks.length}</b><span>saved</span></div>
+          <div class="hero-stat"><b>${plan.days.length}</b><span>day${plan.days.length === 1 ? "" : "s"}</span></div>
+          <div class="hero-stat"><b>${scheduled}</b><span>scheduled</span></div>
         </div>
-        <button class="hero-share" id="shareTrip">↗ Share whole itinerary</button>
+        <button class="hero-share" id="shareTrip">↗ Share this plan</button>
       </div>
-
-      <div class="section-label">Trip at a glance</div>
-      <div class="card">
-        <p>${esc(TRIP.traveler)}. Peak Fringe/festival week in Edinburgh (7–31 Aug), so this plan
-        mixes gentle festival mornings with day trips to Stirling and Glasgow — especially over
-        the 22–23 Aug weekend, when Edinburgh's Old Town is at its most crowded.</p>
-      </div>
-
-      <div class="section-label">Cities</div>
     `;
 
-    cities.forEach((c) => {
-      const count = DAYS.filter((d) => d.city === c).length;
+    // Where things stand, and the one action that moves it forward. An empty
+    // board gets told what to do rather than shown three zeroes.
+    if (!picks.length) {
       html += `
-        <div class="card" style="display:flex;align-items:center;justify-content:space-between;">
-          <div>
-            <span class="pill" style="background:${cityColor(c)}">${esc(c)}</span>
-          </div>
-          <div style="font-size:13px;color:var(--ink-soft);">${count} day${count === 1 ? "" : "s"}</div>
+        <div class="card empty-state">
+          <div class="empty-icon">📍</div>
+          <h2>Nothing saved yet</h2>
+          <ul class="empty-list">
+            <li><b>Share from Google Maps</b> — tap Share on a place, pick this app</li>
+            <li><b>Search in Picks</b> — by name, or describe what you want</li>
+          </ul>
+          <button class="modal-btn modal-btn-primary" data-goto="picks" style="margin-top:12px;width:100%;">Add a place</button>
         </div>
       `;
-    });
+    } else {
+      html += `<div class="section-label">Where it stands</div>`;
+      html += `<div class="card overview-grid">
+        <button class="overview-stat" data-goto="places"><b>${picks.length - eats}</b><span>places to go</span></button>
+        <button class="overview-stat" data-goto="eats"><b>${eats}</b><span>places to eat</span></button>
+        <button class="overview-stat" data-goto="itinerary"><b>${picks.length - scheduled}</b><span>unscheduled</span></button>
+        <button class="overview-stat" data-goto="picks"><b>${booked}</b><span>booked</span></button>
+      </div>`;
 
-    html += `
-      <div class="section-label">Estimated budget</div>
-      <div class="card">
-        <p style="margin-bottom:4px;">Activities, tickets &amp; transport for the week (excl. accommodation)</p>
-        <div class="budget-total" style="border-top:none;padding-top:8px;">
-          <b>Total estimate</b>
-          <span class="budget-range">£${totalLow}–£${totalHigh}</span>
+      if (plan.days.length) {
+        html += `<div class="section-label">Days</div><div class="card">`;
+        plan.days.forEach((d) => {
+          const count = (plan.items[d.id] || []).length;
+          html += `
+            <button class="overview-day" data-goto="itinerary">
+              <span class="overview-day-label">${esc(d.label)}</span>
+              <span class="overview-day-count">${count ? `${count} stop${count === 1 ? "" : "s"}` : "empty"}</span>
+            </button>
+          `;
+        });
+        html += `</div>`;
+      } else {
+        html += `
+          <div class="card">
+            <p class="pick-status">No days yet. Add them in the Itinerary tab, then drop your saved places onto them.</p>
+            <button class="modal-btn modal-btn-primary" data-goto="itinerary" style="margin-top:12px;width:100%;">Build the itinerary</button>
+          </div>
+        `;
+      }
+
+      html += `
+        <div class="section-label">Budget</div>
+        <button class="card overview-budget" data-goto="budget">
+          <span>${costTotal > 0 ? "Costed so far" : "Nothing costed yet"}</span>
+          <span class="budget-range">${money(costTotal)}</span>
+        </button>
+      `;
+    }
+
+    if (board.hasGuide) {
+      html += `
+        <div class="section-label">About this trip</div>
+        <div class="card">
+          <p>${esc(TRIP.traveler)}. Peak Fringe/festival week in Edinburgh (7–31 Aug), so this plan
+          mixes gentle festival mornings with day trips to Stirling and Glasgow — especially over
+          the 22–23 Aug weekend, when Edinburgh's Old Town is at its most crowded.</p>
         </div>
-      </div>
-    `;
+      `;
+    }
 
     view.innerHTML = html;
+
+    view.querySelectorAll("[data-goto]").forEach((el) =>
+      el.addEventListener("click", () => showView(el.getAttribute("data-goto")))
+    );
 
     const shareBtn = document.getElementById("shareTrip");
     if (shareBtn) {
       shareBtn.addEventListener("click", () => {
-        shareText(TRIP.title, formatFullItineraryShareText());
+        shareText(board.name, formatBoardShareText());
       });
     }
   }
+
+  // Shares what the user actually planned. Falls back to the bundled
+  // itinerary on the Scotland board when they haven't planned anything of
+  // their own yet, since that's the thing worth sending at that point.
+  function formatBoardShareText() {
+    const board = activeBoard();
+    const plan = loadPlan();
+    const picks = loadPicks();
+    const byId = {};
+    picks.forEach((p) => (byId[p.id] = p));
+
+    const planned = Object.values(plan.items || {}).some((l) => (l || []).length);
+    if (!planned && board.hasGuide) return formatFullItineraryShareText();
+
+    const lines = [board.name];
+    if (board.destination) lines.push(board.destination);
+    lines.push("");
+
+    plan.days.forEach((day) => {
+      const items = plan.items[day.id] || [];
+      if (!items.length) return;
+      lines.push(`— ${day.label} —`);
+      items.forEach((it) => {
+        const p = byId[it.pickId];
+        if (!p) return;
+        lines.push(`  ${it.time ? it.time + " " : ""}${p.name}${p.booked ? " (booked)" : ""}`);
+      });
+      lines.push("");
+    });
+
+    const unscheduled = picks.filter(
+      (p) => !Object.values(plan.items || {}).some((l) => (l || []).some((it) => it.pickId === p.id))
+    );
+    if (unscheduled.length) {
+      lines.push("— Not scheduled —");
+      unscheduled.forEach((p) => lines.push(`  ${p.name}`));
+    }
+    return lines.join("\n").trim();
+  }
+
 
   // ---------- Personal itinerary planner ----------
   // The bundled DAYS are a suggested plan and stay read-only; this is the
@@ -1895,6 +2070,23 @@
       html += `</div>`;
     });
 
+    // A board with no days is the normal starting state now that every board
+    // can be planned, so it gets an explanation and a one-tap way in rather
+    // than a bare text field.
+    if (!plan.days.length) {
+      html += `
+        <div class="card">
+          <h2 style="margin:0 0 6px;font-size:16px;">No days yet</h2>
+          <p class="pick-status">Add a day, then drop your saved places onto it. Name them however you like — "Sat 22 Aug", "Day 1", or "Sunday".</p>
+          <div class="plan-add-chips" style="margin-top:10px;">
+            <button class="add-chip" data-quick-day="Day 1">+ Day 1</button>
+            <button class="add-chip" data-quick-day="Day 2">+ Day 2</button>
+            <button class="add-chip" data-quick-day="Weekend">+ Weekend</button>
+          </div>
+        </div>
+      `;
+    }
+
     html += `
       <form class="search-bar" id="addDayForm" style="margin-top:4px;">
         <input type="text" id="addDayInput" placeholder="Add a day (e.g. Sat 22 Aug)…" autocomplete="off" />
@@ -1952,6 +2144,14 @@
         renderItinerary();
       });
     });
+    view.querySelectorAll("[data-quick-day]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        addPlanDay(btn.getAttribute("data-quick-day"));
+        applyBoardTabs(); // the first day makes Today worth showing
+        renderItinerary();
+      });
+    });
+
     const form = document.getElementById("addDayForm");
     if (form) {
       form.addEventListener("submit", (e) => {
@@ -1959,20 +2159,26 @@
         const input = document.getElementById("addDayInput");
         addPlanDay(input.value);
         input.value = "";
+        applyBoardTabs();
         renderItinerary();
       });
     }
   }
 
   function renderItinerary() {
-    const toggle = `
+    // The bundled Scotland itinerary is only worth offering on the board it
+    // came with; anywhere else the toggle would show someone else's week.
+    const hasSuggested = activeBoard().hasGuide;
+    const toggle = hasSuggested
+      ? `
       <div class="filter-row plan-toggle">
         <button class="filter-chip${planMode === "suggested" ? " active" : ""}" data-plan-mode="suggested">Suggested</button>
         <button class="filter-chip${planMode === "mine" ? " active" : ""}" data-plan-mode="mine">My plan</button>
       </div>
-    `;
+    `
+      : "";
 
-    if (planMode === "mine") {
+    if (!hasSuggested || planMode === "mine") {
       view.innerHTML = toggle + renderMyPlan();
       wirePlanToggle();
       wireMyPlan();
@@ -2058,27 +2264,125 @@
     if (first) first.classList.add("open");
   }
 
+  // ---------- Places & Eats ----------
+  // These two tabs used to be read-only lists of bundled Edinburgh content,
+  // which made them useless on any other board and useless for anything the
+  // user added themselves. They now show the board's own saved places, split
+  // by what they are: somewhere to go, or somewhere to eat. The bundled
+  // Edinburgh guide still appears underneath, but only on the board it came
+  // with, and only as suggestions to save.
   let placeFilter = "All";
+  let eatsFilter = "All";
 
   function renderPlaces() {
+    renderPlaceTab({
+      kind: "place",
+      searchFormId: "placesSearchForm",
+      searchInputId: "placesSearchInput",
+      searchPlaceholder: "Search Google Maps for a place…",
+      searchHint: "Opens Google Maps. To keep a place, add it in Picks — it'll appear here.",
+      heading: "Places to go",
+      empty: "No places saved on this board yet. Add one in Picks — anything that isn't a café or restaurant lands here.",
+      filter: placeFilter,
+      setFilter: (v) => (placeFilter = v),
+      guide: () => renderGuidePlaces(),
+      guideLabel: "Edinburgh guide",
+    });
+  }
+
+  function renderEats() {
+    renderPlaceTab({
+      kind: "eat",
+      searchFormId: "eatsSearchForm",
+      searchInputId: "eatsSearchInput",
+      searchPlaceholder: "Search restaurants near…",
+      searchHint: 'Opens Google Maps already searching "restaurants near" whatever you type.',
+      heading: "Places to eat",
+      empty: "No food places saved on this board yet. Add a café or restaurant in Picks and it'll appear here.",
+      filter: eatsFilter,
+      setFilter: (v) => (eatsFilter = v),
+      guide: () => renderGuideEats(),
+      guideLabel: "Edinburgh eats guide",
+      searchTransform: (raw) => `restaurants near ${raw}`,
+    });
+  }
+
+  function renderPlaceTab(cfg) {
+    const mine = picksOfKind(cfg.kind);
+    const board = activeBoard();
+
     let html = `
-      <form class="search-bar" id="placesSearchForm">
-        <input type="search" id="placesSearchInput" placeholder="Search any other place or attraction…" autocomplete="off" />
+      <form class="search-bar" id="${cfg.searchFormId}">
+        <input type="search" id="${cfg.searchInputId}" placeholder="${esc(cfg.searchPlaceholder)}" autocomplete="off" />
         <button type="submit" aria-label="Search on Google Maps">🔍</button>
       </form>
-      <p class="search-hint">Opens Google Maps — browse it there for nearby restaurants, reviews, and the official website.</p>
+      <p class="search-hint">${esc(cfg.searchHint)}</p>
     `;
 
-    const cities = ["All", "Edinburgh", "Stirling", "Glasgow"];
-    html += `<div class="filter-row">`;
-    cities.forEach((c) => {
-      html += `<button class="filter-chip ${c === placeFilter ? "active" : ""}" data-city="${esc(c)}">${esc(c)}</button>`;
+    // Folders are the board's own, so the chips match how this user files
+    // things rather than three hardcoded Scottish cities.
+    const folders = ["All"];
+    mine.forEach((p) => {
+      const f = p.city || "Unsorted";
+      if (!folders.includes(f)) folders.push(f);
     });
-    html += `</div>`;
+    const active = folders.includes(cfg.filter) ? cfg.filter : "All";
 
-    const list = PLACES.filter((p) => placeFilter === "All" || p.city === placeFilter);
+    if (folders.length > 2) {
+      html += `<div class="filter-row">`;
+      folders.forEach((f) => {
+        html += `<button class="filter-chip ${f === active ? "active" : ""}" data-city="${esc(f)}">${esc(f)}</button>`;
+      });
+      html += `</div>`;
+    }
 
-    list.forEach((p) => {
+    const list = mine.filter((p) => active === "All" || (p.city || "Unsorted") === active);
+
+    html += `<div class="section-label">${esc(cfg.heading)}${
+      mine.length ? ` · ${list.length}` : ""
+    }</div>`;
+
+    if (!list.length) {
+      html += `<div class="card"><p class="pick-status">${esc(cfg.empty)}</p>
+        <button class="modal-btn modal-btn-primary" data-goto-picks="1" style="margin-top:12px;">＋ Add a place</button></div>`;
+    } else {
+      list.forEach((p) => {
+        html += renderPickRow(p);
+      });
+      html += `<button class="modal-btn" data-goto-picks="1" style="width:100%;margin-top:12px;">＋ Add another</button>`;
+    }
+
+    // The bundled guide is suggestions, not the user's list, so it sits below
+    // their own places and only on the board that came with it.
+    if (board.hasGuide) {
+      html += `<div class="section-label">${esc(cfg.guideLabel)}</div>`;
+      html += cfg.guide();
+    }
+
+    view.innerHTML = html;
+
+    view.querySelectorAll("[data-city]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        cfg.setFilter(btn.getAttribute("data-city"));
+        renderPlaceTab(cfg);
+      });
+    });
+
+    view.querySelectorAll("[data-goto-picks]").forEach((btn) =>
+      btn.addEventListener("click", () => showView("picks"))
+    );
+
+    view.querySelectorAll("[data-open-pick]").forEach((row) =>
+      row.addEventListener("click", () => openPickDetail(row.getAttribute("data-open-pick")))
+    );
+
+    wirePickToggles(() => renderPlaceTab(cfg));
+    wireSearchBar(cfg.searchFormId, cfg.searchInputId, cfg.searchTransform);
+  }
+
+  function renderGuidePlaces() {
+    let html = "";
+    PLACES.forEach((p) => {
       const mapsUrl = mapsUrlFor(p.mapsQuery);
       const picked = isPicked("places", p.name);
       html += `
@@ -2101,48 +2405,17 @@
         </div>
       `;
     });
-
-    view.innerHTML = html;
-
-    view.querySelectorAll("[data-city]").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        placeFilter = btn.getAttribute("data-city");
-        renderPlaces();
-      });
-    });
-
-    wirePickToggles(renderPlaces);
-    wireSearchBar("placesSearchForm", "placesSearchInput");
+    return html;
   }
 
-  let eatsFilter = "All";
-
-  function renderEats() {
+  function renderGuideEats() {
     let html = `
-      <form class="search-bar" id="eatsSearchForm">
-        <input type="search" id="eatsSearchInput" placeholder="Search restaurants near…" autocomplete="off" />
-        <button type="submit" aria-label="Search restaurants on Google Maps">🔍</button>
-      </form>
-      <p class="search-hint">Opens Google Maps already searching "restaurants near" wherever you type.</p>
-    `;
-
-    const cities = ["All", "Edinburgh", "Stirling", "Glasgow"];
-    html += `<div class="filter-row">`;
-    cities.forEach((c) => {
-      html += `<button class="filter-chip ${c === eatsFilter ? "active" : ""}" data-city="${esc(c)}">${esc(c)}</button>`;
-    });
-    html += `</div>`;
-
-    html += `
       <div class="card">
         <p>Independent, well-reviewed picks near each stop — not fast-food chains, not fine-dining prices.
         £ = casual/cheap, ££ = mid-range, £££ = a step up but still no white tablecloths.</p>
       </div>
     `;
-
-    const list = EATS.filter((e) => eatsFilter === "All" || e.city === eatsFilter);
-
-    list.forEach((e) => {
+    EATS.forEach((e) => {
       const mapsUrl = mapsUrlFor(e.mapsQuery);
       const picked = isPicked("eats", e.name);
       html += `
@@ -2170,51 +2443,150 @@
         </div>
       `;
     });
-
-    view.innerHTML = html;
-
-    view.querySelectorAll("[data-city]").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        eatsFilter = btn.getAttribute("data-city");
-        renderEats();
-      });
-    });
-
-    wirePickToggles(renderEats);
-    wireSearchBar("eatsSearchForm", "eatsSearchInput", (raw) => `restaurants near ${raw}`);
+    return html;
   }
 
+  // ---------- Budget ----------
+  // Was a fixed table of Scottish estimates that no board could edit and no
+  // saved place appeared in. The real question is "what has this trip
+  // committed me to", which only the places actually saved can answer - so
+  // every place can carry a cost, and anything that isn't a place (trains,
+  // the flat) goes in as its own line.
   function renderBudget() {
-    const totalLow = BUDGET.reduce((a, b) => a + b.low, 0);
-    const totalHigh = BUDGET.reduce((a, b) => a + b.high, 0);
+    const picks = loadPicks();
+    const extras = loadBudgetExtras();
+    const board = activeBoard();
 
-    let html = `<div class="card">`;
-    BUDGET.forEach((b) => {
-      const range = b.low === b.high ? (b.low === 0 ? "Free" : `£${b.low}`) : `£${b.low}–£${b.high}`;
+    const placesTotal = picks.reduce((a, p) => a + pickCost(p), 0);
+    const extrasTotal = extras.reduce((a, r) => a + (Number(r.amount) || 0), 0);
+    const total = placesTotal + extrasTotal;
+    const priced = picks.filter((p) => pickCost(p) > 0);
+
+    let html = `
+      <div class="card budget-hero">
+        <div class="budget-hero-total">${money(total)}</div>
+        <div class="budget-hero-sub">${
+          priced.length || extras.length
+            ? `${priced.length} place${priced.length === 1 ? "" : "s"} priced${
+                extras.length ? ` · ${extras.length} other cost${extras.length === 1 ? "" : "s"}` : ""
+              }`
+            : "Nothing costed yet"
+        }</div>
+      </div>
+    `;
+
+    html += `<div class="section-label">Places</div>`;
+    if (!picks.length) {
+      html += `<div class="card"><p class="pick-status">No places saved on this board yet. Anything you add in Picks can carry a price here.</p></div>`;
+    } else {
+      html += `<div class="card">`;
+      picks.forEach((p) => {
+        html += `
+          <div class="budget-row">
+            <div class="budget-item">${esc(p.name)}${
+              p.booked ? ` <span class="booked-badge">booked</span>` : ""
+            }</div>
+            <div class="budget-input-wrap">
+              <span class="budget-currency">£</span>
+              <input class="budget-input" type="number" inputmode="decimal" min="0" step="0.5"
+                     placeholder="0" value="${pickCost(p) ? esc(String(pickCost(p))) : ""}"
+                     data-pick-cost="${esc(p.id)}" aria-label="Cost for ${esc(p.name)}" />
+            </div>
+          </div>
+        `;
+      });
+      html += `
+        <div class="budget-total"><b>Places</b><span class="budget-range">${money(placesTotal)}</span></div>
+      </div>`;
+    }
+
+    html += `<div class="section-label">Other costs</div><div class="card">`;
+    if (!extras.length) {
+      html += `<p class="pick-status">Travel, accommodation, anything that isn't a place.</p>`;
+    }
+    extras.forEach((r, i) => {
       html += `
         <div class="budget-row">
-          <div class="budget-item">${esc(b.item)}</div>
-          <div class="budget-range">${range}</div>
+          <div class="budget-item">${esc(r.item)}</div>
+          <div class="budget-input-wrap">
+            <span class="budget-currency">£</span>
+            <input class="budget-input" type="number" inputmode="decimal" min="0" step="1"
+                   value="${esc(String(r.amount || ""))}" data-extra-amount="${i}" aria-label="Amount for ${esc(r.item)}" />
+            <button class="budget-remove" data-extra-remove="${i}" aria-label="Remove ${esc(r.item)}">✕</button>
+          </div>
         </div>
       `;
     });
     html += `
-      <div class="budget-total">
-        <b>Total (week)</b>
-        <span class="budget-range">£${totalLow}–£${totalHigh}</span>
-      </div>
+      <form class="budget-add" id="budgetAddForm">
+        <input type="text" id="budgetAddItem" placeholder="e.g. train tickets" autocomplete="off" />
+        <input type="number" id="budgetAddAmount" inputmode="decimal" min="0" step="1" placeholder="£" />
+        <button type="submit" aria-label="Add cost">+</button>
+      </form>
+      ${
+        extras.length
+          ? `<div class="budget-total"><b>Other</b><span class="budget-range">${money(extrasTotal)}</span></div>`
+          : ""
+      }
     </div>`;
 
-    html += `
-      <div class="section-label">Notes</div>
-      <div class="card">
-        <p>Ranges reflect optional items (Wallace Monument climb, Glasgow Science Centre, Zoo) —
-        skip any of them and the trip can cost well under £200. Museums, parks and beaches used in this plan
-        (National Museum of Scotland, Botanic Garden, Kelvingrove, Portobello, Cramond) are free.</p>
-      </div>
-    `;
+    if (board.hasGuide) {
+      const bLow = BUDGET.reduce((a, b) => a + b.low, 0);
+      const bHigh = BUDGET.reduce((a, b) => a + b.high, 0);
+      html += `<div class="section-label">Original Scotland estimate</div><div class="card">`;
+      BUDGET.forEach((b) => {
+        const range = b.low === b.high ? (b.low === 0 ? "Free" : `£${b.low}`) : `£${b.low}–£${b.high}`;
+        html += `<div class="budget-row"><div class="budget-item">${esc(b.item)}</div><div class="budget-range">${range}</div></div>`;
+      });
+      html += `<div class="budget-total"><b>Estimate for the week</b><span class="budget-range">£${bLow}–£${bHigh}</span></div>`;
+      html += `<p class="settings-hint" style="margin-top:10px;">Activities and transport, excluding accommodation. Museums, parks and beaches in this plan are free.</p>`;
+      html += `</div>`;
+    }
 
     view.innerHTML = html;
+
+    // Saved on blur, not per keystroke, so a re-render can't interrupt typing.
+    view.querySelectorAll("[data-pick-cost]").forEach((input) => {
+      input.addEventListener("blur", () => {
+        const value = input.value.trim();
+        updatePick(input.getAttribute("data-pick-cost"), { cost: value === "" ? null : Number(value) });
+        renderBudget();
+      });
+    });
+
+    view.querySelectorAll("[data-extra-amount]").forEach((input) => {
+      input.addEventListener("blur", () => {
+        const rows = loadBudgetExtras();
+        const i = Number(input.getAttribute("data-extra-amount"));
+        if (!rows[i]) return;
+        rows[i].amount = Number(input.value) || 0;
+        saveBudgetExtras(rows);
+        renderBudget();
+      });
+    });
+
+    view.querySelectorAll("[data-extra-remove]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const rows = loadBudgetExtras();
+        rows.splice(Number(btn.getAttribute("data-extra-remove")), 1);
+        saveBudgetExtras(rows);
+        renderBudget();
+      });
+    });
+
+    const addForm = document.getElementById("budgetAddForm");
+    if (addForm) {
+      addForm.addEventListener("submit", (e) => {
+        e.preventDefault();
+        const item = document.getElementById("budgetAddItem").value.trim();
+        const amount = Number(document.getElementById("budgetAddAmount").value) || 0;
+        if (!item) return;
+        const rows = loadBudgetExtras();
+        rows.push({ item, amount });
+        saveBudgetExtras(rows);
+        renderBudget();
+      });
+    }
   }
 
   function loadChecked() {
@@ -2229,37 +2601,96 @@
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   }
 
+  // ---------- Notes & packing ----------
+  // Both belong to the board. The bundled Scotland advice stays on the board
+  // it came with; every board gets its own notes and its own list.
   function renderTips() {
-    let html = `<div class="section-label">Good to know</div>`;
-    TIPS.forEach((t) => {
-      html += `
-        <div class="card tip-card">
-          <h2>${esc(t.title)}</h2>
-          <p>${esc(t.body)}</p>
-        </div>
-      `;
-    });
+    const board = activeBoard();
+    const items = loadPacking();
+    const notes = loadBoardNotes();
 
-    const checked = loadChecked();
-    html += `<div class="section-label">Packing list</div>`;
-    html += `<div class="card"><ul class="packing-list">`;
-    PACKING.forEach((p, i) => {
-      const isChecked = !!checked[i];
-      html += `<li data-i="${i}" class="${isChecked ? "checked" : ""}">${esc(p)}</li>`;
-    });
-    html += `</ul></div>`;
+    let html = `
+      <div class="section-label">Notes</div>
+      <div class="card">
+        <textarea class="settings-input notes-box" id="boardNotes" rows="4"
+          placeholder="Anything worth remembering — booking references, the code for the flat, who's driving.">${esc(notes)}</textarea>
+      </div>
+    `;
+
+    html += `<div class="section-label">Packing list${
+      items.length ? ` · ${items.filter((i) => i.done).length}/${items.length}` : ""
+    }</div>`;
+    html += `<div class="card">`;
+    if (items.length) {
+      html += `<ul class="packing-list">`;
+      items.forEach((it, i) => {
+        html += `<li data-i="${i}" class="${it.done ? "checked" : ""}">
+          <span class="packing-text">${esc(it.text)}</span>
+          <button class="packing-remove" data-packing-remove="${i}" aria-label="Remove ${esc(it.text)}">✕</button>
+        </li>`;
+      });
+      html += `</ul>`;
+    } else {
+      html += `<p class="pick-status">Nothing on the list yet.</p>`;
+    }
+    html += `
+      <form class="search-bar packing-add" id="packingAddForm">
+        <input type="text" id="packingAddInput" placeholder="Add something to pack…" autocomplete="off" />
+        <button type="submit" aria-label="Add">+</button>
+      </form>
+    </div>`;
+
+    if (board.hasGuide) {
+      html += `<div class="section-label">Good to know in Scotland</div>`;
+      TIPS.forEach((t) => {
+        html += `
+          <div class="card tip-card">
+            <h2>${esc(t.title)}</h2>
+            <p>${esc(t.body)}</p>
+          </div>
+        `;
+      });
+    }
 
     view.innerHTML = html;
 
+    const notesBox = document.getElementById("boardNotes");
+    if (notesBox) notesBox.addEventListener("blur", () => saveBoardNotes(notesBox.value));
+
     view.querySelectorAll(".packing-list li").forEach((li) => {
-      li.addEventListener("click", () => {
-        const i = li.getAttribute("data-i");
-        const state = loadChecked();
-        state[i] = !state[i];
-        saveChecked(state);
-        li.classList.toggle("checked");
+      li.addEventListener("click", (e) => {
+        if (e.target.closest("[data-packing-remove]")) return;
+        const i = Number(li.getAttribute("data-i"));
+        const list = loadPacking();
+        if (!list[i]) return;
+        list[i].done = !list[i].done;
+        savePacking(list);
+        li.classList.toggle("checked", list[i].done);
       });
     });
+
+    view.querySelectorAll("[data-packing-remove]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const list = loadPacking();
+        list.splice(Number(btn.getAttribute("data-packing-remove")), 1);
+        savePacking(list);
+        renderTips();
+      });
+    });
+
+    const addForm = document.getElementById("packingAddForm");
+    if (addForm) {
+      addForm.addEventListener("submit", (e) => {
+        e.preventDefault();
+        const input = document.getElementById("packingAddInput");
+        const text = input.value.trim();
+        if (!text) return;
+        const list = loadPacking();
+        list.push({ text, done: false });
+        savePacking(list);
+        renderTips();
+      });
+    }
   }
 
   // ---------- Explore nearby (Overpass / OpenStreetMap) ----------
@@ -2858,6 +3289,20 @@
               }
             </div>
 
+            <label class="settings-label">Shows up in</label>
+            <div class="move-row">
+              <button class="move-chip${pickKind(p) === "place" ? " active" : ""}" data-pick-kind="${esc(p.id)}|place">🏛️ Places</button>
+              <button class="move-chip${pickKind(p) === "eat" ? " active" : ""}" data-pick-kind="${esc(p.id)}|eat">🍽️ Eats</button>
+            </div>
+
+            <label class="settings-label">Cost (optional)</label>
+            <div class="cost-field">
+              <span class="budget-currency">£</span>
+              <input class="settings-input" type="number" inputmode="decimal" min="0" step="0.5"
+                     placeholder="0" value="${pickCost(p) ? esc(String(pickCost(p))) : ""}"
+                     data-pick-cost-detail="${esc(p.id)}" />
+            </div>
+
             <label class="settings-label">Your note</label>
             <input class="settings-input" type="text" placeholder="e.g. book ahead, buggy round the back"
                    value="${esc(p.note || "")}" data-pick-note="${esc(p.id)}" />
@@ -2930,6 +3375,24 @@
       input.addEventListener("blur", () =>
         updatePick(input.getAttribute("data-pick-note"), { note: input.value.trim() })
       )
+    );
+
+    // The app guesses from the place's category; this is how you overrule it
+    // when the guess is wrong (a "museum café", a distillery you'd call food).
+    placeModal.querySelectorAll("[data-pick-kind]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const [id, kind] = btn.getAttribute("data-pick-kind").split("|");
+        updatePick(id, { kind });
+        placeModal.querySelectorAll("[data-pick-kind]").forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+      });
+    });
+
+    placeModal.querySelectorAll("[data-pick-cost-detail]").forEach((input) =>
+      input.addEventListener("blur", () => {
+        const v = input.value.trim();
+        updatePick(input.getAttribute("data-pick-cost-detail"), { cost: v === "" ? null : Number(v) });
+      })
     );
 
     placeModal.querySelectorAll("[data-toggle-booked]").forEach((btn) => {
@@ -3945,32 +4408,41 @@
     )}&travelmode=walking`;
   }
 
+  // Subtitles are computed, not fixed strings: "Edinburgh · Stirling ·
+  // Glasgow" over a board about Cumbria was the kind of small wrongness that
+  // makes an app feel like it isn't listening.
   const VIEWS = {
-    today: { render: renderToday, sub: "What's on now" },
-    overview: { render: renderOverview, sub: TRIP.dates },
-    itinerary: { render: renderItinerary, sub: "Tap a day to expand" },
-    places: { render: renderPlaces, sub: "Edinburgh · Stirling · Glasgow" },
-    eats: { render: renderEats, sub: "Lunch & dinner picks, kid-friendly" },
-    picks: { render: renderPicks, sub: "Your bookmarks & custom adds" },
-    budget: { render: renderBudget, sub: "Estimated activity costs" },
-    tips: { render: renderTips, sub: "Walking, weather, safety & packing" },
+    today: { render: renderToday, sub: () => "What's on now" },
+    overview: {
+      render: renderOverview,
+      sub: () => {
+        const b = activeBoard();
+        if (b.hasGuide) return TRIP.dates;
+        return b.destination || (b.dated ? "Your trip" : "Your saved places");
+      },
+    },
+    itinerary: { render: renderItinerary, sub: () => "Your day-by-day plan" },
+    places: { render: renderPlaces, sub: () => `${picksOfKind("place").length} places to go` },
+    eats: { render: renderEats, sub: () => `${picksOfKind("eat").length} places to eat` },
+    picks: { render: renderPicks, sub: () => "Everything you've saved" },
+    budget: { render: renderBudget, sub: () => "What this is costing" },
+    tips: { render: renderTips, sub: () => "Notes & packing" },
   };
 
-  // Which tabs make sense depends on the board. A plain saved list has no
-  // days, so Today and Itinerary would be empty furniture; and the bundled
-  // Edinburgh guide only belongs to the board it came with. This is also what
-  // stops a fresh board opening onto eight tabs of someone else's trip.
+  // Every tool works on every board: the places you save yourself are what
+  // fill Trip, Places, Eats, the Itinerary, the Budget and the packing list.
+  // Only Today is conditional, and only because a day-by-day view of a plan
+  // with no days in it is an empty screen rather than a feature.
   function applyBoardTabs() {
-    const board = activeBoard();
     const visible = {
-      today: board.dated,
-      itinerary: board.dated,
+      today: loadPlan().days.length > 0,
+      itinerary: true,
       picks: true,
-      overview: !!board.hasGuide,
-      places: !!board.hasGuide,
-      eats: !!board.hasGuide,
-      budget: !!board.hasGuide,
-      tips: !!board.hasGuide,
+      overview: true,
+      places: true,
+      eats: true,
+      budget: true,
+      tips: true,
     };
     tabbar.querySelectorAll(".tab").forEach((t) => {
       t.hidden = visible[t.getAttribute("data-view")] === false;
@@ -4004,7 +4476,7 @@
         </div>
       `;
     }
-    topbarSub.textContent = v.sub;
+    topbarSub.textContent = typeof v.sub === "function" ? v.sub() : v.sub;
     tabbar.querySelectorAll(".tab").forEach((t) => {
       t.classList.toggle("active", t.getAttribute("data-view") === name);
     });

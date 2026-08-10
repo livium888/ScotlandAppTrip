@@ -27,6 +27,7 @@ const SUITES = [
   "test_explore_ai.mjs",
   "test_boards.mjs",
   "test_map.mjs",
+  "test_alltabs.mjs",
 ];
 
 const MIME = {

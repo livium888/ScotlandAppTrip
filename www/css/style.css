@@ -551,6 +551,121 @@ body {
   width: 100%;
 }
 
+/* ---- Trip overview, built from the board's own places ---- */
+.overview-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.overview-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px 14px;
+  font-family: inherit;
+  text-align: left;
+  min-height: 62px;
+}
+.overview-stat b { font-size: 22px; color: var(--text); }
+.overview-stat span { font-size: 12px; color: var(--text-muted); }
+.overview-day,
+.overview-budget {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  padding: 12px 0;
+  font-family: inherit;
+  font-size: 14px;
+  color: var(--text);
+  text-align: left;
+  min-height: 48px;
+}
+.overview-day:last-child { border-bottom: none; }
+.overview-day-label { font-weight: 600; }
+.overview-day-count { font-size: 12.5px; color: var(--text-muted); }
+.overview-budget { border-bottom: none; }
+
+/* ---- Budget you can actually edit ---- */
+.budget-hero { text-align: center; padding: 20px 16px; }
+.budget-hero-total { font-size: 34px; font-weight: 700; color: var(--text); }
+.budget-hero-sub { font-size: 13px; color: var(--text-muted); margin-top: 4px; }
+.budget-input-wrap { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.budget-currency { color: var(--text-muted); font-size: 14px; }
+.budget-input {
+  width: 74px;
+  min-height: 40px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 15px;
+  text-align: right;
+}
+.budget-remove {
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  font-size: 15px;
+  min-width: 34px;
+  min-height: 34px;
+}
+.budget-add { display: flex; gap: 8px; margin-top: 12px; }
+.budget-add input[type="text"] { flex: 1; min-width: 0; }
+.budget-add input[type="number"] { width: 84px; flex-shrink: 0; text-align: right; }
+.budget-add input {
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 15px;
+}
+.budget-add button {
+  flex-shrink: 0;
+  min-width: 44px;
+  min-height: 44px;
+  border: none;
+  border-radius: 10px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 20px;
+}
+.cost-field { display: flex; align-items: center; gap: 6px; }
+.cost-field .settings-input { flex: 1; }
+
+/* ---- Packing list, per board and editable ---- */
+.packing-list li { display: flex; align-items: center; gap: 10px; }
+.packing-text { flex: 1; min-width: 0; }
+.packing-remove {
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  font-size: 14px;
+  min-width: 34px;
+  min-height: 34px;
+  flex-shrink: 0;
+}
+.packing-add { margin-top: 12px; }
+/* The strikethrough belongs to the item's text, not to its delete button. */
+.packing-list li.checked { text-decoration: none; }
+.packing-list li.checked .packing-text { text-decoration: line-through; }
+/* A textarea doesn't inherit the page font on its own, and the default
+   monospace made notes look like a terminal. */
+.notes-box { resize: vertical; min-height: 92px; line-height: 1.45; font-family: inherit; }
+
 /* ---- Every saved place on one map ---- */
 /* Full screen rather than a card: the whole point is seeing the spread, and
    a 220px window inside a scrolling list can't show it. Sits above the tab

@@ -73,9 +73,23 @@ check('new board starts empty, not with the other board\'s places', !/Edinburgh 
 
 const tabs = await page.evaluate(() => Array.from(document.querySelectorAll('.tab'))
   .filter((t) => !t.hidden).map((t) => t.getAttribute('data-view')));
-check('undated board hides Today and Itinerary', !tabs.includes('today') && !tabs.includes('itinerary'), JSON.stringify(tabs));
-check('undated board hides the bundled Scotland guide', !tabs.includes('places') && !tabs.includes('eats'), JSON.stringify(tabs));
+// Every tool works on every board - the places you save yourself are what
+// fill them. Today is the one exception: with no days planned it would be an
+// empty screen rather than a feature.
+check('a new board gets Places, Eats, Budget and Tips too', ['places', 'eats', 'budget', 'tips'].every((t) => tabs.includes(t)), JSON.stringify(tabs));
+check('a new board can be planned', tabs.includes('itinerary'), JSON.stringify(tabs));
+check('Today stays hidden until there are days', !tabs.includes('today'), JSON.stringify(tabs));
 check('undated board still has Picks', tabs.includes('picks'), JSON.stringify(tabs));
+
+// ...but none of the bundled Edinburgh content leaks onto it.
+for (const [tab, marker] of [['places', 'Edinburgh Castle'], ['eats', 'Independent, well-reviewed'], ['tips', 'Cramond']]) {
+  await page.evaluate((t) => document.querySelector(`[data-view="${t}"]`).click(), tab);
+  await page.waitForTimeout(200);
+  const text = await page.evaluate(() => document.getElementById('view').textContent);
+  check(`no bundled Scotland content on the new board's ${tab} tab`, !new RegExp(marker, 'i').test(text), text.slice(0, 140));
+}
+await page.evaluate(() => document.querySelector('[data-view="picks"]').click());
+await page.waitForTimeout(200);
 
 // --- Switching back restores the first board's world ---
 await page.evaluate(() => document.querySelector('.topbar-text').click());
