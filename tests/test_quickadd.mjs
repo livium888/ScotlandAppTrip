@@ -25,6 +25,12 @@ await page.route(/wikidata|wikipedia|overpass|googleapis/, (r) =>
 
 await page.goto(BASE, { waitUntil: 'load' });
 await page.evaluate(() => document.querySelector('[data-view="picks"]').click());
+// Open the search screen if we aren't already on it - a second search from
+// the results doesn't mean going back to Picks first.
+if (!(await page.evaluate(() => document.getElementById('searchOverlay').classList.contains('open')))) {
+  await page.waitForSelector('#pickSearchTrigger');
+  await page.click('#pickSearchTrigger');
+}
 await page.waitForSelector('#pickSearchInput');
 
 // --- Searching then adding must not require answering a folder question ---

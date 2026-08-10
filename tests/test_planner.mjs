@@ -62,13 +62,19 @@ check('settings persisted', stored.destination === 'Manchester' && stored.google
 
 // ---- Search now goes to Google, not OSM ----
 await page.evaluate(() => document.querySelector('[data-view="picks"]').click());
+// Open the search screen if we aren't already on it - a second search from
+// the results doesn't mean going back to Picks first.
+if (!(await page.evaluate(() => document.getElementById('searchOverlay').classList.contains('open')))) {
+  await page.waitForSelector('#pickSearchTrigger');
+  await page.click('#pickSearchTrigger');
+}
 await page.waitForSelector('#pickSearchInput');
 await page.fill('#pickSearchInput', 'chippy');
 await page.evaluate(() => document.getElementById('pickSearchForm').requestSubmit());
 await page.waitForTimeout(600);
 
 check('search used Google Places (key set)', googleCalls === 1, `google=${googleCalls} osm=${nominatimCalls}`);
-const resultsText = await page.evaluate(() => document.getElementById('view').textContent);
+const resultsText = await page.evaluate(() => document.getElementById('searchOverlay').textContent);
 check('google result rendered', resultsText.includes('The Little Chippy'), resultsText.slice(0, 200));
 
 // verify the query was region-scoped
@@ -136,6 +142,12 @@ await page.evaluate(() => {
   localStorage.setItem('trip-settings-v1', JSON.stringify(s));
 });
 await page.evaluate(() => document.querySelector('[data-view="picks"]').click());
+// Open the search screen if we aren't already on it - a second search from
+// the results doesn't mean going back to Picks first.
+if (!(await page.evaluate(() => document.getElementById('searchOverlay').classList.contains('open')))) {
+  await page.waitForSelector('#pickSearchTrigger');
+  await page.click('#pickSearchTrigger');
+}
 await page.waitForSelector('#pickSearchInput');
 await page.fill('#pickSearchInput', 'museum');
 await page.evaluate(() => document.getElementById('pickSearchForm').requestSubmit());

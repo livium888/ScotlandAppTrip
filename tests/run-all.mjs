@@ -30,6 +30,7 @@ const SUITES = [
   "test_alltabs.mjs",
   "test_categories.mjs",
   "test_prompts.mjs",
+  "test_search.mjs",
 ];
 
 const MIME = {

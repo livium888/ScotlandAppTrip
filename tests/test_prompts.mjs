@@ -76,6 +76,12 @@ check('preferences are saved', await page.evaluate(() =>
 // --- They reach every kind of AI request ---
 prompts = [];
 await page.evaluate(() => document.querySelector('[data-view="picks"]').click());
+// Open the search screen if we aren't already on it - a second search from
+// the results doesn't mean going back to Picks first.
+if (!(await page.evaluate(() => document.getElementById('searchOverlay').classList.contains('open')))) {
+  await page.waitForSelector('#pickSearchTrigger');
+  await page.click('#pickSearchTrigger');
+}
 await page.waitForSelector('#pickSearchInput');
 await page.fill('#pickSearchInput', 'lunch');
 await page.evaluate(() => document.getElementById('pickSearchForm').requestSubmit());
@@ -84,6 +90,9 @@ check('a place search carries your preferences', prompts.some((p) => /no chains,
 check('and still says who is travelling', prompts.some((p) => /4-year-old/.test(p)));
 
 prompts = [];
+// Back out of the search screen before using Explore behind it.
+await page.evaluate(() => document.querySelector('[data-search-close]').click());
+await page.waitForTimeout(300);
 await page.click('#exploreToggle');
 await page.waitForSelector('#exploreSearchForm');
 await page.fill('#exploreSearchInput', 'Edinburgh Castle');

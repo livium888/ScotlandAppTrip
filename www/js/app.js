@@ -3752,6 +3752,274 @@
   let pickSearch = { query: "", status: "idle", results: [] }; // idle | loading | done | error
   const pickMiniMaps = []; // Leaflet map instances from the last render, torn down before re-render
 
+  // ---------- Search, on its own screen ----------
+  // Searching used to happen in a strip at the top of Picks, with results
+  // pushing the saved list down the page. It's the app's most-used action and
+  // it deserves the whole screen: the keyboard opens on arrival, past
+  // searches and starting points are offered before you've typed anything,
+  // and adding several places in a row doesn't mean going back and forth.
+  //
+  // Deliberately one question, not a sequence of them. A step-by-step form -
+  // name, then venue type, then area - asks for things you usually can't
+  // answer ("what type is Camera Obscura?") and puts three taps in front of
+  // the case that needs none. Everything optional is offered *after* results
+  // exist, as a filter you can ignore, which is how every search app that
+  // feels quick actually works.
+  const searchOverlay = document.getElementById("searchOverlay");
+  let searchKindFilter = "all"; // all | place | eat
+  const RECENT_KEY = "recent-searches-v1";
+  const SEARCH_SUGGESTIONS = [
+    "Somewhere for lunch",
+    "Rainy day with a 4-year-old",
+    "Good coffee",
+    "Playground nearby",
+    "Free things to do",
+  ];
+
+  function loadRecentSearches() {
+    const list = readJson(RECENT_KEY, []);
+    return Array.isArray(list) ? list.slice(0, 6) : [];
+  }
+
+  function rememberSearch(query) {
+    const q = (query || "").trim();
+    if (!q) return;
+    const list = loadRecentSearches().filter((x) => x.toLowerCase() !== q.toLowerCase());
+    list.unshift(q);
+    localStorage.setItem(RECENT_KEY, JSON.stringify(list.slice(0, 6)));
+  }
+
+  function openSearchOverlay(prefill) {
+    const wasOpen = searchOverlay.classList.contains("open");
+    if (prefill !== undefined) pickSearch = { query: prefill, status: "idle", results: [] };
+    renderSearchOverlay();
+    if (!wasOpen) {
+      try {
+        history.pushState({ searchOverlay: true }, "");
+      } catch (e) {
+        /* the ✕ still works */
+      }
+    }
+    const input = document.getElementById("pickSearchInput");
+    if (input && !prefill) input.focus();
+  }
+
+  function dismissSearchOverlay() {
+    if (history.state && history.state.searchOverlay) history.back();
+    else closeSearchOverlay();
+  }
+
+  function closeSearchOverlay() {
+    searchOverlay.classList.remove("open");
+    searchOverlay.innerHTML = "";
+    // The Picks list behind it may have gained places while it was open.
+    if (view.dataset.activeTab === "picks") renderPicks();
+  }
+
+  async function runSearch(query) {
+    const q = (query || "").trim();
+    if (!q) return;
+    rememberSearch(q);
+    pickSearch = { query: q, status: "loading", results: [] };
+    renderSearchOverlay();
+    try {
+      pickSearch = { query: q, status: "done", results: await searchPlaces(q) };
+    } catch (e) {
+      pickSearch = { query: q, status: "error", results: [] };
+    }
+    renderSearchOverlay();
+  }
+
+  function renderSearchOverlay() {
+    const recents = loadRecentSearches();
+    const results = pickSearch.results || [];
+    const filtered =
+      searchKindFilter === "all" ? results : results.filter((r) => resultKind(r) === searchKindFilter);
+
+    let body = "";
+
+    if (pickSearch.status === "idle") {
+      // Nothing typed yet, so offer the two things that save typing: what you
+      // searched before, and the kind of thing people search for.
+      if (recents.length) {
+        body += `<div class="section-label">Recent</div><div class="search-chips">`;
+        body += recents
+          .map((r) => `<button class="search-chip" data-recent="${esc(r)}">🕘 ${esc(r)}</button>`)
+          .join("");
+        body += `</div>`;
+      }
+      body += `<div class="section-label">Try</div><div class="search-chips">`;
+      body += SEARCH_SUGGESTIONS.map(
+        (r) => `<button class="search-chip" data-recent="${esc(r)}">${esc(r)}</button>`
+      ).join("");
+      body += `</div>`;
+      body += `
+        <div class="card search-tip">
+          <p class="settings-hint">Describe what you want in your own words — "somewhere quiet for lunch
+          near the castle" works as well as a name. Or browse by category from Explore.</p>
+        </div>
+      `;
+    } else if (pickSearch.status === "loading") {
+      body += `<div class="search-loading"><div class="spinner"></div><p class="pick-status">Searching for “${esc(
+        pickSearch.query
+      )}”…</p></div>`;
+    } else if (pickSearch.status === "error") {
+      body += `<div class="card"><p class="pick-status">Search failed — check your connection and try again.</p>${
+        lastSearchError ? `<pre class="settings-result bad">${esc(lastSearchError)}</pre>` : ""
+      }</div>`;
+    } else if (!results.length) {
+      body += `<div class="card"><p class="pick-status">No matches for “${esc(
+        pickSearch.query
+      )}” — try a shorter or more general name.</p>${
+        lastSearchError ? `<pre class="settings-result bad">${esc(lastSearchError)}</pre>` : ""
+      }</div>`;
+    } else {
+      if (lastSearchError) {
+        body += `<div class="card"><p class="pick-status">Fell back to OpenStreetMap — the AI search didn't answer.</p><pre class="settings-result bad">${esc(
+          lastSearchError
+        )}</pre></div>`;
+      }
+
+      // Refinement lives here, after there's something to refine - and only
+      // when it would actually divide the results.
+      const kinds = new Set(results.map(resultKind));
+      if (kinds.size > 1) {
+        const counts = { place: 0, eat: 0 };
+        results.forEach((r) => counts[resultKind(r)]++);
+        body += `<div class="search-filters">
+          ${[
+            ["all", `All ${results.length}`],
+            ["place", `🏛️ To go ${counts.place}`],
+            ["eat", `🍽️ To eat ${counts.eat}`],
+          ]
+            .map(
+              ([k, label]) =>
+                `<button class="map-chip${searchKindFilter === k ? " on" : ""}" data-search-kind="${k}">${esc(
+                  label
+                )}</button>`
+            )
+            .join("")}
+        </div>`;
+      }
+
+      // Seeing them together answers "which of these is actually near us",
+      // which no amount of address text does.
+      if (filtered.some((r) => r.lat != null && r.lon != null)) {
+        body += `<div class="search-map-wrap"><div id="pickSearchMap" class="search-map"></div></div>`;
+      }
+
+      const saved = new Set(loadPicks().map((p) => p.id));
+      body += `<div class="search-results">`;
+      filtered.forEach((r) => {
+        const i = results.indexOf(r);
+        const already = saved.has(pickId("custom", r.name));
+        body += `
+          <div class="search-result" data-candidate="${i}">
+            <div class="search-result-main">
+              <div class="place-name">${esc(r.name)}${
+                r.aiSuggested ? ` <span class="ai-badge">AI</span>` : ""
+              }${r.rating != null ? ` <span class="candidate-rating">⭐ ${esc(String(r.rating))}</span>` : ""}</div>
+              <div class="place-notes">${esc(r.displayName || "")}</div>
+              ${r.description ? `<div class="place-notes">${esc(r.description)}</div>` : ""}
+              ${
+                r.sources && r.sources.length
+                  ? `<div class="place-links"><a href="${esc(r.sources[0].uri)}" target="_blank" rel="noopener">🔗 source</a></div>`
+                  : ""
+              }
+            </div>
+            <button class="search-add${already ? " added" : ""}" data-add-candidate="${i}" ${
+              already ? "disabled" : ""
+            } aria-label="${already ? "Already saved" : "Save " + esc(r.name)}">${already ? "✓" : "＋"}</button>
+          </div>
+        `;
+      });
+      body += `</div>`;
+      body += `<p class="settings-hint search-foot">Add as many as you like — this stays open.</p>`;
+    }
+
+    searchOverlay.innerHTML = `
+      <div class="search-head">
+        <button class="search-back" data-search-close="1" aria-label="Close search">←</button>
+        <form class="search-field" id="pickSearchForm">
+          <input type="text" id="pickSearchInput" placeholder="Search for a place to add…"
+                 autocomplete="off" autocorrect="off" value="${esc(pickSearch.query)}" />
+          ${
+            pickSearch.query
+              ? `<button type="button" class="search-clear" id="searchClear" aria-label="Clear">✕</button>`
+              : ""
+          }
+        </form>
+      </div>
+      <div class="search-body">${body}</div>
+    `;
+    searchOverlay.classList.add("open");
+    wireSearchOverlay();
+    if (document.getElementById("pickSearchMap")) {
+      destroyMiniMaps();
+      initSearchResultsMap(filtered, searchOverlay, (r) => results.indexOf(r));
+    }
+  }
+
+  // Which tab a result would land in, used only to offer a filter. Falls back
+  // to the same guess the saved place would get.
+  function resultKind(r) {
+    return pickKind({ category: r.category || r.type, description: r.description });
+  }
+
+  function wireSearchOverlay() {
+    searchOverlay.querySelectorAll("[data-search-close]").forEach((b) =>
+      b.addEventListener("click", dismissSearchOverlay)
+    );
+
+    const form = document.getElementById("pickSearchForm");
+    if (form) {
+      form.addEventListener("submit", (e) => {
+        e.preventDefault();
+        const input = document.getElementById("pickSearchInput");
+        input.blur(); // drop the keyboard so results get the screen
+        runSearch(input.value);
+      });
+    }
+
+    const clear = document.getElementById("searchClear");
+    if (clear) {
+      clear.addEventListener("click", () => {
+        pickSearch = { query: "", status: "idle", results: [] };
+        renderSearchOverlay();
+        const input = document.getElementById("pickSearchInput");
+        if (input) input.focus();
+      });
+    }
+
+    searchOverlay.querySelectorAll("[data-recent]").forEach((btn) => {
+      btn.addEventListener("click", () => runSearch(btn.getAttribute("data-recent")));
+    });
+
+    searchOverlay.querySelectorAll("[data-search-kind]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        searchKindFilter = btn.getAttribute("data-search-kind");
+        renderSearchOverlay();
+      });
+    });
+
+    // Adding doesn't close the screen: on a trip you rarely want exactly one
+    // café. The button becomes a tick so it's obvious what's already in.
+    searchOverlay.querySelectorAll("[data-add-candidate]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const candidate = pickSearch.results[Number(btn.getAttribute("data-add-candidate"))];
+        if (!candidate) return;
+        quickAdd(candidate);
+        btn.classList.add("added");
+        btn.textContent = "✓";
+        btn.disabled = true;
+      });
+    });
+  }
+
+  window.addEventListener("popstate", () => {
+    if (searchOverlay.classList.contains("open")) closeSearchOverlay();
+  });
+
   // Searches Google Places when a key is configured, otherwise OpenStreetMap.
   // Google is used because OSM's community data simply doesn't have many
   // smaller businesses; OSM stays as the no-setup default and the fallback
@@ -3890,16 +4158,20 @@
     }).addTo(map);
   }
 
-  function initSearchResultsMap(results) {
+  // `items` may be a filtered subset of what's on screen, so `cardIndex` maps
+  // an item back to the data-candidate it belongs to - without it a pin on a
+  // filtered list scrolls to the wrong card.
+  function initSearchResultsMap(items, scope, cardIndex) {
     const el = document.getElementById("pickSearchMap");
     if (!el) return;
+    const root = scope || view;
+    const indexOf = cardIndex || ((r, i) => i);
 
     // AI-suggested results can arrive without coordinates when the follow-up
     // geocode finds nothing, so only mappable ones are plotted - passing a
-    // null lat/lon to Leaflet throws and takes the whole render down. The
-    // original index is kept so a pin still scrolls to the right card.
-    const mappable = results
-      .map((r, i) => ({ r, i }))
+    // null lat/lon to Leaflet throws and takes the whole render down.
+    const mappable = items
+      .map((r, i) => ({ r, i: indexOf(r, i) }))
       .filter(({ r }) => r.lat != null && r.lon != null);
     if (!mappable.length) return;
 
@@ -3916,10 +4188,13 @@
     markers.forEach((m, idx) => {
       const originalIndex = mappable[idx].i;
       m.on("click", () => {
-        const card = view.querySelector(`[data-candidate="${originalIndex}"]`);
+        const card = root.querySelector(`[data-candidate="${originalIndex}"]`);
         if (card) card.scrollIntoView({ behavior: "smooth", block: "nearest" });
       });
     });
+    // The overlay is laid out only once visible, so Leaflet's idea of the
+    // canvas size is stale until the next frame.
+    requestAnimationFrame(() => map.invalidateSize());
   }
 
   function pickMapElId(id) {
@@ -4236,8 +4511,7 @@
     const id = pickId("custom", candidate.name);
     const picks = loadPicks();
     if (picks.some((p) => p.id === id)) {
-      pickSearch = { query: "", status: "idle", results: [] };
-      renderPicks();
+      if (view.dataset.activeTab === "picks") renderPicks();
       return;
     }
     // Maps query is built from real geographic data (Nominatim's full
@@ -4267,8 +4541,11 @@
     };
     picks.push(pick);
     savePicks(picks);
-    pickSearch = { query: "", status: "idle", results: [] };
-    renderPicks();
+    // Deliberately does NOT clear the search: results now live on their own
+    // screen that stays open so several places can be added in a row, and
+    // wiping the list out from under the second tap is exactly the bug that
+    // caused. Re-render only the tab actually on screen.
+    if (view.dataset.activeTab === "picks") renderPicks();
 
     // A candidate can arrive without coordinates - an AI suggestion whose
     // geocode came back empty, for instance - so retry the lookup here rather
@@ -4304,66 +4581,12 @@
     const picks = loadPicks();
 
     let html = `
-      <form class="search-bar" id="pickSearchForm">
-        <input type="text" id="pickSearchInput" placeholder="Search for a place to add…" autocomplete="off" value="${esc(
-          pickSearch.query
-        )}" />
-        <button type="submit" aria-label="Search">🔍</button>
-      </form>
+      <button class="search-trigger" id="pickSearchTrigger">
+        <span class="search-trigger-icon">🔍</span>
+        <span class="search-trigger-text">Search for a place to add…</span>
+      </button>
       ${renderExplore()}
     `;
-
-    if (pickSearch.status === "loading") {
-      html += `<div class="card"><p class="pick-status">Searching OpenStreetMap…</p></div>`;
-    } else if (pickSearch.status === "error") {
-      html += `<div class="card"><p class="pick-status">Search failed — check your connection and try again.</p>${
-        lastSearchError ? `<pre class="settings-result bad">${esc(lastSearchError)}</pre>` : ""
-      }</div>`;
-    } else if (pickSearch.status === "done") {
-      if (!pickSearch.results.length) {
-        html += `<div class="card"><p class="pick-status">No matches for "${esc(pickSearch.query)}" — try a shorter or more general name.</p>${
-          lastSearchError ? `<pre class="settings-result bad">${esc(lastSearchError)}</pre>` : ""
-        }</div>`;
-      } else {
-        // Gemini failing but OSM answering means quietly worse results. Say
-        // so, rather than letting the app degrade invisibly.
-        if (lastSearchError) {
-          html += `<div class="card"><p class="pick-status">Fell back to OpenStreetMap — the AI search didn't answer.</p><pre class="settings-result bad">${esc(
-            lastSearchError
-          )}</pre></div>`;
-        }
-        const anyMappable = pickSearch.results.some((r) => r.lat != null && r.lon != null);
-        if (anyMappable) {
-          html += `
-            <div class="card" style="padding:0;overflow:hidden;">
-              <div id="pickSearchMap" class="search-map"></div>
-            </div>
-            <p class="search-hint">Tap the right match below (or its pin above) to add it.</p>
-          `;
-        } else {
-          html += `<p class="search-hint">Tap the right match below to add it.</p>`;
-        }
-        pickSearch.results.forEach((r, i) => {
-          html += `
-            <div class="card candidate-card" data-candidate="${i}">
-              <div style="flex:1;">
-                <div class="place-name">${i + 1}. ${esc(r.name)}${
-                  r.aiSuggested ? ` <span class="ai-badge">AI</span>` : ""
-                }${r.rating != null ? ` <span class="candidate-rating">⭐ ${esc(String(r.rating))}</span>` : ""}</div>
-                <div class="place-notes">${esc(r.displayName)}</div>
-                ${r.aiSuggested && r.description ? `<div class="place-notes">${esc(r.description)}</div>` : ""}
-                ${
-                  r.aiSuggested && r.sources && r.sources.length
-                    ? `<div class="place-links"><a href="${esc(r.sources[0].uri)}" target="_blank" rel="noopener">🔗 source</a></div>`
-                    : ""
-                }
-              </div>
-              <button class="candidate-add" data-add-candidate="${i}">Add</button>
-            </div>
-          `;
-        });
-      }
-    }
 
     if (picks.length === 0) {
       // Guidance belongs here, where it's actually needed, rather than
@@ -4374,9 +4597,10 @@
           <h2>No places saved yet</h2>
           <ul class="empty-list">
             <li><b>Share from Google Maps</b> — tap Share on a place, pick this app</li>
-            <li><b>Search above</b> — by name, or describe what you want</li>
+            <li><b>Search</b> — by name, or describe what you want</li>
             <li><b>Explore around a place</b> — cafés, museums, playgrounds nearby</li>
           </ul>
+          <button class="modal-btn modal-btn-primary" data-open-search="1" style="width:100%;margin-top:12px;">🔍 Search for a place</button>
           <p class="settings-hint">Tapping ♡ in Places or Eats saves things here too.</p>
         </div>
       `;
@@ -4411,33 +4635,12 @@
     view.innerHTML = html;
     wireExplore();
 
-    const searchForm = document.getElementById("pickSearchForm");
-    if (searchForm) {
-      searchForm.addEventListener("submit", async (e) => {
-        e.preventDefault();
-        const q = document.getElementById("pickSearchInput").value.trim();
-        if (!q) return;
-        pickSearch = { query: q, status: "loading", results: [] };
-        renderPicks();
-        try {
-          const results = await searchPlaces(q);
-          pickSearch = { query: q, status: "done", results };
-        } catch (err) {
-          pickSearch = { query: q, status: "error", results: [] };
-        }
-        renderPicks();
-      });
-    }
-
-    if (pickSearch.status === "done" && pickSearch.results.length) {
-      initSearchResultsMap(pickSearch.results);
-      view.querySelectorAll("[data-add-candidate]").forEach((btn) => {
-        btn.addEventListener("click", () => {
-          const candidate = pickSearch.results[Number(btn.getAttribute("data-add-candidate"))];
-          quickAdd(candidate);
-        });
-      });
-    }
+    // Search has its own screen now - these are just the ways in.
+    const searchTrigger = document.getElementById("pickSearchTrigger");
+    if (searchTrigger) searchTrigger.addEventListener("click", () => openSearchOverlay(""));
+    view.querySelectorAll("[data-open-search]").forEach((b) =>
+      b.addEventListener("click", () => openSearchOverlay(""))
+    );
 
     // No per-pick maps in the list any more: the single map lives in the
     // detail sheet. Ten saved places used to mean ten live Leaflet instances

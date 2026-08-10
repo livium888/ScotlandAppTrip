@@ -72,6 +72,12 @@ check('gemini key + travellers saved', s.geminiKey === 'GEM-KEY' && /4-year-old/
 // --- Search: OSM empty -> Gemini fallback, geocode resolves via OSM ---
 osmEmpty = true;
 await page.evaluate(() => document.querySelector('[data-view="picks"]').click());
+// Open the search screen if we aren't already on it - a second search from
+// the results doesn't mean going back to Picks first.
+if (!(await page.evaluate(() => document.getElementById('searchOverlay').classList.contains('open')))) {
+  await page.waitForSelector('#pickSearchTrigger');
+  await page.click('#pickSearchTrigger');
+}
 await page.waitForSelector('#pickSearchInput');
 await page.fill('#pickSearchInput', 'quiet cafe near the castle for a toddler');
 // first nominatim call (search) returns empty; geocode afterwards should resolve
@@ -87,7 +93,8 @@ check('gemini used for search when OSM empty', !!searchCall, JSON.stringify(gemi
 check('search call used Google Search grounding', searchCall && searchCall.grounded === true);
 check('traveller context sent to gemini', searchCall && /4-year-old/.test(searchCall.prompt));
 
-const listText = await page.evaluate(() => document.getElementById('view').textContent);
+// Search results live on their own screen now.
+const listText = await page.evaluate(() => document.getElementById('searchOverlay').textContent);
 check('AI result shown', listText.includes('Hidden Gem Cafe'), listText.slice(0, 250));
 check('AI badge shown', await page.evaluate(() => !!document.querySelector('.ai-badge')));
 check('citation link shown', await page.evaluate(() =>
@@ -128,6 +135,12 @@ await page.evaluate(() => {
 });
 osmEmpty = true;
 await page.evaluate(() => document.querySelector('[data-view="picks"]').click());
+// Open the search screen if we aren't already on it - a second search from
+// the results doesn't mean going back to Picks first.
+if (!(await page.evaluate(() => document.getElementById('searchOverlay').classList.contains('open')))) {
+  await page.waitForSelector('#pickSearchTrigger');
+  await page.click('#pickSearchTrigger');
+}
 await page.waitForSelector('#pickSearchInput');
 await page.fill('#pickSearchInput', 'anything');
 await page.evaluate(() => document.getElementById('pickSearchForm').requestSubmit());

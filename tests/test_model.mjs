@@ -161,6 +161,12 @@ await page.waitForTimeout(300);
 // --- Gemini is tried FIRST, before OSM ---
 generateUrls = []; osmCalls = 0;
 await page.evaluate(() => document.querySelector('[data-view="picks"]').click());
+// Open the search screen if we aren't already on it - a second search from
+// the results doesn't mean going back to Picks first.
+if (!(await page.evaluate(() => document.getElementById('searchOverlay').classList.contains('open')))) {
+  await page.waitForSelector('#pickSearchTrigger');
+  await page.click('#pickSearchTrigger');
+}
 await page.waitForSelector('#pickSearchInput');
 await page.fill('#pickSearchInput', 'somewhere quick to eat with a toddler');
 await page.evaluate(() => document.getElementById('pickSearchForm').requestSubmit());
@@ -169,7 +175,7 @@ await page.waitForTimeout(1500);
 check('Gemini was called for the search', generateUrls.length >= 1, String(generateUrls.length));
 check('the chosen model was used', generateUrls.some((u) => /gemini-3\.5-flash-lite:generateContent/.test(u)),
   generateUrls[0] || 'none');
-const text = await page.evaluate(() => document.getElementById('view').textContent);
+const text = await page.evaluate(() => document.getElementById('searchOverlay').textContent);
 check('Gemini result shown, not the OSM one', /The Tiny Chippy/.test(text) && !/Result from OSM/.test(text), text.slice(0, 200));
 
 // --- OSM backs it up when Gemini fails ---
@@ -179,7 +185,7 @@ await page.fill('#pickSearchInput', 'anything at all');
 await page.evaluate(() => document.getElementById('pickSearchForm').requestSubmit());
 await page.waitForTimeout(1500);
 
-const text2 = await page.evaluate(() => document.getElementById('view').textContent);
+const text2 = await page.evaluate(() => document.getElementById('searchOverlay').textContent);
 check('falls back to OSM when Gemini fails', /Result from OSM/.test(text2), text2.slice(0, 200));
 check('OSM actually queried', osmCalls >= 1, String(osmCalls));
 check('the Gemini failure is still reported', /429|Quota|Rate limit/i.test(text2), text2.slice(0, 300));
