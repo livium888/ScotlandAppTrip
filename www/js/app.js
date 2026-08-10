@@ -817,41 +817,72 @@
     return nearestMajorPlace(lat, lon) || nearestCity(lat, lon);
   }
 
-  // Pulls in what's already saved, unfiled and close by. Deliberately leaves
-  // anything that already has a folder alone: that folder was either chosen by
-  // hand or accepted at save time, and silently rearranging someone's own
-  // organisation is worse than leaving a place in the wrong section.
-  function adoptNearbyUnfiled(majorPick, picks) {
-    if (!majorPick || majorPick.lat == null) return 0;
-    let adopted = 0;
-    picks.forEach((other) => {
-      if (other.id === majorPick.id || other.major || other.city || other.lat == null) return;
-      if (haversineKm(other.lat, other.lon, majorPick.lat, majorPick.lon) > MAJOR_MATCH_KM) return;
-      other.city = majorPick.name;
-      adopted++;
-    });
-    return adopted;
+  // What an area *could* collect: saved, unfiled, and close by. Anything you
+  // have already put in a folder is never a candidate - that was your call.
+  //
+  // This only ever reports. Moving places is a separate, explicit step, so
+  // marking somewhere as an area can never quietly rearrange the list behind
+  // it.
+  function nearbyUnfiled(majorPick) {
+    if (!majorPick || majorPick.lat == null) return [];
+    return loadPicks().filter(
+      (other) =>
+        other.id !== majorPick.id &&
+        !other.major &&
+        !isFiled(other) &&
+        other.lat != null &&
+        haversineKm(other.lat, other.lon, majorPick.lat, majorPick.lon) <= MAJOR_MATCH_KM
+    );
   }
 
-  // Returns how many existing places were adopted, so the caller can say so -
-  // a promotion that quietly moves five things should tell you it did.
+  // Unsorted is where undecided places live, so it counts as unfiled.
+  function isFiled(p) {
+    return !!p.city && p.city !== "Unsorted";
+  }
+
+  function fileUnder(ids, folder) {
+    const picks = loadPicks();
+    picks.forEach((p) => {
+      if (ids.includes(p.id)) p.city = folder;
+    });
+    savePicks(picks);
+  }
+
+  // Promotion moves exactly one place: the one you promoted. Whether anything
+  // else joins it is asked separately, by the caller.
   function setPickMajor(id, on) {
     const picks = loadPicks();
     const p = picks.find((x) => x.id === id);
-    if (!p) return 0;
+    if (!p) return;
     p.major = !!on;
-    let adopted = 0;
     if (on) {
       // Its own section has to exist before anything can be filed into it,
       // and the place itself belongs at the head of that section.
       addFolder(p.name);
       p.city = p.name;
-      adopted = adoptNearbyUnfiled(p, picks);
     }
     // Demoting leaves the folder and its contents alone - the places under it
     // are still together, which is what the folder was for.
     savePicks(picks);
-    return adopted;
+  }
+
+  // The offer that used to happen by itself. Nothing moves unless this is
+  // tapped, and it says exactly how many places it would move.
+  function offerToCollectNearby(majorPick) {
+    const nearby = nearbyUnfiled(majorPick);
+    if (!nearby.length) {
+      toast(`${majorPick.name} is now an area`);
+      return;
+    }
+    toastWithAction(
+      `${majorPick.name} is now an area — ${nearby.length} unsorted place${nearby.length === 1 ? "" : "s"} nearby`,
+      `File ${nearby.length === 1 ? "it" : "them"} here`,
+      () => {
+        fileUnder(nearby.map((p) => p.id), majorPick.name);
+        renderPicks();
+        toast(`Moved ${nearby.length} to ${majorPick.name}`);
+      }
+    );
   }
 
   function togglePick(source, item) {
@@ -902,7 +933,9 @@
       if (!fresh || fresh.lat != null || !geo) return;
       fresh.lat = geo.lat;
       fresh.lon = geo.lon;
-      if (!fresh.city) fresh.city = suggestedFolderFor(geo.lat, geo.lon);
+      // Deliberately does not file it now that coordinates have arrived. A
+      // place quietly moving into a folder some seconds after it was saved is
+      // the worst version of a wrong guess: nobody sees it happen.
       savePicks(picks);
       if (view.dataset.activeTab === "picks") renderPicks();
     } catch (e) {
@@ -1659,40 +1692,36 @@
       return;
     }
 
+    // The guess is a suggestion on the sheet now, not a decision already made.
     const suggested =
-      options.folder ||
-      (candidate.lat != null ? suggestedFolderFor(candidate.lat, candidate.lon) : null) ||
-      loadFolders()[0] ||
-      "Unsorted";
-    confirmAddCandidate(candidate, suggested);
+      options.folder || (candidate.lat != null ? suggestedFolderFor(candidate.lat, candidate.lon) : null);
 
-    // A town saved from the results list gets the offer here rather than a
-    // prompt before saving - same bargain as the folder: act first, correct
-    // after. Only one action fits on a toast, and for a town "is this an
-    // area?" is the more useful question than which folder it landed in.
-    if (looksLikeMajorPlace(candidate)) {
-      toastWithAction(`Added “${candidate.name}” to ${suggested}`, "Make it an area", () => {
-        const adopted = setPickMajor(pickId("custom", candidate.name), true);
-        renderPicks();
-        toast(majorPromotedMessage(candidate.name, adopted));
-      });
-      return;
-    }
+    const save = (folder) => {
+      confirmAddCandidate(candidate, folder);
+      // Whatever is behind the question needs to show the place as saved now
+      // that it actually is - the search list, or the tab underneath.
+      if (searchOverlay.classList.contains("open")) renderSearchOverlay();
+      else if (view.dataset.activeTab) showView(view.dataset.activeTab);
+      // A town saved from the results list is still worth offering to promote:
+      // it is a question about what the place *is*, not about where it goes.
+      if (looksLikeMajorPlace(candidate)) {
+        toastWithAction(`Saved to ${folder}`, "Make it an area", () => {
+          const id = pickId("custom", candidate.name);
+          setPickMajor(id, true);
+          renderPicks();
+          offerToCollectNearby(loadPicks().find((p) => p.id === id));
+        });
+      } else {
+        toast(`Saved to ${folder}`);
+      }
+    };
 
-    toastWithAction(`Added “${candidate.name}” to ${suggested}`, "Change", () => {
-      openFolderPicker(candidate.name, suggested, (folder) => {
-        const id = pickId("custom", candidate.name);
-        setPickCity(id, folder);
-        renderPicks();
-        toast(`Moved to ${folder}`);
-      });
+    openFolderPicker(candidate.name, suggested, save, {
+      summary: sharedPlaceSummary(candidate),
+      onDismiss: () => save("Unsorted"),
     });
   }
 
-  function majorPromotedMessage(name, adopted) {
-    if (!adopted) return `${name} is now an area`;
-    return `${name} is now an area — ${adopted} nearby place${adopted === 1 ? "" : "s"} filed under it`;
-  }
 
   // A toast with one tappable action, which is how a reversible choice should
   // be offered: act first, correct after, rather than prompt before.
@@ -1720,9 +1749,22 @@
     toastActionTimer = setTimeout(hide, 5000);
   }
 
+  // Where a place goes is now always your call. The app still works out which
+  // folder it would have guessed and marks it "suggested", so the common case
+  // is one tap - but it is a tap, not a decision made on your behalf. Guessing
+  // silently was fine when it was right and invisible when it was wrong, which
+  // is the worst combination: things ended up somewhere nobody chose and only
+  // turned up later, in the wrong section.
+  //
+  // Closing the sheet without choosing still saves - to Unsorted. Losing a
+  // place you asked to save would be worse than filing it nowhere in
+  // particular, and Unsorted is honest about being undecided.
   function openFolderPicker(candidateName, suggestedFolder, onConfirm, options) {
-    const folders = loadFolders();
-    const summary = (options && options.summary) || null;
+    const opts = options || {};
+    const summary = opts.summary && opts.summary.length ? opts.summary : null;
+    // "Unsorted" is always offered, and never duplicated if it is also a real
+    // folder someone made by hand.
+    const folders = loadFolders().filter((f) => f !== "Unsorted").concat(["Unsorted"]);
 
     placeModal.innerHTML = `
       <div class="modal-backdrop" data-close="1">
@@ -1730,7 +1772,7 @@
           <div class="modal-handle"></div>
           <button class="modal-close" data-close="1" aria-label="Close">✕</button>
           <div class="modal-body">
-            <h2 class="modal-title">Add "${esc(candidateName)}" to…</h2>
+            <h2 class="modal-title">Where should "${esc(candidateName)}" go?</h2>
             ${
               summary
                 ? `<div class="share-summary">${summary.map((row) => `<div class="share-summary-row">${esc(row)}</div>`).join("")}</div>`
@@ -1740,7 +1782,9 @@
               ${folders
                 .map(
                   (f) =>
-                    `<button class="filter-chip${f === suggestedFolder ? " active" : ""}" data-pick-folder="${esc(f)}">${esc(f)}</button>`
+                    `<button class="filter-chip${f === suggestedFolder ? " active" : ""}" data-pick-folder="${esc(f)}">${esc(f)}${
+                      f === suggestedFolder ? ` <span class="chip-suggested">suggested</span>` : ""
+                    }</button>`
                 )
                 .join("")}
             </div>
@@ -1748,20 +1792,29 @@
               <input type="text" id="newFolderInput" placeholder="Or create a new folder…" autocomplete="off" />
               <button type="submit" aria-label="Create folder">+</button>
             </form>
+            <p class="settings-hint">${
+              suggestedFolder
+                ? `Nearest is <b>${esc(suggestedFolder)}</b> — tap it to agree, or pick anywhere else.`
+                : "Nothing nearby to suggest, so pick a folder or start a new one."
+            }</p>
           </div>
         </div>
       </div>
     `;
     placeModal.classList.add("open");
 
+    let decided = false;
     const finalize = (folder) => {
+      decided = true;
       closePlaceModal();
       onConfirm(folder);
     };
 
     placeModal.querySelectorAll("[data-close]").forEach((el) => {
       el.addEventListener("click", (e) => {
-        if (e.target === el) closePlaceModal();
+        if (e.target !== el) return;
+        closePlaceModal();
+        if (!decided && opts.onDismiss) opts.onDismiss();
       });
     });
     placeModal.querySelectorAll("[data-pick-folder]").forEach((btn) => {
@@ -4477,10 +4530,11 @@
         const on = flag === "1";
         const current = loadPicks().find((x) => x.id === id);
         if (!current || !!current.major === on) return;
-        const adopted = setPickMajor(id, on);
+        setPickMajor(id, on);
         closePlaceModal();
         renderPicks();
-        toast(on ? majorPromotedMessage(current.name, adopted) : `${current.name} is an ordinary place again`);
+        if (on) offerToCollectNearby(loadPicks().find((x) => x.id === id));
+        else toast(`${current.name} is an ordinary place again`);
       });
     });
 
@@ -4916,13 +4970,22 @@
     const addBtn = document.getElementById("previewAdd");
     if (addBtn && !already) {
       addBtn.addEventListener("click", () => {
-        if (r.guideSource) togglePick(r.guideSource, r);
-        else quickAdd(r);
         previewIndex = null;
-        closePlaceModal();
-        // The list behind needs to show it as saved now.
-        if (searchOverlay.classList.contains("open")) renderSearchOverlay();
-        else if (view.dataset.activeTab) showView(view.dataset.activeTab);
+        // A catalog item already knows where it belongs, so it saves outright.
+        // Anything else asks which folder - and that sheet takes over this same
+        // modal, so closing here would shut the question before it was read.
+        if (r.guideSource) {
+          togglePick(r.guideSource, r);
+          closePlaceModal();
+          // The list behind needs to show it as saved now.
+          if (searchOverlay.classList.contains("open")) renderSearchOverlay();
+          else if (view.dataset.activeTab) showView(view.dataset.activeTab);
+        } else {
+          // quickAdd refreshes the list itself, once the folder question has
+          // actually been answered - redrawing it here would mark a place as
+          // saved while the question is still on screen.
+          quickAdd(r);
+        }
       });
     }
 
@@ -5660,7 +5723,9 @@
       id,
       source: "custom",
       name: candidate.name,
-      city: folder || suggestedFolderFor(candidate.lat, candidate.lon),
+      // Every caller passes a folder the user chose. The fallback is the
+      // honest one - undecided - never a guess.
+      city: folder || "Unsorted",
       major,
       category: candidate.category || candidate.type || "Custom",
       notes: "",
@@ -5710,11 +5775,7 @@
       if (!target.address && geo.address) target.address = geo.address;
       if (!target.phone && geo.phone) target.phone = geo.phone;
       if (!target.openingHours && geo.openingHours) target.openingHours = geo.openingHours;
-      if (!target.city) target.city = suggestedFolderFor(geo.lat, geo.lon);
     }
-    // An area saved without coordinates couldn't adopt anything a moment ago;
-    // now that the geocode has landed, it can.
-    if (target.major) adoptNearbyUnfiled(target, fresh);
     target.enrichStatus = wiki || geo ? "done" : "empty";
     savePicks(fresh);
     if (view.dataset.activeTab === "picks") renderPicks();
@@ -6535,9 +6596,13 @@
     pickSearch = { query: "", status: "idle", results: [] };
     renderPicks();
 
-    const suggested = candidate.lat != null ? nearestCity(candidate.lat, candidate.lon) : null;
+    const suggested = candidate.lat != null ? suggestedFolderFor(candidate.lat, candidate.lon) : null;
     openFolderPicker(candidate.name, suggested, (folder) => confirmAddCandidate(candidate, folder), {
       summary: sharedPlaceSummary(candidate),
+      // Backing out of the sheet used to drop a place shared in from another
+      // app entirely. It is saved either way now; only the folder was in
+      // question.
+      onDismiss: () => confirmAddCandidate(candidate, "Unsorted"),
     });
   }
 

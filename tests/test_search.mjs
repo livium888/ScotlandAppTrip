@@ -12,6 +12,17 @@ const BASE = 'http://localhost:8946';
 let failures = 0;
 const check = (l, c, extra) => { if (c) console.log(`PASS: ${l}`); else { console.log(`FAIL: ${l}${extra ? ' :: ' + extra : ''}`); failures++; } };
 
+// Saving now always asks which folder. Accepting the suggested chip keeps
+// these tests about what they are actually testing.
+const chooseFolder = async () => {
+  await page.waitForSelector('#placeModal.open [data-pick-folder]', { timeout: 5000 });
+  await page.evaluate(() => {
+    const chips = Array.from(document.querySelectorAll('#placeModal [data-pick-folder]'));
+    (chips.find((c) => c.classList.contains('active')) || chips[0]).click();
+  });
+  await page.waitForTimeout(500);
+};
+
 const browser = await chromium.launch(LAUNCH_OPTS);
 const page = await browser.newPage();
 await page.setViewportSize({ width: 390, height: 800 });
@@ -80,6 +91,7 @@ await page.waitForTimeout(300);
 
 // --- Adding several without leaving ---
 await page.evaluate(() => document.querySelector('[data-add-candidate]').click());
+await chooseFolder();
 await page.waitForTimeout(700);
 check('the search screen stays open after adding', await page.evaluate(() =>
   document.getElementById('searchOverlay').classList.contains('open')));
@@ -90,6 +102,7 @@ await page.evaluate(() => {
   const btn = Array.from(document.querySelectorAll('[data-add-candidate]')).find((b) => !b.disabled);
   if (btn) btn.click();
 });
+await chooseFolder();
 await page.waitForTimeout(700);
 const savedNames = await page.evaluate(() => JSON.parse(localStorage.getItem('board:' + JSON.parse(localStorage.getItem('boards-v1')).activeId + ':picks') || '[]').map((p) => p.name));
 check('two places added in one visit', savedNames.length === 2, JSON.stringify(savedNames));
@@ -163,6 +176,7 @@ check('and offers a way to save from there', await page.evaluate(() => !!documen
 // Reading it must not save it - that was the whole complaint.
 const savedDuringRead = await page.evaluate(() => JSON.parse(localStorage.getItem('board:' + JSON.parse(localStorage.getItem('boards-v1')).activeId + ':picks') || '[]').length);
 await page.evaluate(() => document.getElementById('previewAdd').click());
+await chooseFolder();
 await page.waitForTimeout(800);
 const savedAfterAdd = await page.evaluate(() => JSON.parse(localStorage.getItem('board:' + JSON.parse(localStorage.getItem('boards-v1')).activeId + ':picks') || '[]').length);
 check('opening a result does not save it', savedAfterAdd === savedDuringRead + 1, `${savedDuringRead} -> ${savedAfterAdd}`);

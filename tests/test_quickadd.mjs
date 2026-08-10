@@ -1,6 +1,10 @@
-// Adding a place is the app's most frequent action, so it's the one most
-// worth keeping frictionless. These check the flow rather than the styling:
-// how many interactions it takes, and whether a wrong guess is correctable.
+// Adding a place is the app's most frequent action. It used to file itself and
+// offer a correction on a toast, which was frictionless right up until the
+// guess was wrong - and a wrong guess that nobody is asked about is invisible
+// until you go looking for something and it isn't there. Where a place goes is
+// now always answered by hand, with the guess offered as a suggestion.
+// These check that flow: one question, the guess pre-selected, and no silent
+// filing anywhere in the path.
 import { chromium } from 'playwright';
 import fs from 'node:fs';
 const SANDBOX_CHROMIUM = '/opt/pw-browsers/chromium';
@@ -33,39 +37,60 @@ if (!(await page.evaluate(() => document.getElementById('searchOverlay').classLi
 }
 await page.waitForSelector('#pickSearchInput');
 
-// --- Searching then adding must not require answering a folder question ---
+// --- Saving asks where, once, with the guess offered ---
 await page.fill('#pickSearchInput', 'camera obscura');
 await page.evaluate(() => document.getElementById('pickSearchForm').requestSubmit());
 await page.waitForSelector('[data-add-candidate]', { timeout: 5000 });
 await page.evaluate(() => document.querySelector('[data-add-candidate]').click());
 await page.waitForTimeout(700);
 
-const modalOpen = await page.evaluate(() => document.getElementById('placeModal').classList.contains('open'));
-check('no folder modal interrupts the add', modalOpen === false);
+const askedFirst = await page.evaluate(() => ({
+  open: document.getElementById('placeModal').classList.contains('open'),
+  chips: document.querySelectorAll('#placeModal [data-pick-folder]').length,
+  suggested: (document.querySelector('#placeModal [data-pick-folder].active') || {}).textContent || '',
+  marked: !!document.querySelector('#placeModal .chip-suggested'),
+  unsorted: Array.from(document.querySelectorAll('#placeModal [data-pick-folder]'))
+    .some((c) => c.textContent.trim().startsWith('Unsorted')),
+}));
+check('the folder is asked, not decided', askedFirst.open && askedFirst.chips > 0, JSON.stringify(askedFirst));
+check('the app still offers its guess', /Edinburgh/.test(askedFirst.suggested), askedFirst.suggested);
+check('and marks it as a suggestion rather than a fact', askedFirst.marked);
+check('somewhere to put it when undecided', askedFirst.unsorted, JSON.stringify(askedFirst));
+
+// Nothing is saved while the question is still on screen.
+const duringAsk = await page.evaluate(() => JSON.parse(localStorage.getItem('board:'+JSON.parse(localStorage.getItem('boards-v1')).activeId+':picks') || '[]'));
+check('nothing is filed before the question is answered', duringAsk.length === 0, JSON.stringify(duringAsk));
+
+// Accepting the suggestion is one tap.
+await page.evaluate(() => document.querySelector('#placeModal [data-pick-folder].active').click());
+await page.waitForTimeout(700);
 
 const picks = await page.evaluate(() => JSON.parse(localStorage.getItem('board:'+JSON.parse(localStorage.getItem('boards-v1')).activeId+':picks') || '[]'));
-check('place saved in one tap', picks.length === 1 && picks[0].name === 'Camera Obscura', JSON.stringify(picks.map(p => p.name)));
-check('auto-filed to a sensible folder', picks[0] && picks[0].city === 'Edinburgh', picks[0] && picks[0].city);
+check('the place is saved once answered', picks.length === 1 && picks[0].name === 'Camera Obscura', JSON.stringify(picks.map(p => p.name)));
+check('filed where it was told to go', picks[0] && picks[0].city === 'Edinburgh', picks[0] && picks[0].city);
+check('the question does not linger', await page.evaluate(() =>
+  !document.getElementById('placeModal').classList.contains('open')));
 
 const toast = await page.evaluate(() => {
   const el = document.getElementById('toast');
-  return el ? { text: el.textContent, hasAction: !!el.querySelector('.toast-action') } : null;
+  return el ? { text: el.textContent } : null;
 });
-check('confirms what happened', toast && /Added/.test(toast.text) && /Edinburgh/.test(toast.text), JSON.stringify(toast));
-check('offers a correction instead of asking upfront', toast && toast.hasAction === true, JSON.stringify(toast));
+check('confirms where it went', toast && /Edinburgh/.test(toast.text), JSON.stringify(toast));
 
-// The correction path must still work.
-await page.evaluate(() => document.querySelector('.toast-action').click());
-await page.waitForSelector('#placeModal.open', { timeout: 3000 });
-check('Change opens the folder picker', true);
+// A place can still be moved afterwards, from its own sheet.
+await page.evaluate(() => document.querySelector('[data-open-pick]').click());
+await page.waitForSelector('#placeModal.open [data-move-pick]', { timeout: 5000 });
 await page.evaluate(() => {
-  const chips = document.querySelectorAll('#placeModal [data-pick-folder]');
-  const other = Array.from(chips).find((c) => c.textContent.trim() !== 'Edinburgh');
+  const chips = Array.from(document.querySelectorAll('[data-move-pick]'));
+  const other = chips.find((c) => !c.classList.contains('active'));
   if (other) other.click();
 });
-await page.waitForTimeout(400);
+await page.waitForTimeout(500);
 const moved = await page.evaluate(() => JSON.parse(localStorage.getItem('board:'+JSON.parse(localStorage.getItem('boards-v1')).activeId+':picks'))[0].city);
-check('folder actually changes via the correction', moved !== 'Edinburgh', moved);
+check('and moved later from its own sheet', moved !== 'Edinburgh', moved);
+await page.evaluate(() => { const p = JSON.parse(localStorage.getItem('board:'+JSON.parse(localStorage.getItem('boards-v1')).activeId+':picks')); p[0].city = 'Edinburgh'; localStorage.setItem('board:'+JSON.parse(localStorage.getItem('boards-v1')).activeId+':picks', JSON.stringify(p)); });
+await page.evaluate(() => document.querySelector('[data-view="picks"]').click());
+await page.waitForTimeout(300);
 
 // --- Scheduling from the pick's detail sheet, without leaving the tab ---
 await page.evaluate(() => document.querySelector('[data-open-pick]').click());

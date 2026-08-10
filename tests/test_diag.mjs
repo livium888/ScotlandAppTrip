@@ -10,6 +10,7 @@ const BASE = 'http://localhost:8946';
 let failures = 0;
 const check = (l, c, extra) => { if (c) console.log(`PASS: ${l}`); else { console.log(`FAIL: ${l}${extra ? ' :: ' + extra : ''}`); failures++; } };
 
+
 const browser = await chromium.launch(LAUNCH_OPTS);
 
 // ---------- 1. Key test surfaces a real Google error ----------
@@ -143,7 +144,13 @@ const browser = await chromium.launch(LAUNCH_OPTS);
 
   // add one
   await page.evaluate(() => document.querySelector('[data-explore-add]').click());
-  // Adding now saves immediately - no folder question to answer.
+  // Where it goes is asked, with the app's guess pre-selected; accepting the
+  // suggestion is the one tap this test cares about.
+  await page.waitForSelector('#placeModal.open [data-pick-folder]', { timeout: 5000 });
+  await page.evaluate(() => {
+    const chips = Array.from(document.querySelectorAll('#placeModal [data-pick-folder]'));
+    (chips.find((c) => c.classList.contains('active')) || chips[0]).click();
+  });
   await page.waitForTimeout(900);
   const picks = await page.evaluate(() => JSON.parse(localStorage.getItem('board:'+JSON.parse(localStorage.getItem('boards-v1')).activeId+':picks') || '[]'));
   check('explore result can be saved', picks.some(p => p.name === 'Castle Cafe'), JSON.stringify(picks.map(p=>p.name)));

@@ -10,6 +10,19 @@ const BASE = 'http://localhost:8946';
 let failures = 0;
 const check = (l, c, extra) => { if (c) console.log(`PASS: ${l}`); else { console.log(`FAIL: ${l}${extra ? ' :: ' + extra : ''}`); failures++; } };
 
+// Saving now always asks which folder, with the app's guess marked as a
+// suggestion rather than applied silently. Accept the suggestion (or the first
+// chip) so these tests exercise what they are actually about.
+const chooseFolder = async (name) => {
+  await page.waitForSelector('#placeModal.open [data-pick-folder]', { timeout: 5000 });
+  await page.evaluate((wanted) => {
+    const chips = Array.from(document.querySelectorAll('#placeModal [data-pick-folder]'));
+    const byName = wanted && chips.find((c) => c.textContent.trim().startsWith(wanted));
+    (byName || chips.find((c) => c.classList.contains('active')) || chips[0]).click();
+  }, name || '');
+  await page.waitForTimeout(500);
+};
+
 const browser = await chromium.launch(LAUNCH_OPTS);
 const page = await browser.newPage();
 page.on('pageerror', (e) => { console.log('PAGEERROR:', e.message); failures++; });
@@ -81,6 +94,7 @@ check('google result rendered', resultsText.includes('The Little Chippy'), resul
 const bodySent = await page.evaluate(() => window.__lastGoogleBody || null);
 // add candidate -> folder picker -> save
 await page.evaluate(() => document.querySelector('[data-add-candidate]').click());
+await chooseFolder();
 // Adding now saves immediately - no folder question to answer.
 await page.waitForTimeout(900);
 

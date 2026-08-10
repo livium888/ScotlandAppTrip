@@ -415,6 +415,19 @@ body {
   font-family: inherit;
 }
 .filter-chip.active { background: var(--navy); color: var(--on-accent); border-color: var(--navy); }
+/* Marks the app's guess as a guess, so the highlighted chip reads as an offer
+   rather than as a choice already made. */
+.chip-suggested {
+  font-size: 9.5px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  opacity: 0.75;
+  margin-left: 4px;
+}
+/* The folder chips wrap onto as many lines as they need: a trip with a dozen
+   folders must not hide half of them off the right-hand edge. */
+#folderChips { flex-wrap: wrap; }
 
 .place-card { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
 .place-name { font-weight: 700; font-size: 14.5px; margin-bottom: 3px; }

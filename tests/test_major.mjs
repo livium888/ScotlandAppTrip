@@ -174,6 +174,8 @@ check('saving it as an ordinary place is still the first option', await page.eva
 
 await page.evaluate(() => document.getElementById('previewAddMajor').click());
 await page.waitForTimeout(1500);
+check('saving something as an area asks no folder question', await page.evaluate(() =>
+  document.querySelectorAll('#placeModal [data-pick-folder]').length === 0));
 await page.evaluate(() => document.querySelector('[data-search-close]').click());
 await page.waitForTimeout(600);
 
@@ -196,6 +198,19 @@ await page.fill('#pickSearchInput', 'Blair Athol Distillery');
 await page.evaluate(() => document.getElementById('pickSearchForm').requestSubmit());
 await page.waitForTimeout(1200);
 await page.evaluate(() => document.querySelector('[data-add-candidate]').click());
+// The folder is asked for now, and the area is the suggestion - so accepting
+// the suggested chip is what files it under Pitlochry.
+await page.waitForSelector('#placeModal [data-pick-folder]', { timeout: 5000 });
+check('the area is what the app suggests for a place inside it', await page.evaluate(() => {
+  const active = document.querySelector('#placeModal [data-pick-folder].active');
+  return !!active && active.textContent.trim().startsWith('Pitlochry');
+}), await page.evaluate(() => {
+  const a = document.querySelector('#placeModal [data-pick-folder].active');
+  return a ? a.textContent : 'no suggestion';
+}));
+check('the suggestion is marked as a suggestion, not applied', await page.evaluate(() =>
+  !!document.querySelector('#placeModal .chip-suggested')));
+await page.evaluate(() => document.querySelector('#placeModal [data-pick-folder].active').click());
 await page.waitForTimeout(1800);
 await page.evaluate(() => document.querySelector('[data-search-close]') && document.querySelector('[data-search-close]').click());
 await page.waitForTimeout(600);
