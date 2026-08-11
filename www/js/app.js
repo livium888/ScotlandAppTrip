@@ -910,12 +910,14 @@
     const pick = picks.find((p) => p.id === id);
     if (!pick || pick.lat != null) return;
     try {
-      const geo = await geocodePlace(pick.name, pick.city);
+      const candidates = await geocodeCandidates(pick.name, pick.city);
+      const geo = candidates.length ? candidates[0] : null;
       picks = loadPicks();
       const fresh = picks.find((p) => p.id === id);
       if (!fresh || fresh.lat != null || !geo) return;
       fresh.lat = geo.lat;
       fresh.lon = geo.lon;
+      noteLocationDoubt(fresh, candidates);
       // Deliberately does not file it now that coordinates have arrived. A
       // place quietly moving into a folder some seconds after it was saved is
       // the worst version of a wrong guess: nobody sees it happen.
@@ -1002,16 +1004,29 @@
   // a shared place isn't necessarily in Scotland (sharing "Manchester" is
   // perfectly reasonable) - the old query pinned every lookup to Scotland and
   // simply failed for anywhere else.
-  async function geocodePlace(name, cityHint) {
+  // Two places can share a name, and the app used to ask for exactly one
+  // answer (limit=1) and take it. That is not a lookup, it is a guess with the
+  // evidence thrown away: there was no way to know whether the geocoder had
+  // been certain or had picked one of four. Wrong coordinates then spread -
+  // the map pin, the distance, the weather for the day, and which area the
+  // place gets filed under all read from them.
+  //
+  // It now asks for several and keeps them. Callers that a person is waiting
+  // on can offer the choice; background ones record that the choice was never
+  // made rather than pretending it was.
+  const AMBIGUOUS_MIN_KM = 25;
+  const GEOCODE_LIMIT = 5;
+
+  async function geocodeCandidates(name, cityHint) {
     const queries = [];
     if (cityHint) queries.push(`${name}, ${cityHint}`);
     queries.push(scopedQuery(name));
     queries.push(name);
 
     for (const q of queries) {
-      const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&addressdetails=1&extratags=1&namedetails=1&q=${encodeURIComponent(
-        q
-      )}`;
+      const url =
+        `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=${GEOCODE_LIMIT}` +
+        `&addressdetails=1&extratags=1&namedetails=1&q=${encodeURIComponent(q)}`;
       let data;
       try {
         const res = await fetch(url, { headers: { Accept: "application/json" } });
@@ -1020,9 +1035,110 @@
       } catch (e) {
         continue;
       }
-      if (data && data.length) return placeFromNominatim(data[0]);
+      if (data && data.length) {
+        return data.map((r) => {
+          const place = placeFromNominatim(r);
+          place.displayName = r.display_name || "";
+          place.label = (r.namedetails && r.namedetails.name) || String(r.display_name || "").split(",")[0];
+          return place;
+        });
+      }
     }
-    return null;
+    return [];
+  }
+
+  // Only counts as ambiguous when the alternatives are somewhere else, not
+  // when the same place appears twice. A pub and its beer garden fifty metres
+  // apart are not a question worth asking.
+  function realAlternatives(candidates) {
+    if (!candidates || candidates.length < 2) return [];
+    const first = candidates[0];
+    const far = candidates
+      .slice(1)
+      .filter((c) => haversineKm(first.lat, first.lon, c.lat, c.lon) > AMBIGUOUS_MIN_KM);
+    // Deduplicated by where they are, so five results in three towns offer
+    // three answers.
+    const seen = [];
+    return far.filter((c) => {
+      if (seen.some((s) => haversineKm(s.lat, s.lon, c.lat, c.lon) <= AMBIGUOUS_MIN_KM)) return false;
+      seen.push(c);
+      return true;
+    });
+  }
+
+  // The question, asked plainly, when someone is waiting for the answer.
+  // Each option is named by its full address, because "Manchester" twice is
+  // not a choice - "Manchester, Greater Manchester" against "Manchester,
+  // Jamaica" is.
+  function openLocationChooser(opts) {
+    const list = opts.candidates
+      .map(
+        (c, i) => `
+        <button class="search-result location-option" data-pick-location="${i}">
+          <div class="search-result-main">
+            <div class="place-name">${esc(c.label || opts.query)}</div>
+            <div class="place-notes">${esc(c.displayName || "")}</div>
+          </div>
+        </button>`
+      )
+      .join("");
+
+    placeModal.innerHTML = `
+      <div class="modal-backdrop" data-close="1">
+        <div class="modal-sheet" role="dialog" aria-label="Which one did you mean?">
+          <div class="modal-handle"></div>
+          <button class="modal-close" data-close="1" aria-label="Close">✕</button>
+          <div class="modal-body">
+            <h2 class="modal-title">Which "${esc(opts.query)}"?</h2>
+            <div class="modal-subtitle">${esc(
+              opts.subtitle || "More than one place goes by that name, and they are nowhere near each other."
+            )}</div>
+            <div class="search-results" style="margin-top:12px;">${list}</div>
+          </div>
+        </div>
+      </div>
+    `;
+    placeModal.classList.add("open");
+
+    let chosen = false;
+    placeModal.querySelectorAll("[data-close]").forEach((el) =>
+      el.addEventListener("click", (e) => {
+        if (e.target !== el) return;
+        closePlaceModal();
+        if (!chosen && opts.onDismiss) opts.onDismiss();
+      })
+    );
+    placeModal.querySelectorAll("[data-pick-location]").forEach((btn) =>
+      btn.addEventListener("click", () => {
+        chosen = true;
+        closePlaceModal();
+        opts.onPick(opts.candidates[Number(btn.getAttribute("data-pick-location"))]);
+      })
+    );
+  }
+
+  // What a background lookup records instead of interrupting. The place is
+  // saved with the geocoder's best answer, and the fact that there was a
+  // choice is kept with it so the list can say so and the sheet can settle it
+  // later.
+  function noteLocationDoubt(pick, candidates) {
+    const alts = realAlternatives(candidates);
+    if (!alts.length) {
+      delete pick.geoAlternatives;
+      return;
+    }
+    pick.geoAlternatives = [candidates[0]].concat(alts).map((c) => ({
+      lat: c.lat,
+      lon: c.lon,
+      label: c.label || pick.name,
+      displayName: c.displayName || "",
+      address: c.address || "",
+    }));
+  }
+
+  async function geocodePlace(name, cityHint) {
+    const candidates = await geocodeCandidates(name, cityHint);
+    return candidates.length ? candidates[0] : null;
   }
 
   // Pulls the fields worth showing out of a Nominatim result. extratags is
@@ -1106,10 +1222,11 @@
     savePicks(picks);
     if (view.dataset.activeTab === "picks") renderPicks();
 
-    const [geo, wiki] = await Promise.all([
-      geocodePlace(pick.name, pick.city).catch(() => null),
+    const [candidates, wiki] = await Promise.all([
+      geocodeCandidates(pick.name, pick.city).catch(() => []),
       wikiEnrich(pick.name).catch(() => null),
     ]);
+    const geo = candidates.length ? candidates[0] : null;
 
     picks = loadPicks();
     const fresh = picks.find((p) => p.id === id);
@@ -1117,8 +1234,11 @@
     if (geo) {
       fresh.lat = geo.lat;
       fresh.lon = geo.lon;
+      // Nobody is watching this happen, so the doubt is recorded rather than
+      // raised - and never resolved by filing the place somewhere on the
+      // strength of coordinates that might belong to a different town.
+      noteLocationDoubt(fresh, candidates);
       if (!fresh.website && geo.website) fresh.website = geo.website;
-      if (!fresh.city) fresh.city = nearestCity(geo.lat, geo.lon);
       if (!fresh.address && geo.address) fresh.address = geo.address;
       if (!fresh.phone && geo.phone) fresh.phone = geo.phone;
       if (!fresh.openingHours && geo.openingHours) fresh.openingHours = geo.openingHours;
@@ -3521,8 +3641,30 @@
     explore.error = "";
     renderPicks();
     try {
-      const geo = await geocodePlace(query, null);
-      if (!geo) throw new Error(`Couldn't find "${query}".`);
+      const candidates = await geocodeCandidates(query, null);
+      if (!candidates.length) throw new Error(`Couldn't find "${query}".`);
+
+      // Someone is standing in front of this waiting for it, so the question
+      // gets asked rather than guessed. Searching around the wrong Newport is
+      // a whole screen of results for somewhere you are not going.
+      const alternatives = realAlternatives(candidates);
+      if (alternatives.length) {
+        explore.status = "idle";
+        renderPicks();
+        openLocationChooser({
+          query,
+          candidates: [candidates[0]].concat(alternatives),
+          subtitle: "More than one place goes by that name. Which should the search look around?",
+          onPick: (c) => {
+            explore.centre = { name: c.label || query, lat: c.lat, lon: c.lon };
+            markExploreStale();
+            renderPicks();
+          },
+        });
+        return;
+      }
+
+      const geo = candidates[0];
       explore.centre = { name: query, lat: geo.lat, lon: geo.lon };
       explore.status = "idle";
       markExploreStale();
@@ -4312,6 +4454,7 @@
             ${days.map((d) => `<span class="row-badge day">${esc(d)}</span>`).join("")}
             ${p.booked ? `<span class="row-badge booked">booked</span>` : ""}
             ${p.note ? `<span class="row-badge note">note</span>` : ""}
+            ${p.geoAlternatives ? `<span class="row-badge doubt">location?</span>` : ""}
             ${p.enrichStatus === "loading" ? `<span class="row-badge">loading…</span>` : ""}
           </div>
         </div>
@@ -4386,6 +4529,16 @@
             ${description ? `<p class="place-notes" style="margin-top:10px;">${esc(description)}</p>` : ""}
 
             ${p.address ? `<div class="place-fact">📍 ${esc(p.address)}</div>` : ""}
+            ${
+              // The geocoder had more than one answer and nobody was asked.
+              // Saying so beats a map pin that looks as confident as any other.
+              p.geoAlternatives
+                ? `<div class="place-fact doubt-fact">⚠️ ${esc(
+                    String(p.geoAlternatives.length)
+                  )} places share this name and they are far apart — this is the first one.
+                   <button class="link-btn" data-fix-location="${esc(p.id)}">Pick the right one</button></div>`
+                : ""
+            }
             ${p.openingHours ? `<div class="place-fact">🕒 ${esc(p.openingHours)}</div>` : ""}
             ${p.phone ? `<div class="place-fact">📞 <a href="tel:${esc(p.phone)}">${esc(p.phone)}</a></div>` : ""}
             ${safeUrl(p.website) ? `<div class="place-fact">🌐 <a href="${esc(safeUrl(p.website))}" target="_blank" rel="noopener">Website</a></div>` : ""}
@@ -4584,6 +4737,31 @@
           setPickCity(id, folder);
           renderPicks();
           toast(`Moved to ${folder}`);
+        });
+      });
+    });
+
+    placeModal.querySelectorAll("[data-fix-location]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const id = btn.getAttribute("data-fix-location");
+        const target = loadPicks().find((x) => x.id === id);
+        if (!target || !target.geoAlternatives) return;
+        openLocationChooser({
+          query: target.name,
+          candidates: target.geoAlternatives,
+          subtitle: "Which one is it? Everything else - the map, distances, the forecast - follows from this.",
+          onPick: (c) => {
+            // Settling it clears the doubt: the answer came from you, so
+            // there is nothing left to flag.
+            updatePick(id, {
+              lat: c.lat,
+              lon: c.lon,
+              address: c.address || target.address || "",
+              geoAlternatives: null,
+            });
+            renderPicks();
+            toast(`${target.name} moved to ${c.label || "the place you chose"}`);
+          },
         });
       });
     });
@@ -5839,10 +6017,11 @@
     // than leaving the pick permanently without a position (and so without a
     // map or "explore nearby").
     const needsGeo = candidate.lat == null || candidate.lon == null;
-    const [wiki, geo] = await Promise.all([
+    const [wiki, geoCandidates] = await Promise.all([
       wikiEnrich(candidate.name).catch(() => null),
-      needsGeo ? geocodePlace(candidate.name, folder || null).catch(() => null) : Promise.resolve(null),
+      needsGeo ? geocodeCandidates(candidate.name, folder || null).catch(() => []) : Promise.resolve([]),
     ]);
+    const geo = geoCandidates.length ? geoCandidates[0] : null;
 
     const fresh = loadPicks();
     const target = fresh.find((p) => p.id === id);
@@ -5858,6 +6037,7 @@
       if (!target.address && geo.address) target.address = geo.address;
       if (!target.phone && geo.phone) target.phone = geo.phone;
       if (!target.openingHours && geo.openingHours) target.openingHours = geo.openingHours;
+      noteLocationDoubt(target, geoCandidates);
     }
     target.enrichStatus = wiki || geo ? "done" : "empty";
     savePicks(fresh);
