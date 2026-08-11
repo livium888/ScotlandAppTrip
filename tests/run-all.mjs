@@ -43,6 +43,7 @@ const SUITES = [
   "test_addcity.mjs",
   "test_ambiguous.mjs",
   "test_offline.mjs",
+  "test_friction.mjs",
 ];
 
 const MIME = {

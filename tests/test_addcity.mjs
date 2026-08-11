@@ -104,7 +104,7 @@ check('the town saves', !!town, JSON.stringify(saved.map((p) => p.name)));
 check('as an area, not as somewhere to visit', !!town && town.major === true, JSON.stringify(town));
 check('under its own name', !!town && town.city === 'Pitlochry', JSON.stringify(town));
 check('with no folder question to answer', await page.evaluate(() =>
-  document.querySelectorAll('#placeModal [data-pick-folder]').length === 0));
+  document.querySelectorAll('#placeModal [data-label-folder]').length === 0));
 check('and the other reading is offered rather than assumed', await page.evaluate(() => {
   const el = document.getElementById('toast');
   return !!el && /Just a place/i.test(el.textContent);
@@ -119,18 +119,19 @@ await page.evaluate(() => {
   const btn = Array.from(document.querySelectorAll('[data-add-candidate]')).find((b) => !b.disabled);
   btn.click();
 });
-await page.waitForSelector('#placeModal [data-pick-folder]', { timeout: 5000 });
-check('an ordinary place still asks where it goes', await page.evaluate(() =>
-  document.querySelectorAll('#placeModal [data-pick-folder]').length > 0));
-check('and the new area is what it suggests', await page.evaluate(() => {
-  const a = document.querySelector('#placeModal [data-pick-folder].active');
-  return !!a && a.textContent.trim().startsWith('Pitlochry');
-}), await page.evaluate(() => {
-  const a = document.querySelector('#placeModal [data-pick-folder].active');
-  return a ? a.textContent : 'no suggestion';
+await page.waitForTimeout(1800);
+// One area obviously contains it, so there is nothing to ask: it files itself
+// and says where, with the way to change it on the toast.
+check('a place inside the new area is not made into a question', await page.evaluate(() =>
+  document.querySelectorAll('#placeModal [data-label-folder]').length === 0));
+check('it says where it went', await page.evaluate(() => {
+  const el = document.getElementById('toast');
+  return !!el && /Saved to Pitlochry/.test(el.textContent);
+}), await page.evaluate(() => (document.getElementById('toast') || {}).textContent || 'no toast'));
+check('and offers to change it', await page.evaluate(() => {
+  const el = document.getElementById('toast');
+  return !!el && !!el.querySelector('.toast-action') && /Change/.test(el.textContent);
 }));
-await page.evaluate(() => document.querySelector('#placeModal [data-pick-folder].active').click());
-await page.waitForTimeout(1500);
 
 const after = await readPicks();
 const cafe = after.find((p) => /Hettie/.test(p.name));

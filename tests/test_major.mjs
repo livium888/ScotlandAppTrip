@@ -216,18 +216,14 @@ await page.waitForTimeout(1200);
 await page.evaluate(() => document.querySelector('[data-add-candidate]').click());
 // The folder is asked for now, and the area is the suggestion - so accepting
 // the suggested chip is what files it under Pitlochry.
-await page.waitForSelector('#placeModal [data-pick-folder]', { timeout: 5000 });
-check('the area is what the app suggests for a place inside it', await page.evaluate(() => {
-  const active = document.querySelector('#placeModal [data-pick-folder].active');
-  return !!active && active.textContent.trim().startsWith('Pitlochry');
-}), await page.evaluate(() => {
-  const a = document.querySelector('#placeModal [data-pick-folder].active');
-  return a ? a.textContent : 'no suggestion';
-}));
-check('the suggestion is marked as a suggestion, not applied', await page.evaluate(() =>
-  !!document.querySelector('#placeModal .chip-suggested')));
-await page.evaluate(() => document.querySelector('#placeModal [data-pick-folder].active').click());
 await page.waitForTimeout(1800);
+// Inside an area with no rival, so it files itself rather than asking.
+check('a place inside the area is filed without a question', await page.evaluate(() =>
+  document.querySelectorAll('#placeModal [data-label-folder]').length === 0));
+check('and the toast says which area', await page.evaluate(() => {
+  const el = document.getElementById('toast');
+  return !!el && /Pitlochry/.test(el.textContent);
+}), await page.evaluate(() => (document.getElementById('toast') || {}).textContent || 'no toast'));
 await page.evaluate(() => document.querySelector('[data-search-close]') && document.querySelector('[data-search-close]').click());
 await page.waitForTimeout(600);
 

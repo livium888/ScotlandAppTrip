@@ -424,14 +424,18 @@
   // Turns a vague ask ("quiet cafe near the castle for a tired toddler") into
   // named candidate places. Only names come from the model - coordinates and
   // address are then resolved against OSM, so nothing positional is invented.
-  async function searchWithGemini(query, key) {
+  async function searchWithGemini(query, key, guidance) {
     const s = loadTripSettings();
     const where = s.destination.trim() ? ` in ${s.destination.trim()}` : "";
     const who = aiContextBlock();
+    // Whatever you added in your own words, passed through as written. The
+    // categories and the query cover the usual asks; this is for the ones they
+    // do not - "somewhere we can sit outside with a buggy", "not a chain".
+    const extra = (guidance || "").trim() ? `\n\nAlso, specifically: ${guidance.trim()}` : "";
 
     const prompt =
       `Find up to 5 real, currently-open places matching this request${where}.` +
-      `${who}\n\nRequest: ${query}\n\n` +
+      `${who}\n\nRequest: ${query}${extra}\n\n` +
       `Use search to check they exist and are still trading. Reply with ONLY a JSON array, ` +
       `each item: {"name": exact official name, "area": neighbourhood or street, ` +
       `"why": one short sentence on why it fits}. No other text.`;
@@ -798,6 +802,48 @@
   // built-in list only knows Edinburgh, Glasgow and Stirling.
   function suggestedFolderFor(lat, lon) {
     return nearestMajorPlace(lat, lon) || nearestCity(lat, lon);
+  }
+
+  // ---------- Is the answer obvious enough not to ask? ----------
+  // Filing used to happen silently and was often wrong, so it was made a
+  // question - asked on every save, including the great majority where the
+  // answer was never in doubt. That traded one bad habit for another.
+  //
+  // The guess itself is what has changed since. It was nearestCity() over
+  // three hardcoded anchors with a 40km reach, which swept most of the central
+  // belt into Edinburgh. Now there are areas you added by hand, matched within
+  // a few miles. So: act when there is one obvious answer, ask when there
+  // genuinely is a choice - the same rule the geocoder follows.
+  const AUTO_FILE_KM = 8;
+  // A second area this much further away is not a rival for the first.
+  const AUTO_FILE_MARGIN = 2.5;
+
+  function confidentFolderFor(lat, lon) {
+    const folders = loadFolders().filter((f) => f !== "Unsorted");
+
+    // Nothing to choose between: one folder, or none at all.
+    if (!folders.length) return "Unsorted";
+
+    if (lat != null && lon != null) {
+      const areas = loadPicks()
+        .filter((p) => p.major && p.lat != null)
+        .map((p) => ({ name: p.name, km: haversineKm(lat, lon, p.lat, p.lon) }))
+        .sort((a, b) => a.km - b.km);
+
+      if (areas.length) {
+        const [nearest, next] = areas;
+        const clearlyInside = nearest.km <= AUTO_FILE_KM;
+        const noRival = !next || next.km > nearest.km * AUTO_FILE_MARGIN;
+        if (clearlyInside && noRival) return nearest.name;
+        // Inside one area but another is nearly as close: that is a real
+        // choice, and it is yours.
+        return null;
+      }
+    }
+
+    // No areas yet. One folder and nowhere else to put it is not a question.
+    if (folders.length === 1) return folders[0];
+    return null;
   }
 
   // What an area *could* collect: saved, unfiled, and close by. Anything you
@@ -2018,44 +2064,90 @@
   function quickAdd(candidate, opts) {
     const options = opts || {};
 
-    // Saved as an area: it heads a section named after itself, so there is no
-    // folder question to ask and nothing to offer changing.
+    // An area is its own section, so there has never been a folder question
+    // to ask about one.
     if (options.major) {
       confirmAddCandidate(candidate, candidate.name, { major: true });
+      afterSaveRefresh();
       toast(`Added “${candidate.name}” as an area`);
       return;
     }
 
-    // The guess is a suggestion on the sheet now, not a decision already made.
-    const suggested =
-      options.folder || (candidate.lat != null ? suggestedFolderFor(candidate.lat, candidate.lon) : null);
-
-    const save = (folder) => {
-      confirmAddCandidate(candidate, folder);
-      // Whatever is behind the question needs to show the place as saved now
-      // that it actually is - the search list, or the tab underneath.
-      if (searchOverlay.classList.contains("open")) renderSearchOverlay();
-      else if (view.dataset.activeTab) showView(view.dataset.activeTab);
-      // A town saved from the results list is still worth offering to promote:
-      // it is a question about what the place *is*, not about where it goes.
-      if (looksLikeMajorPlace(candidate)) {
-        toastWithAction(`Saved to ${folder}`, "Make it an area", () => {
-          const id = pickId("custom", candidate.name);
-          setPickMajor(id, true);
-          renderPicks();
-          offerToCollectNearby(loadPicks().find((p) => p.id === id));
-        });
-      } else {
-        toast(`Saved to ${folder}`);
-      }
+    const commit = (label) => {
+      confirmAddCandidate(candidate, label.folder, { major: label.major });
+      const id = pickId("custom", candidate.name);
+      if (!label.major) updatePick(id, { kind: label.kind });
+      afterSaveRefresh();
+      return id;
     };
 
-    openFolderPicker(candidate.name, suggested, save, {
-      summary: sharedPlaceSummary(candidate),
-      onDismiss: () => save("Unsorted"),
+    const suggested = candidate.lat != null ? suggestedFolderFor(candidate.lat, candidate.lon) : null;
+    const guessedKind = pickKind({ category: candidate.category || candidate.type, description: candidate.description });
+
+    const ask = (folder) => {
+      openLabelSheet({
+        name: candidate.name,
+        subtitle: candidate.displayName || candidate.address || "",
+        folder: folder || suggested || "Unsorted",
+        suggested,
+        major: false,
+        kind: guessedKind,
+        confirmLabel: "Save it",
+        onConfirm: (label) => {
+          commit(label);
+          toast(label.major ? `Saved ${candidate.name} as an area` : `Saved to ${label.folder}`);
+        },
+        // Backing out still saves - only the labelling was in question, and
+        // losing a place you asked to save would be the worse outcome.
+        onDismiss: () => {
+          commit({ folder: folder || suggested || "Unsorted", major: false, kind: guessedKind });
+          toast("Saved, unsorted");
+        },
+      });
+    };
+
+    // The question is only worth asking when there is a choice to make. One
+    // area obviously containing it, or one folder and nowhere else to put it,
+    // is not a choice - so it files itself and says where, with the way to
+    // change it right there.
+    const confident = options.folder || confidentFolderFor(candidate.lat, candidate.lon);
+    if (!confident) {
+      ask(null);
+      return;
+    }
+
+    const id = commit({ folder: confident, major: false, kind: guessedKind });
+    toastWithAction(`Saved to ${confident}`, "Change", () => {
+      const saved = loadPicks().find((p) => p.id === id);
+      openLabelSheet({
+        name: candidate.name,
+        subtitle: candidate.displayName || candidate.address || "",
+        folder: confident,
+        suggested,
+        major: !!(saved && saved.major),
+        kind: (saved && pickKind(saved)) || guessedKind,
+        confirmLabel: "Done",
+        onConfirm: (label) => {
+          if (label.major) {
+            setPickMajor(id, true);
+            renderPicks();
+            offerToCollectNearby(loadPicks().find((p) => p.id === id));
+            return;
+          }
+          setPickMajor(id, false);
+          updatePick(id, { city: label.folder, kind: label.kind });
+          renderPicks();
+          toast(`Moved to ${label.folder}`);
+        },
+      });
     });
   }
 
+  // Whatever is behind the save needs to show it: the search list, or the tab.
+  function afterSaveRefresh() {
+    if (searchOverlay.classList.contains("open")) renderSearchOverlay();
+    else if (view.dataset.activeTab) showView(view.dataset.activeTab);
+  }
 
   // A toast with one tappable action, which is how a reversible choice should
   // be offered: act first, correct after, rather than prompt before.
@@ -2093,6 +2185,126 @@
   // Closing the sheet without choosing still saves - to Unsorted. Losing a
   // place you asked to save would be worse than filing it nowhere in
   // particular, and Unsorted is honest about being undecided.
+  // ---------- One sheet for everything a place is ----------
+  // There were three questions about the same place, in three places, at three
+  // moments: which folder (a modal, at save), town or place (a toast, after
+  // save), and To do or Eat (the detail sheet, whenever you found it). Nothing
+  // said they were the same question - what is this thing - so each arrived as
+  // a fresh interruption. They are one sheet now, with the likely answers
+  // already filled in, so agreeing is one tap and disagreeing is one more.
+  function openLabelSheet(opts) {
+    const state = {
+      folder: opts.folder || "Unsorted",
+      major: !!opts.major,
+      kind: opts.kind || "place",
+    };
+
+    const draw = () => {
+      const folders = loadFolders().filter((f) => f !== "Unsorted").concat(["Unsorted"]);
+      placeModal.innerHTML = `
+        <div class="modal-backdrop" data-close="1">
+          <div class="modal-sheet" role="dialog" aria-label="About this place">
+            <div class="modal-handle"></div>
+            <button class="modal-close" data-close="1" aria-label="Close">✕</button>
+            <div class="modal-body">
+              <h2 class="modal-title">${esc(opts.name)}</h2>
+              ${opts.subtitle ? `<div class="modal-subtitle">${esc(opts.subtitle)}</div>` : ""}
+
+              <label class="settings-label">What is it</label>
+              <div class="move-row">
+                <button class="move-chip${state.major ? "" : " active"}" data-label-major="0">📍 Somewhere to go</button>
+                <button class="move-chip${state.major ? " active" : ""}" data-label-major="1">🏘️ A town or area</button>
+              </div>
+
+              ${
+                // An area is its own section and appears in neither list, so
+                // both of the questions below would be controls that do
+                // nothing.
+                state.major
+                  ? `<p class="settings-hint">It will head its own section, and places you save nearby get filed under it.</p>`
+                  : `
+              <label class="settings-label">Shows up in</label>
+              <div class="move-row">
+                <button class="move-chip${state.kind === "place" ? " active" : ""}" data-label-kind="place">🏛️ To do</button>
+                <button class="move-chip${state.kind === "eat" ? " active" : ""}" data-label-kind="eat">🍽️ Eat</button>
+              </div>
+
+              <label class="settings-label">Where it goes</label>
+              <div class="filter-row" id="labelFolders">
+                ${folders
+                  .map(
+                    (f) =>
+                      `<button class="filter-chip${f === state.folder ? " active" : ""}" data-label-folder="${esc(f)}">${esc(f)}${
+                        f === opts.suggested && f === state.folder ? ` <span class="chip-suggested">suggested</span>` : ""
+                      }</button>`
+                  )
+                  .join("")}
+              </div>
+              <form class="search-bar" id="labelNewFolder" style="margin-top:4px;">
+                <input type="text" id="labelNewFolderInput" placeholder="Or a new folder…" autocomplete="off" />
+                <button type="submit" aria-label="Create folder">+</button>
+              </form>`
+              }
+
+              <button class="modal-btn modal-btn-primary" id="labelDone" style="width:100%;margin-top:16px;">
+                ${esc(opts.confirmLabel || "Save")}
+              </button>
+            </div>
+          </div>
+        </div>
+      `;
+      placeModal.classList.add("open");
+
+      let settled = false;
+      placeModal.querySelectorAll("[data-close]").forEach((el) =>
+        el.addEventListener("click", (e) => {
+          if (e.target !== el) return;
+          closePlaceModal();
+          if (!settled && opts.onDismiss) opts.onDismiss(state);
+        })
+      );
+
+      // Each control redraws the sheet, because choosing "a town" removes two
+      // questions that no longer apply.
+      placeModal.querySelectorAll("[data-label-major]").forEach((b) =>
+        b.addEventListener("click", () => {
+          state.major = b.getAttribute("data-label-major") === "1";
+          if (state.major) state.folder = opts.name;
+          draw();
+        })
+      );
+      placeModal.querySelectorAll("[data-label-kind]").forEach((b) =>
+        b.addEventListener("click", () => {
+          state.kind = b.getAttribute("data-label-kind");
+          draw();
+        })
+      );
+      placeModal.querySelectorAll("[data-label-folder]").forEach((b) =>
+        b.addEventListener("click", () => {
+          state.folder = b.getAttribute("data-label-folder");
+          draw();
+        })
+      );
+      const newFolder = document.getElementById("labelNewFolder");
+      if (newFolder) {
+        newFolder.addEventListener("submit", (e) => {
+          e.preventDefault();
+          const name = document.getElementById("labelNewFolderInput").value.trim();
+          if (!name) return;
+          state.folder = addFolder(name);
+          draw();
+        });
+      }
+      document.getElementById("labelDone").addEventListener("click", () => {
+        settled = true;
+        closePlaceModal();
+        opts.onConfirm(state);
+      });
+    };
+
+    draw();
+  }
+
   function openFolderPicker(candidateName, suggestedFolder, onConfirm, options) {
     const opts = options || {};
     const summary = opts.summary && opts.summary.length ? opts.summary : null;
@@ -4798,7 +5010,9 @@
       L.marker([p.lat, p.lon]).addTo(map);
       // Leaflet needs a nudge when it initialises inside a sheet that was
       // display:none a moment ago, or it renders a grey box.
-      setTimeout(() => map.invalidateSize(), 60);
+      setTimeout(() => {
+        if (map._container && map._container.isConnected) map.invalidateSize();
+      }, 60);
     }
 
     placeModal.querySelectorAll("[data-open-maps]").forEach((btn) =>
@@ -4998,16 +5212,19 @@
     if (view.dataset.activeTab === "picks") renderPicks();
   }
 
-  async function runSearch(query) {
+  async function runSearch(query, guidance) {
     const q = (query || "").trim();
     if (!q) return;
     rememberSearch(q);
-    pickSearch = { query: q, status: "loading", results: [] };
+    // Kept across a refine, so "cheap, with a garden" still applies when you
+    // narrow the same search again.
+    const extra = guidance === undefined ? pickSearch.guidance || "" : guidance;
+    pickSearch = { query: q, status: "loading", results: [], guidance: extra };
     renderSearchOverlay();
     try {
-      pickSearch = { query: q, status: "done", results: await searchPlaces(q) };
+      pickSearch = { query: q, status: "done", results: await searchPlaces(q, extra), guidance: extra };
     } catch (e) {
-      pickSearch = { query: q, status: "error", results: [] };
+      pickSearch = { query: q, status: "error", results: [], guidance: extra };
     }
     renderSearchOverlay();
   }
@@ -5148,6 +5365,21 @@
       body += `<p class="settings-hint search-foot">＋ saves it, 🧭 looks around it, or tap the place to read about it first.${
         results.some((r) => r.isArea) ? " A 🏘️ result is a town or area: saving it gives it its own section." : ""
       }</p>`;
+      // When none of it is what you meant. The query says what you are looking
+      // for; this says what would make it right, in your own words, and the
+      // model gets it verbatim.
+      body += `
+        <form class="search-bar refine-bar" id="refineForm">
+          <input type="text" id="refineInput" placeholder="Not quite? Tell the AI more — e.g. with a garden, no chains"
+                 autocomplete="off" value="${esc(pickSearch.guidance || "")}" />
+          <button type="submit" aria-label="Search again with this">Refine</button>
+        </form>
+        ${
+          pickSearch.guidance
+            ? `<p class="settings-hint">Also asking for: <b>${esc(pickSearch.guidance)}</b> · <button class="link-btn" id="refineClear">drop it</button></p>`
+            : ""
+        }
+      `;
     }
 
     searchOverlay.innerHTML = `
@@ -5363,7 +5595,9 @@
       addTileLayer(map);
       map.setView([r.lat, r.lon], 15);
       L.marker([r.lat, r.lon]).addTo(map);
-      setTimeout(() => map.invalidateSize(), 60);
+      setTimeout(() => {
+        if (map._container && map._container.isConnected) map.invalidateSize();
+      }, 60);
     }
   }
 
@@ -5450,6 +5684,21 @@
 
     // Adding doesn't close the screen: on a trip you rarely want exactly one
     // café. The button becomes a tick so it's obvious what's already in.
+    const refine = document.getElementById("refineForm");
+    if (refine) {
+      refine.addEventListener("submit", (e) => {
+        e.preventDefault();
+        const extra = document.getElementById("refineInput").value.trim();
+        const input = document.getElementById("pickSearchInput");
+        if (input) input.blur();
+        runSearch(pickSearch.query, extra);
+      });
+    }
+    const refineClear = document.getElementById("refineClear");
+    if (refineClear) {
+      refineClear.addEventListener("click", () => runSearch(pickSearch.query, ""));
+    }
+
     searchOverlay.querySelectorAll("[data-around-candidate]").forEach((btn) => {
       btn.addEventListener("click", () => {
         const c = pickSearch.results[Number(btn.getAttribute("data-around-candidate"))];
@@ -5511,12 +5760,12 @@
   // The place itself is now looked up alongside whatever else answers, and if
   // OpenStreetMap says the name is a town, city, village or island it goes to
   // the top of the results as an area you can save in one tap.
-  async function searchPlaces(query) {
+  async function searchPlaces(query, guidance) {
     lastSearchError = "";
     // Started first and awaited last, so it costs nothing in wall-clock time
     // against a search that takes seconds.
     const areaPromise = lookupPlacesThemselves(query).catch(() => []);
-    const results = await searchPlaceBackends(query);
+    const results = await searchPlaceBackends(query, guidance);
     const areas = await areaPromise;
     if (!areas.length) return results;
     // The backends may have named the town too - keep ours, since ours is the
@@ -5569,7 +5818,7 @@
     return out.slice(0, 3);
   }
 
-  async function searchPlaceBackends(query) {
+  async function searchPlaceBackends(query, guidance) {
     const s = loadTripSettings();
     const geminiKey = s.geminiKey.trim();
     const googleKey = s.googleKey.trim();
@@ -5580,7 +5829,7 @@
     // real data rather than anything the model produced.
     if (geminiKey) {
       try {
-        const results = await searchWithGemini(query, geminiKey);
+        const results = await searchWithGemini(query, geminiKey, guidance);
         if (results.length) return results;
       } catch (e) {
         console.warn("Gemini search failed, falling back:", e);
@@ -5781,7 +6030,18 @@
     createTile: function (coords, done) {
       const img = document.createElement("img");
       img.alt = "";
-      const finish = (err) => done(err || null, img);
+      const layer = this;
+      let settled = false;
+      // A tile fetched from IndexedDB or the network can land after its map
+      // has been torn down - closing a sheet mid-load, or a re-render. Leaflet
+      // then tries to position a tile belonging to a map that no longer
+      // exists, and throws reading _leaflet_pos.
+      const finish = (err) => {
+        if (settled) return;
+        settled = true;
+        if (!layer._map) return;
+        done(err || null, img);
+      };
 
       readTile(coords.z, coords.x, coords.y)
         .then((blob) => {
@@ -5964,7 +6224,9 @@
     });
     // The overlay is laid out only once visible, so Leaflet's idea of the
     // canvas size is stale until the next frame.
-    requestAnimationFrame(() => map.invalidateSize());
+    requestAnimationFrame(() => {
+      if (map._container && map._container.isConnected) map.invalidateSize();
+    });
   }
 
   function pickMapElId(id) {
@@ -6200,7 +6462,9 @@
     else allMap.fitBounds(bounds.pad(0.2));
     // The overlay is only laid out once it's visible, so Leaflet's idea of
     // the canvas size is stale until the next frame.
-    requestAnimationFrame(() => allMap && allMap.invalidateSize());
+    requestAnimationFrame(() => {
+      if (allMap && allMap._container && allMap._container.isConnected) allMap.invalidateSize();
+    });
 
     const locate = document.getElementById("allMapLocate");
     if (locate) locate.addEventListener("click", () => showMeOnAllMap(locate));
@@ -6312,7 +6576,9 @@
     allMap = map; // so closeAllMap tears it down
     addTileLayer(map);
     map.setView([start.lat, start.lon], options.zoom || 13);
-    requestAnimationFrame(() => map.invalidateSize());
+    requestAnimationFrame(() => {
+      if (map._container && map._container.isConnected) map.invalidateSize();
+    });
 
     // The name lags behind the map on purpose: reverse geocoding on every
     // frame of a drag would hammer a free service for answers nobody reads.
@@ -6510,10 +6776,12 @@
     const picks = pickKindFilter === "all" ? all : all.filter((p) => p.major || pickKind(p) === pickKindFilter);
 
     let html = `
-      <button class="search-trigger" id="pickSearchTrigger">
+      <div class="search-trigger-wrap">
         <span class="search-trigger-icon">🔍</span>
-        <span class="search-trigger-text">Search for a place to add…</span>
-      </button>
+        <input class="search-trigger-input" id="pickSearchTrigger" type="text"
+               placeholder="Search for a place, town or area…" readonly
+               aria-label="Search for a place to add" />
+      </div>
       ${renderExplore()}
     `;
 
@@ -6665,7 +6933,13 @@
 
     // Search has its own screen now - these are just the ways in.
     const searchTrigger = document.getElementById("pickSearchTrigger");
-    if (searchTrigger) searchTrigger.addEventListener("click", () => openSearchOverlay(""));
+    if (searchTrigger) {
+      // It reads as a search field and now behaves as one: one tap and you are
+      // typing, rather than one tap to reach a screen that has the field on it.
+      const open = () => openSearchOverlay("");
+      searchTrigger.addEventListener("click", open);
+      searchTrigger.addEventListener("focus", open);
+    }
     view.querySelectorAll("[data-open-search]").forEach((b) =>
       b.addEventListener("click", () => openSearchOverlay(""))
     );

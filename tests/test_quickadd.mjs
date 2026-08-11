@@ -1,10 +1,13 @@
-// Adding a place is the app's most frequent action. It used to file itself and
-// offer a correction on a toast, which was frictionless right up until the
-// guess was wrong - and a wrong guess that nobody is asked about is invisible
-// until you go looking for something and it isn't there. Where a place goes is
-// now always answered by hand, with the guess offered as a suggestion.
-// These check that flow: one question, the guess pre-selected, and no silent
-// filing anywhere in the path.
+// Adding a place is the app's most frequent action, so what it costs matters.
+//
+// It used to file itself on a 40km guess over three hardcoded cities, which
+// was frictionless and often wrong. Then it asked every time, which was always
+// right and always an interruption - including on the great majority of saves
+// where the answer was never in doubt.
+//
+// It now asks only when there is a choice: this board has three folders and no
+// areas, so there is one. A place that clearly sits inside one saved area
+// files itself instead (test_addcity covers that side).
 import { chromium } from 'playwright';
 import fs from 'node:fs';
 const SANDBOX_CHROMIUM = '/opt/pw-browsers/chromium';
@@ -46,23 +49,29 @@ await page.waitForTimeout(700);
 
 const askedFirst = await page.evaluate(() => ({
   open: document.getElementById('placeModal').classList.contains('open'),
-  chips: document.querySelectorAll('#placeModal [data-pick-folder]').length,
-  suggested: (document.querySelector('#placeModal [data-pick-folder].active') || {}).textContent || '',
+  chips: document.querySelectorAll('#placeModal [data-label-folder]').length,
+  suggested: (document.querySelector('#placeModal [data-label-folder].active') || {}).textContent || '',
   marked: !!document.querySelector('#placeModal .chip-suggested'),
-  unsorted: Array.from(document.querySelectorAll('#placeModal [data-pick-folder]'))
+  unsorted: Array.from(document.querySelectorAll('#placeModal [data-label-folder]'))
     .some((c) => c.textContent.trim().startsWith('Unsorted')),
+  kinds: document.querySelectorAll('#placeModal [data-label-kind]').length,
+  isWhat: document.querySelectorAll('#placeModal [data-label-major]').length,
 }));
 check('the folder is asked, not decided', askedFirst.open && askedFirst.chips > 0, JSON.stringify(askedFirst));
 check('the app still offers its guess', /Edinburgh/.test(askedFirst.suggested), askedFirst.suggested);
 check('and marks it as a suggestion rather than a fact', askedFirst.marked);
 check('somewhere to put it when undecided', askedFirst.unsorted, JSON.stringify(askedFirst));
+// The three questions about a place used to arrive in three places at three
+// moments. One sheet, one moment.
+check('what it is, is asked in the same breath', askedFirst.isWhat === 2, JSON.stringify(askedFirst));
+check('and which list it belongs in', askedFirst.kinds === 2, JSON.stringify(askedFirst));
 
 // Nothing is saved while the question is still on screen.
 const duringAsk = await page.evaluate(() => JSON.parse(localStorage.getItem('board:'+JSON.parse(localStorage.getItem('boards-v1')).activeId+':picks') || '[]'));
 check('nothing is filed before the question is answered', duringAsk.length === 0, JSON.stringify(duringAsk));
 
-// Accepting the suggestion is one tap.
-await page.evaluate(() => document.querySelector('#placeModal [data-pick-folder].active').click());
+// Accepting what it suggests is one tap on Save.
+await page.evaluate(() => document.getElementById('labelDone').click());
 await page.waitForTimeout(700);
 
 const picks = await page.evaluate(() => JSON.parse(localStorage.getItem('board:'+JSON.parse(localStorage.getItem('boards-v1')).activeId+':picks') || '[]'));

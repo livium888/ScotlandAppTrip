@@ -1620,6 +1620,32 @@ body {
 /* The only control that runs a search, so it looks like the end of the form
    rather than one more setting in it. */
 /* Two actions per result: save it, or look around it. */
+/* Looks and behaves like the field it always looked like. */
+.refine-bar { margin-top: 4px; }
+.refine-bar input { font-size: 13px; }
+
+.search-trigger-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0 16px;
+  margin-bottom: 14px;
+}
+.search-trigger-input {
+  flex: 1;
+  border: 0;
+  background: none;
+  font-family: inherit;
+  font-size: 14.5px;
+  color: var(--ink);
+  padding: 13px 0;
+  outline: none;
+}
+.search-trigger-input::placeholder { color: var(--ink-soft); }
+
 .search-result-actions { display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; }
 .search-around {
   font-family: inherit;

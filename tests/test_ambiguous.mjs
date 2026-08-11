@@ -103,13 +103,19 @@ await page.fill('#pickSearchInput', 'The Bay Tree');
 await page.evaluate(() => document.getElementById('pickSearchForm').requestSubmit());
 await page.waitForTimeout(1400);
 await page.evaluate(() => document.querySelector('[data-add-candidate]').click());
-await page.waitForSelector('#placeModal [data-pick-folder]', { timeout: 5000 });
+await page.waitForTimeout(1200);
 check('two results fifty metres apart are not an ambiguity', await page.evaluate(() =>
   document.querySelectorAll('[data-pick-location]').length === 0));
-await page.evaluate(() => {
-  const chips = Array.from(document.querySelectorAll('#placeModal [data-pick-folder]'));
-  (chips.find((c) => c.classList.contains('active')) || chips[0]).click();
-});
+// This board has one folder and no areas, so where it goes is not a question
+// either - it files itself.
+const labelChips = await page.evaluate(() => document.querySelectorAll('#placeModal [data-label-folder]').length);
+if (labelChips) {
+  await page.evaluate(() => {
+    const chips = Array.from(document.querySelectorAll('#placeModal [data-label-folder]'));
+    (chips.find((c) => c.classList.contains('active')) || chips[0]).click();
+  });
+  await page.evaluate(() => document.getElementById('labelDone').click());
+}
 await page.waitForTimeout(1500);
 const bayTree = (await readPicks()).find((p) => /Bay Tree/.test(p.name));
 check('it saves without a flag on it', !!bayTree && !bayTree.geoAlternatives, JSON.stringify(bayTree));

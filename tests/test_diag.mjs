@@ -150,13 +150,16 @@ const browser = await chromium.launch(LAUNCH_OPTS);
 
   // add one
   await page.evaluate(() => document.querySelector('[data-explore-add]').click());
-  // Where it goes is asked, with the app's guess pre-selected; accepting the
-  // suggestion is the one tap this test cares about.
-  await page.waitForSelector('#placeModal.open [data-pick-folder]', { timeout: 5000 });
-  await page.evaluate(() => {
-    const chips = Array.from(document.querySelectorAll('#placeModal [data-pick-folder]'));
-    (chips.find((c) => c.classList.contains('active')) || chips[0]).click();
-  });
+  // This board has three folders and no areas, so where it goes is a genuine
+  // choice and the sheet asks. (Inside a saved area it would file itself.)
+  const labelSheet = await page.waitForSelector('#placeModal.open [data-label-folder]', { timeout: 2000 }).catch(() => null);
+  if (labelSheet) {
+    await page.evaluate(() => {
+      const chips = Array.from(document.querySelectorAll('#placeModal [data-label-folder]'));
+      (chips.find((c) => c.classList.contains('active')) || chips[0]).click();
+    });
+    await page.evaluate(() => document.getElementById('labelDone').click());
+  }
   await page.waitForTimeout(900);
   const picks = await page.evaluate(() => JSON.parse(localStorage.getItem('board:'+JSON.parse(localStorage.getItem('boards-v1')).activeId+':picks') || '[]'));
   check('explore result can be saved', picks.some(p => p.name === 'Castle Cafe'), JSON.stringify(picks.map(p=>p.name)));

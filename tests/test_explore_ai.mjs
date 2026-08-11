@@ -28,13 +28,19 @@ const centreOn = async (query) => {
 // Saving now always asks which folder, with the app's guess marked as a
 // suggestion rather than applied silently. Accept the suggestion (or the first
 // chip) so these tests exercise what they are actually about.
-const chooseFolder = async (name) => {
-  await page.waitForSelector('#placeModal.open [data-pick-folder]', { timeout: 5000 });
-  await page.evaluate((wanted) => {
-    const chips = Array.from(document.querySelectorAll('#placeModal [data-pick-folder]'));
-    const byName = wanted && chips.find((c) => c.textContent.trim().startsWith(wanted));
-    (byName || chips.find((c) => c.classList.contains('active')) || chips[0]).click();
-  }, name || '');
+const chooseFolder = async () => {
+  // The labelling sheet only appears when there is a real choice to make. When
+  // one area obviously contains the place, it files itself and says so.
+  const sheet = await page.waitForSelector('#placeModal.open [data-label-folder]', { timeout: 1500 }).catch(() => null);
+  if (!sheet) {
+    await page.waitForTimeout(500);
+    return;
+  }
+  await page.evaluate(() => {
+    const chips = Array.from(document.querySelectorAll('#placeModal [data-label-folder]'));
+    (chips.find((c) => c.classList.contains('active')) || chips[0]).click();
+  });
+  await page.evaluate(() => document.getElementById('labelDone').click());
   await page.waitForTimeout(500);
 };
 

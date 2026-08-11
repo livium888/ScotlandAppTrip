@@ -15,11 +15,18 @@ const check = (l, c, extra) => { if (c) console.log(`PASS: ${l}`); else { consol
 // Saving now always asks which folder. Accepting the suggested chip keeps
 // these tests about what they are actually testing.
 const chooseFolder = async () => {
-  await page.waitForSelector('#placeModal.open [data-pick-folder]', { timeout: 5000 });
+  // The labelling sheet only appears when there is a real choice to make. When
+  // one area obviously contains the place, it files itself and says so.
+  const sheet = await page.waitForSelector('#placeModal.open [data-label-folder]', { timeout: 1500 }).catch(() => null);
+  if (!sheet) {
+    await page.waitForTimeout(500);
+    return;
+  }
   await page.evaluate(() => {
-    const chips = Array.from(document.querySelectorAll('#placeModal [data-pick-folder]'));
+    const chips = Array.from(document.querySelectorAll('#placeModal [data-label-folder]'));
     (chips.find((c) => c.classList.contains('active')) || chips[0]).click();
   });
+  await page.evaluate(() => document.getElementById('labelDone').click());
   await page.waitForTimeout(500);
 };
 
