@@ -3961,6 +3961,18 @@
     if (explore.centre) {
       body += `<p class="explore-centre">Around <b>${esc(explore.centre.name)}</b></p>`;
       body += renderExploreCategoryButton();
+      // The categories are a shortcut, not the whole vocabulary. Describing
+      // what you want was previously reachable only by opening the category
+      // sheet and finding the field at the top of it, which made the list look
+      // like the only thing the app could look for.
+      body += `
+        <form class="search-bar explore-describe" id="exploreDescribeForm">
+          <input type="text" id="exploreDescribeInput"
+                 placeholder="…or describe it — e.g. soft play with parking"
+                 autocomplete="off" value="${explore.category === "custom" ? esc(explore.customQuery) : ""}" />
+          <button type="submit" aria-label="Use this description">Use</button>
+        </form>
+      `;
       body += `
         <div class="explore-radius">
           <label for="exploreRadius">Within</label>
@@ -4150,6 +4162,19 @@
         renderPicks();
       });
     }
+    const describe = document.getElementById("exploreDescribeForm");
+    if (describe) {
+      describe.addEventListener("submit", (e) => {
+        e.preventDefault();
+        const q = document.getElementById("exploreDescribeInput").value.trim();
+        if (!q) return;
+        explore.category = "custom";
+        explore.customQuery = q;
+        markExploreStale();
+        renderPicks();
+      });
+    }
+
     const runBtn = document.getElementById("exploreRunBtn");
     if (runBtn) runBtn.addEventListener("click", () => runExplore());
 
@@ -4750,15 +4775,17 @@
         // already know. Tapping straight to "add" was the only option before,
         // which made every add a guess.
         body += `
-          <div class="search-result" data-candidate="${i}">
+          <div class="search-result${r.isArea ? " search-result-area" : ""}" data-candidate="${i}">
             <div class="search-result-main">
               <button class="result-tap" data-preview-candidate="${i}">
                 <div class="place-name">${esc(r.name)}${
-                  r.aiSuggested ? ` <span class="ai-badge">AI</span>` : ""
-                }${ratingBadge(r)}</div>
+                  r.isArea ? ` <span class="area-badge">🏘️ ${esc(prettyCategory(r.type) || "Area")}</span>` : ""
+                }${r.aiSuggested ? ` <span class="ai-badge">AI</span>` : ""}${ratingBadge(r)}</div>
                 <div class="place-notes">${esc(r.displayName || "")}</div>
                 ${r.description ? `<div class="place-notes">${esc(r.description)}</div>` : ""}
-                <div class="search-result-more">Details ›</div>
+                <div class="search-result-more">${
+                  r.isArea ? "Save it to group places under it, or tap for details ›" : "Details ›"
+                }</div>
               </button>
               ${
                 r.sources && r.sources.length
@@ -4768,12 +4795,16 @@
             </div>
             <button class="search-add${already ? " added" : ""}" data-add-candidate="${i}" ${
               already ? "disabled" : ""
-            } aria-label="${already ? "Already saved" : "Save " + esc(r.name)}">${already ? "✓" : "＋"}</button>
+            } aria-label="${
+              already ? "Already saved" : (r.isArea ? "Save " + esc(r.name) + " as an area" : "Save " + esc(r.name))
+            }">${already ? "✓" : "＋"}</button>
           </div>
         `;
       });
       body += `</div>`;
-      body += `<p class="settings-hint search-foot">Tap a place to read about it first, or ＋ to save it straight away.</p>`;
+      body += `<p class="settings-hint search-foot">Tap a place to read about it first, or ＋ to save it straight away.${
+        results.some((r) => r.isArea) ? " A 🏘️ result is a town or area: saving it gives it its own section." : ""
+      }</p>`;
     }
 
     searchOverlay.innerHTML = `
@@ -5061,7 +5092,23 @@
       btn.addEventListener("click", () => {
         const candidate = pickSearch.results[Number(btn.getAttribute("data-add-candidate"))];
         if (!candidate) return;
-        quickAdd(candidate);
+        // A town saves as an area straight away: it has no folder question to
+        // answer, being its own section, and "which folder does Pitlochry go
+        // in" is not a question anyone wants asked about Pitlochry. The toast
+        // carries the other reading for the case where you only wanted to
+        // remember the name.
+        if (candidate.isArea) {
+          quickAdd(candidate, { major: true });
+          toastWithAction(`Saved ${candidate.name} as an area`, "Just a place", () => {
+            const id = pickId("custom", candidate.name);
+            setPickMajor(id, false);
+            setPickCity(id, "Unsorted");
+            renderPicks();
+            toast(`${candidate.name} is an ordinary place, unsorted`);
+          });
+        } else {
+          quickAdd(candidate);
+        }
         btn.classList.add("added");
         btn.textContent = "✓";
         btn.disabled = true;
@@ -5075,8 +5122,62 @@
   // for when a Google call fails, so search always works either way.
   let lastSearchError = "";
 
+  // Searching for a town never found the town. Every backend answers with
+  // businesses: the AI is asked for places that are "real, currently-open and
+  // still trading", which a town is not, and Google Places answers with
+  // establishments. So "Pitlochry" came back as five cafes in Pitlochry, and
+  // the one thing you had actually typed was the one thing you could not save.
+  //
+  // The place itself is now looked up alongside whatever else answers, and if
+  // OpenStreetMap says the name is a town, city, village or island it goes to
+  // the top of the results as an area you can save in one tap.
   async function searchPlaces(query) {
     lastSearchError = "";
+    // Started first and awaited last, so it costs nothing in wall-clock time
+    // against a search that takes seconds.
+    const areaPromise = lookupPlaceItself(query).catch(() => null);
+    const results = await searchPlaceBackends(query);
+    const area = await areaPromise;
+    if (!area) return results;
+    // The backend may have named the town too - keep one of it, ours, since
+    // ours is the one that knows it is an area.
+    return [area].concat(results.filter((r) => normalisedName(r.name) !== normalisedName(area.name)));
+  }
+
+  function normalisedName(name) {
+    return String(name || "").trim().toLowerCase();
+  }
+
+  // Asks the geocoder what the query itself is. Deliberately not the AI: this
+  // is a question of fact about a name, which is exactly what a gazetteer is
+  // for and exactly what a language model should not be asked to invent.
+  async function lookupPlaceItself(query) {
+    const q = (query || "").trim();
+    if (!q) return null;
+    const url =
+      `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=3&addressdetails=1` +
+      `&extratags=1&namedetails=1&q=${encodeURIComponent(scopedQuery(q))}`;
+    const res = await fetch(url, { headers: { Accept: "application/json" } });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const hit = (Array.isArray(data) ? data : []).find((r) => looksLikeMajorPlace({ type: r.type }));
+    if (!hit) return null;
+    const details = placeFromNominatim(hit);
+    return {
+      name: (hit.namedetails && hit.namedetails.name) || String(hit.display_name || "").split(",")[0],
+      displayName: hit.display_name,
+      lat: details.lat,
+      lon: details.lon,
+      type: hit.type,
+      category: details.category,
+      description: "",
+      address: details.address,
+      // What the results list keys off to offer "save as an area".
+      isArea: true,
+    };
+  }
+
+  async function searchPlaceBackends(query) {
     const s = loadTripSettings();
     const geminiKey = s.geminiKey.trim();
     const googleKey = s.googleKey.trim();

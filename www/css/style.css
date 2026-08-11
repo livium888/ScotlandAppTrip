@@ -417,6 +417,19 @@ body {
 .filter-chip.active { background: var(--navy); color: var(--on-accent); border-color: var(--navy); }
 /* Marks the app's guess as a guess, so the highlighted chip reads as an offer
    rather than as a choice already made. */
+/* Marks a search result that is a town rather than somewhere in one. */
+.area-badge {
+  font-size: 10px;
+  font-weight: 800;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+.search-result-area { border-left: 3px solid var(--teal); }
+
 .chip-suggested {
   font-size: 9.5px;
   font-weight: 800;
@@ -1568,6 +1581,8 @@ body {
 
 /* The only control that runs a search, so it looks like the end of the form
    rather than one more setting in it. */
+.explore-describe { margin: 8px 0 0; }
+.explore-describe input { font-size: 13px; }
 .explore-run { width: 100%; margin-top: 12px; }
 .explore-run[disabled] { opacity: 0.5; }
 .explore-run-hint { text-align: center; margin-top: 6px; }
