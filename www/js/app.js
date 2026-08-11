@@ -3743,11 +3743,17 @@
   }
 
   function renderSuggestions(state, items, message) {
-    const list = document.getElementById("exploreSuggestList");
-    const input = document.getElementById("exploreSearchInput");
+    const list = document.getElementById("pickSuggestList");
+    const input = document.getElementById("pickSearchInput");
     if (!list) return;
 
     if (state === "hidden") {
+      // Also cancels whatever is in flight. Hiding the list while a lookup
+      // was still running meant the suggestions reappeared a moment later,
+      // on top of the results you had just asked for.
+      clearTimeout(suggestTimer);
+      if (suggestAbort) suggestAbort.abort();
+      suggestItems = [];
       list.hidden = true;
       list.innerHTML = "";
       if (input) input.setAttribute("aria-expanded", "false");
@@ -3794,14 +3800,13 @@
     clearTimeout(suggestTimer);
     if (suggestAbort) suggestAbort.abort();
     const label = s.context ? `${s.name}, ${s.context}` : s.name;
-    // Coordinates come with the suggestion, so there's nothing left to look
-    // up - and no second chance to resolve to the wrong Manchester.
-    explore.centre = { name: label, lat: s.lat, lon: s.lon };
-    explore.status = "idle";
-    explore.error = "";
     renderSuggestions("hidden");
-    markExploreStale();
-    renderPicks();
+    const input = document.getElementById("pickSearchInput");
+    if (input) {
+      input.value = label;
+      input.blur(); // drop the keyboard so the results get the screen
+    }
+    runSearch(label);
   }
 
   function onSuggestInput(value) {
@@ -3840,44 +3845,11 @@
     }, SUGGEST_DEBOUNCE_MS);
   }
 
-  async function setExploreCentreFromSearch(query) {
-    explore.status = "locating";
-    explore.error = "";
-    renderPicks();
-    try {
-      const candidates = await geocodeCandidates(query, null);
-      if (!candidates.length) throw new Error(`Couldn't find "${query}".`);
-
-      // Someone is standing in front of this waiting for it, so the question
-      // gets asked rather than guessed. Searching around the wrong Newport is
-      // a whole screen of results for somewhere you are not going.
-      const alternatives = realAlternatives(candidates);
-      if (alternatives.length) {
-        explore.status = "idle";
-        renderPicks();
-        openLocationChooser({
-          query,
-          candidates: [candidates[0]].concat(alternatives),
-          subtitle: "More than one place goes by that name. Which should the search look around?",
-          onPick: (c) => {
-            explore.centre = { name: c.label || query, lat: c.lat, lon: c.lon };
-            markExploreStale();
-            renderPicks();
-          },
-        });
-        return;
-      }
-
-      const geo = candidates[0];
-      explore.centre = { name: query, lat: geo.lat, lon: geo.lon };
-      explore.status = "idle";
-      markExploreStale();
-    } catch (e) {
-      explore.status = "error";
-      explore.error = e && e.message ? e.message : String(e);
-    }
-    renderPicks();
-  }
+  // setExploreCentreFromSearch lived here. The panel had its own search field
+  // and this resolved what was typed into it; both are gone now that there is
+  // one search at the top of the screen and its results carry "around here".
+  // Which of three Newports you meant is answered by them being three results
+  // rather than by a question after the fact.
 
   function setExploreCentreFromPick(pickId) {
     const p = loadPicks().find((x) => x.id === pickId);
@@ -4289,14 +4261,16 @@
       .map((p) => `<option value="${esc(p.id)}">${esc(p.name)}</option>`)
       .join("");
 
+    // This panel used to carry a second search box, directly below the one at
+    // the top of the screen, for typing the same kind of thing into. Two
+    // fields, two behaviours, no way to tell from looking which one you
+    // wanted. There is one search now - the one at the top - and any result it
+    // finds can become the centre here.
     let body = `
-      <form class="search-bar" id="exploreSearchForm" style="margin-bottom:0;">
-        <input type="text" id="exploreSearchInput" placeholder="Start typing a place or area…"
-               autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
-               role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="exploreSuggestList" />
-        <button type="submit" aria-label="Set centre">🔍</button>
-      </form>
-      <div class="suggest-list" id="exploreSuggestList" role="listbox" hidden></div>
+      <p class="settings-hint explore-lead">
+        Search at the top of the screen for a town or place, then use
+        <b>🧭 Around here</b> on the result. Or start from:
+      </p>
       <div class="explore-centre-row">
         <button class="move-chip" id="exploreGpsBtn">📍 Where I am</button>
         <button class="move-chip" id="exploreMapBtn">🗺 Point on a map</button>
@@ -4350,7 +4324,7 @@
         body += `<p class="settings-hint explore-run-hint">Criteria changed — press Search to update the results below.</p>`;
       }
     } else {
-      body += `<p class="pick-status">Choose a starting point above, then pick a category and press Search.</p>`;
+      body += `<p class="pick-status">Pick a starting point, then choose what you're looking for and press Search.</p>`;
     }
 
     if (explore.status === "locating") body += `<p class="pick-status">Finding that location…</p>`;
@@ -4449,31 +4423,6 @@
     }
     if (!explore.open) return;
 
-    const form = document.getElementById("exploreSearchForm");
-    if (form) {
-      form.addEventListener("submit", (e) => {
-        e.preventDefault();
-        const q = document.getElementById("exploreSearchInput").value.trim();
-        renderSuggestions("hidden");
-        if (q) setExploreCentreFromSearch(q);
-      });
-    }
-
-    const exploreInput = document.getElementById("exploreSearchInput");
-    if (exploreInput) {
-      exploreInput.addEventListener("input", () => onSuggestInput(exploreInput.value));
-      // Enter with a list open takes the first suggestion - the usual case,
-      // and it saves aiming at a small target with one thumb.
-      exploreInput.addEventListener("keydown", (e) => {
-        if (e.key === "Enter" && suggestItems.length) {
-          const list = document.getElementById("exploreSuggestList");
-          if (list && !list.hidden) {
-            e.preventDefault();
-            chooseSuggestion(suggestItems[0]);
-          }
-        }
-      });
-    }
     const gps = document.getElementById("exploreGpsBtn");
     if (gps) gps.addEventListener("click", setExploreCentreFromGps);
 
@@ -5175,16 +5124,28 @@
                   : ""
               }
             </div>
-            <button class="search-add${already ? " added" : ""}" data-add-candidate="${i}" ${
-              already ? "disabled" : ""
-            } aria-label="${
-              already ? "Already saved" : (r.isArea ? "Save " + esc(r.name) + " as an area" : "Save " + esc(r.name))
-            }">${already ? "✓" : "＋"}</button>
+            <div class="search-result-actions">
+              <button class="search-add${already ? " added" : ""}" data-add-candidate="${i}" ${
+                already ? "disabled" : ""
+              } aria-label="${
+                already ? "Already saved" : (r.isArea ? "Save " + esc(r.name) + " as an area" : "Save " + esc(r.name))
+              }">${already ? "✓" : "＋"}</button>
+              ${
+                // Anything with a position can be the middle of a search, not
+                // just a town: "what's near the hotel" is the same question as
+                // "what's near Pitlochry".
+                r.lat != null
+                  ? `<button class="search-around" data-around-candidate="${i}" aria-label="Look around ${esc(
+                      r.name
+                    )}">🧭</button>`
+                  : ""
+              }
+            </div>
           </div>
         `;
       });
       body += `</div>`;
-      body += `<p class="settings-hint search-foot">Tap a place to read about it first, or ＋ to save it straight away.${
+      body += `<p class="settings-hint search-foot">＋ saves it, 🧭 looks around it, or tap the place to read about it first.${
         results.some((r) => r.isArea) ? " A 🏘️ result is a town or area: saving it gives it its own section." : ""
       }</p>`;
     }
@@ -5202,6 +5163,7 @@
           }
         </form>
       </div>
+      <div class="suggest-list" id="pickSuggestList" role="listbox" hidden></div>
       <div class="search-body">${body}</div>
     `;
     searchOverlay.classList.add("open");
@@ -5416,7 +5378,25 @@
         e.preventDefault();
         const input = document.getElementById("pickSearchInput");
         input.blur(); // drop the keyboard so results get the screen
+        renderSuggestions("hidden");
         runSearch(input.value);
+      });
+    }
+
+    // Type-ahead came across from the panel below when that lost its own
+    // field: "Bibu" finding Bibury is worth more here, where it settles which
+    // Manchester you meant before anything is searched for.
+    const searchInput = document.getElementById("pickSearchInput");
+    if (searchInput) {
+      searchInput.addEventListener("input", () => onSuggestInput(searchInput.value));
+      searchInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && suggestItems.length) {
+          const list = document.getElementById("pickSuggestList");
+          if (list && !list.hidden) {
+            e.preventDefault();
+            chooseSuggestion(suggestItems[0]);
+          }
+        }
       });
     }
 
@@ -5470,6 +5450,24 @@
 
     // Adding doesn't close the screen: on a trip you rarely want exactly one
     // café. The button becomes a tick so it's obvious what's already in.
+    searchOverlay.querySelectorAll("[data-around-candidate]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const c = pickSearch.results[Number(btn.getAttribute("data-around-candidate"))];
+        if (!c || c.lat == null) return;
+        // The search found where; the panel below asks what. Still nothing
+        // runs until Search is pressed.
+        explore.centre = { name: c.name, lat: c.lat, lon: c.lon };
+        explore.error = "";
+        explore.open = true;
+        markExploreStale();
+        dismissSearchOverlay();
+        showView("picks");
+        const panel = document.getElementById("exploreToggle");
+        if (panel) panel.scrollIntoView({ block: "start" });
+        toast(`Looking around ${c.name} — choose what you want and press Search`);
+      });
+    });
+
     searchOverlay.querySelectorAll("[data-add-candidate]").forEach((btn) => {
       btn.addEventListener("click", () => {
         const candidate = pickSearch.results[Number(btn.getAttribute("data-add-candidate"))];
@@ -5517,13 +5515,14 @@
     lastSearchError = "";
     // Started first and awaited last, so it costs nothing in wall-clock time
     // against a search that takes seconds.
-    const areaPromise = lookupPlaceItself(query).catch(() => null);
+    const areaPromise = lookupPlacesThemselves(query).catch(() => []);
     const results = await searchPlaceBackends(query);
-    const area = await areaPromise;
-    if (!area) return results;
-    // The backend may have named the town too - keep one of it, ours, since
-    // ours is the one that knows it is an area.
-    return [area].concat(results.filter((r) => normalisedName(r.name) !== normalisedName(area.name)));
+    const areas = await areaPromise;
+    if (!areas.length) return results;
+    // The backends may have named the town too - keep ours, since ours is the
+    // one that knows it is an area.
+    const named = areas.map((a) => normalisedName(a.name));
+    return areas.concat(results.filter((r) => !named.includes(normalisedName(r.name))));
   }
 
   function normalisedName(name) {
@@ -5533,30 +5532,41 @@
   // Asks the geocoder what the query itself is. Deliberately not the AI: this
   // is a question of fact about a name, which is exactly what a gazetteer is
   // for and exactly what a language model should not be asked to invent.
-  async function lookupPlaceItself(query) {
+  // Every distinct town of that name, not just the first. Three Newports
+  // hundreds of miles apart are three results with their counties written on
+  // them - which answers "which one did you mean" by showing you, rather than
+  // by picking one and hoping.
+  async function lookupPlacesThemselves(query) {
     const q = (query || "").trim();
-    if (!q) return null;
+    if (!q) return [];
     const url =
-      `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=3&addressdetails=1` +
+      `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&addressdetails=1` +
       `&extratags=1&namedetails=1&q=${encodeURIComponent(scopedQuery(q))}`;
     const res = await fetch(url, { headers: { Accept: "application/json" } });
-    if (!res.ok) return null;
+    if (!res.ok) return [];
     const data = await res.json();
-    const hit = (Array.isArray(data) ? data : []).find((r) => looksLikeMajorPlace({ type: r.type }));
-    if (!hit) return null;
-    const details = placeFromNominatim(hit);
-    return {
-      name: (hit.namedetails && hit.namedetails.name) || String(hit.display_name || "").split(",")[0],
-      displayName: hit.display_name,
-      lat: details.lat,
-      lon: details.lon,
-      type: hit.type,
-      category: details.category,
-      description: "",
-      address: details.address,
-      // What the results list keys off to offer "save as an area".
-      isArea: true,
-    };
+    const hits = (Array.isArray(data) ? data : []).filter((r) => looksLikeMajorPlace({ type: r.type }));
+
+    const out = [];
+    hits.forEach((hit) => {
+      const details = placeFromNominatim(hit);
+      // Same town returned twice is one answer; a different town of the same
+      // name is another.
+      if (out.some((o) => haversineKm(o.lat, o.lon, details.lat, details.lon) <= AMBIGUOUS_MIN_KM)) return;
+      out.push({
+        name: (hit.namedetails && hit.namedetails.name) || String(hit.display_name || "").split(",")[0],
+        displayName: hit.display_name,
+        lat: details.lat,
+        lon: details.lon,
+        type: hit.type,
+        category: details.category,
+        description: "",
+        address: details.address,
+        // What the results list keys off to offer "save as an area".
+        isArea: true,
+      });
+    });
+    return out.slice(0, 3);
   }
 
   async function searchPlaceBackends(query) {
@@ -7057,7 +7067,7 @@
         const leg = walkLeg(prev, p);
         const mayBeClosed = closedOnDay(p.openingHours, dayCode);
         const isNext = idx === nextIdx;
-        const done = current.isToday && nextIdx >= 0 && idx < nextIdx;
+        const done = current.isToday && (nextIdx < 0 || idx < nextIdx);
 
         if (leg && leg.mins >= 5) {
           html += `<div class="today-leg">${legLabel(leg)}</div>`;

@@ -145,7 +145,7 @@ check('and the town heads its own section', await page.evaluate(() =>
 // ---------- Exploring around it is not limited to the category list ----------
 
 await page.evaluate(() => document.getElementById('exploreToggle').click());
-await page.waitForSelector('#exploreSearchForm');
+await page.waitForTimeout(400);
 await page.evaluate(() => document.querySelector('[data-explore-from]').click());
 await page.waitForTimeout(800);
 

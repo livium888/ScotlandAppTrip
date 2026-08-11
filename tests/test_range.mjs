@@ -12,6 +12,21 @@ const BASE = 'http://localhost:8946';
 let failures = 0;
 const check = (l, c, extra) => { if (c) console.log(`PASS: ${l}`); else { console.log(`FAIL: ${l}${extra ? ' :: ' + extra : ''}`); failures++; } };
 
+// The panel's own search field is gone: there is one search, at the top of the
+// screen, and its results carry "🧭 around here". This is that route.
+const centreOn = async (query) => {
+  await page.evaluate(() => document.querySelector('[data-view="picks"]').click());
+  await page.waitForTimeout(250);
+  await page.evaluate(() => document.getElementById('pickSearchTrigger').click());
+  await page.waitForSelector('#pickSearchInput');
+  await page.fill('#pickSearchInput', query);
+  await page.evaluate(() => document.getElementById('pickSearchForm').requestSubmit());
+  await page.waitForSelector('[data-around-candidate]', { timeout: 10000 });
+  await page.evaluate(() => document.querySelector('[data-around-candidate]').click());
+  await page.waitForSelector('#exploreRunBtn', { timeout: 8000 });
+  await page.waitForTimeout(300);
+};
+
 const browser = await chromium.launch(LAUNCH_OPTS);
 const page = await browser.newPage();
 await page.setViewportSize({ width: 390, height: 820 });
@@ -132,9 +147,7 @@ await page.waitForTimeout(300);
 await page.evaluate(() => document.querySelector('[data-view="picks"]').click());
 await page.waitForSelector('#exploreToggle');
 await page.click('#exploreToggle');
-await page.waitForSelector('#exploreSearchForm');
-await page.fill('#exploreSearchInput', 'Edinburgh');
-await page.evaluate(() => document.getElementById('exploreSearchForm').requestSubmit());
+await centreOn('Edinburgh');
 await page.waitForSelector('#exploreRadius', { timeout: 5000 });
 
 const options = await page.evaluate(() => Array.from(document.querySelectorAll('#exploreRadius option')).map((o) => o.textContent.trim()));
@@ -151,9 +164,7 @@ await page.reload({ waitUntil: 'load' });
 await page.evaluate(() => document.querySelector('[data-view="picks"]').click());
 await page.waitForSelector('#exploreToggle');
 await page.click('#exploreToggle');
-await page.waitForSelector('#exploreSearchForm');
-await page.fill('#exploreSearchInput', 'Edinburgh');
-await page.evaluate(() => document.getElementById('exploreSearchForm').requestSubmit());
+await centreOn('Edinburgh');
 await page.waitForSelector('#exploreRadius', { timeout: 5000 });
 check('still 50 miles after restarting the app', await page.evaluate(() =>
   document.querySelector('#exploreRadius').selectedOptions[0].textContent.trim() === '50 miles'));

@@ -74,20 +74,22 @@ await page.evaluate(() => {
 });
 await page.reload({ waitUntil: 'load' });
 await page.evaluate(() => document.querySelector('[data-view="picks"]').click());
-await page.waitForSelector('#exploreToggle');
-await page.click('#exploreToggle');
-await page.waitForSelector('#exploreSearchInput');
+// The type-ahead lives on the one search field now, so this opens the search
+// screen rather than the Explore panel.
+await page.waitForSelector('#pickSearchTrigger');
+await page.click('#pickSearchTrigger');
+await page.waitForSelector('#pickSearchInput');
 
 // --- Too few letters isn't worth a request ---
-await page.click('#exploreSearchInput');
-await page.type('#exploreSearchInput', 'Bi', { delay: 40 });
+await page.click('#pickSearchInput');
+await page.type('#pickSearchInput', 'Bi', { delay: 40 });
 await page.waitForTimeout(600);
 check('two letters asks nothing', photonCalls.length === 0, JSON.stringify(photonCalls));
 
 // --- The example that prompted this ---
-await page.type('#exploreSearchInput', 'bu', { delay: 60 });
+await page.type('#pickSearchInput', 'bu', { delay: 60 });
 await page.waitForSelector('[data-suggest]', { timeout: 5000 });
-const shown = await page.evaluate(() => document.getElementById('exploreSuggestList').textContent);
+const shown = await page.evaluate(() => document.getElementById('pickSuggestList').textContent);
 check('typing "Bibu" suggests Bibury', /Bibury/.test(shown), shown.slice(0, 200));
 check('and says which Bibury', /Gloucestershire|England/.test(shown), shown.slice(0, 200));
 check('more than one match is offered', await page.evaluate(() =>
@@ -98,48 +100,53 @@ check('one request, not one per letter', photonCalls.length === 1, JSON.stringif
 
 // --- The keyboard must survive typing ---
 check('the field keeps focus while suggesting', await page.evaluate(() =>
-  document.activeElement && document.activeElement.id === 'exploreSearchInput'));
+  document.activeElement && document.activeElement.id === 'pickSearchInput'));
 check('and keeps what was typed', await page.evaluate(() =>
-  document.getElementById('exploreSearchInput').value === 'Bibu'));
+  document.getElementById('pickSearchInput').value === 'Bibu'));
 
-// --- Choosing one sets the place, with no second lookup to get wrong ---
-// Cleared here so this measures the act of choosing, not the destination
-// lookup the weather does on load.
+// --- Choosing one searches for it, keeping what made it unambiguous ---
+// The suggestion used to set the Explore centre directly. There is one search
+// now, so choosing runs it - and the point that survives is that the county
+// goes with the name: "Bibury" alone could resolve anywhere.
 nominatimCalls = [];
 await page.evaluate(() => document.querySelector('[data-suggest]').click());
-await page.waitForTimeout(500);
-const centre = await page.evaluate(() => document.getElementById('view').textContent.replace(/\s+/g, ' '));
-check('choosing a suggestion sets where to search', /Around\s*Bibury/.test(centre), centre.slice(0, 200));
-check('the county is kept, so it is the right Bibury', /Gloucestershire/.test(centre), centre.slice(0, 200));
+await page.waitForTimeout(900);
+check('choosing a suggestion fills the field with the full name', await page.evaluate(() =>
+  /Bibury/.test(document.getElementById('pickSearchInput').value) &&
+  /Gloucestershire/.test(document.getElementById('pickSearchInput').value)),
+  await page.evaluate(() => document.getElementById('pickSearchInput').value));
+check('and searches for it', await page.evaluate(() =>
+  document.getElementById('searchOverlay').classList.contains('open')));
+check('the county is carried into the lookup, so it is the right Bibury',
+  nominatimCalls.some((u) => /Gloucestershire/.test(decodeURIComponent(u))),
+  JSON.stringify(nominatimCalls).slice(0, 200));
 check('the list closes once chosen', await page.evaluate(() => {
-  const l = document.getElementById('exploreSuggestList');
+  const l = document.getElementById('pickSuggestList');
   return !l || l.hidden;
 }));
-check('choosing a suggestion needs no further lookup - the coordinates came with it',
-  nominatimCalls.length === 0, JSON.stringify(nominatimCalls));
 
 // --- A late reply must not overwrite a newer one ---
 photonCalls = [];
-// Explore is still open - the toggle would collapse it, not reopen it.
-await page.waitForSelector('#exploreSearchInput');
+// The search screen is still open.
+await page.waitForSelector('#pickSearchInput');
 photonDelayMs = 900;
-await page.click('#exploreSearchInput');
-await page.type('#exploreSearchInput', 'bibu', { delay: 30 });
+await page.click('#pickSearchInput');
+await page.type('#pickSearchInput', 'bibu', { delay: 30 });
 await page.waitForTimeout(400);
 photonDelayMs = 0;
-await page.fill('#exploreSearchInput', '');
-await page.type('#exploreSearchInput', 'edin', { delay: 30 });
+await page.fill('#pickSearchInput', '');
+await page.type('#pickSearchInput', 'edin', { delay: 30 });
 await page.waitForSelector('[data-suggest]', { timeout: 5000 });
 await page.waitForTimeout(1200); // long enough for the slow first reply to land
-const after = await page.evaluate(() => document.getElementById('exploreSuggestList').textContent);
+const after = await page.evaluate(() => document.getElementById('pickSuggestList').textContent);
 check('a slow earlier reply does not replace a newer one', /Edinburgh/.test(after) && !/Bibury/.test(after), after.slice(0, 200));
 
 // --- Nothing found says so ---
-await page.fill('#exploreSearchInput', '');
-await page.type('#exploreSearchInput', 'zzzz', { delay: 30 });
+await page.fill('#pickSearchInput', '');
+await page.type('#pickSearchInput', 'zzzz', { delay: 30 });
 await page.waitForTimeout(900);
 check('no matches is stated, not left blank', /No places matching/.test(
-  await page.evaluate(() => document.getElementById('exploreSuggestList').textContent)));
+  await page.evaluate(() => document.getElementById('pickSuggestList').textContent)));
 
 // --- If the suggestion service fails or changes shape, fall back ---
 // This one matters more than it looks: the live API could not be reached
@@ -147,11 +154,11 @@ check('no matches is stated, not left blank', /No places matching/.test(
 // degrade to a second source, not to a silent "no such place".
 photonDown = true;
 nominatimCalls = [];
-await page.fill('#exploreSearchInput', '');
-await page.type('#exploreSearchInput', 'bibu', { delay: 30 });
+await page.fill('#pickSearchInput', '');
+await page.type('#pickSearchInput', 'bibu', { delay: 30 });
 await page.waitForTimeout(1200);
 check('a failed suggestion service falls back to another', /Bibury/.test(
-  await page.evaluate(() => document.getElementById('exploreSuggestList').textContent)));
+  await page.evaluate(() => document.getElementById('pickSuggestList').textContent)));
 check('and the fallback is the one that actually got asked', nominatimCalls.length >= 1, String(nominatimCalls.length));
 
 // A response of the wrong shape must be treated as a failure, not as "no
@@ -159,21 +166,21 @@ check('and the fallback is the one that actually got asked', nominatimCalls.leng
 photonDown = false;
 photonShapeBroken = true;
 nominatimCalls = [];
-await page.fill('#exploreSearchInput', '');
-await page.type('#exploreSearchInput', 'edin', { delay: 30 });
+await page.fill('#pickSearchInput', '');
+await page.type('#pickSearchInput', 'edin', { delay: 30 });
 await page.waitForTimeout(1200);
 check('an unexpected response shape falls back too', nominatimCalls.length >= 1, String(nominatimCalls.length));
 check('and does not claim the place does not exist', !/No places matching/.test(
-  await page.evaluate(() => document.getElementById('exploreSuggestList').textContent)));
+  await page.evaluate(() => document.getElementById('pickSuggestList').textContent)));
 
 // --- Only when everything is down does it say so ---
 photonDown = true;
 await page.unroute(/nominatim\.openstreetmap\.org/);
 await page.route(/nominatim\.openstreetmap\.org/, (r) => r.abort());
-await page.fill('#exploreSearchInput', '');
-await page.type('#exploreSearchInput', 'bibu', { delay: 30 });
+await page.fill('#pickSearchInput', '');
+await page.type('#pickSearchInput', 'bibu', { delay: 30 });
 await page.waitForTimeout(1400);
-const downMsg = await page.evaluate(() => document.getElementById('exploreSuggestList').textContent);
+const downMsg = await page.evaluate(() => document.getElementById('pickSuggestList').textContent);
 check('with both down it explains itself and points at the search button', /Suggestions unavailable/.test(downMsg), downMsg.slice(0, 160));
 
 await browser.close();

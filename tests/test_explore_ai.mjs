@@ -10,6 +10,21 @@ const BASE = 'http://localhost:8946';
 let failures = 0;
 const check = (l, c, extra) => { if (c) console.log(`PASS: ${l}`); else { console.log(`FAIL: ${l}${extra ? ' :: ' + extra : ''}`); failures++; } };
 
+// The panel's own search field is gone: there is one search, at the top of the
+// screen, and its results carry "🧭 around here". This is that route.
+const centreOn = async (query) => {
+  await page.evaluate(() => document.querySelector('[data-view="picks"]').click());
+  await page.waitForTimeout(250);
+  await page.evaluate(() => document.getElementById('pickSearchTrigger').click());
+  await page.waitForSelector('#pickSearchInput');
+  await page.fill('#pickSearchInput', query);
+  await page.evaluate(() => document.getElementById('pickSearchForm').requestSubmit());
+  await page.waitForSelector('[data-around-candidate]', { timeout: 10000 });
+  await page.evaluate(() => document.querySelector('[data-around-candidate]').click());
+  await page.waitForSelector('#exploreRunBtn', { timeout: 8000 });
+  await page.waitForTimeout(300);
+};
+
 // Saving now always asks which folder, with the app's guess marked as a
 // suggestion rather than applied silently. Accept the suggestion (or the first
 // chip) so these tests exercise what they are actually about.
@@ -93,9 +108,7 @@ await page.reload({ waitUntil: 'load' });
 await page.evaluate(() => document.querySelector('[data-view="picks"]').click());
 await page.waitForSelector('#exploreToggle');
 await page.click('#exploreToggle');
-await page.waitForSelector('#exploreSearchForm');
-await page.fill('#exploreSearchInput', 'Edinburgh Castle');
-await page.evaluate(() => document.getElementById('exploreSearchForm').requestSubmit());
+await centreOn('Edinburgh Castle');
 await page.waitForTimeout(800);
 
 // --- Gemini powers the category browse ---

@@ -119,9 +119,15 @@ const browser = await chromium.launch(LAUNCH_OPTS);
   check('Explore section present in Picks', true);
 
   await page.click('#exploreToggle');
-  await page.waitForSelector('#exploreSearchForm');
-  await page.fill('#exploreSearchInput', 'Edinburgh Castle');
-  await page.evaluate(() => document.getElementById('exploreSearchForm').requestSubmit());
+  // The panel's own search field is gone - one search, at the top, whose
+  // results carry "around here".
+  await page.evaluate(() => document.getElementById('pickSearchTrigger').click());
+  await page.waitForSelector('#pickSearchInput');
+  await page.fill('#pickSearchInput', 'Edinburgh Castle');
+  await page.evaluate(() => document.getElementById('pickSearchForm').requestSubmit());
+  await page.waitForSelector('[data-around-candidate]', { timeout: 10000 });
+  await page.evaluate(() => document.querySelector('[data-around-candidate]').click());
+  await page.waitForSelector('#exploreRunBtn', { timeout: 8000 });
   await page.waitForTimeout(700);
 
   const centreText = await page.evaluate(() => document.getElementById('view').textContent);

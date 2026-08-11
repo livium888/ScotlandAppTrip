@@ -1619,6 +1619,21 @@ body {
 
 /* The only control that runs a search, so it looks like the end of the form
    rather than one more setting in it. */
+/* Two actions per result: save it, or look around it. */
+.search-result-actions { display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; }
+.search-around {
+  font-family: inherit;
+  font-size: 15px;
+  width: 38px;
+  height: 34px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--paper);
+  color: var(--ink);
+}
+.search-around:active { background: var(--card); }
+.explore-lead { margin: 0 0 8px; }
+
 .explore-describe { margin: 8px 0 0; }
 .explore-describe input { font-size: 13px; }
 .explore-run { width: 100%; margin-top: 12px; }

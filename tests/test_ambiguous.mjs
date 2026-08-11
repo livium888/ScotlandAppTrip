@@ -62,40 +62,38 @@ await page.waitForSelector('#exploreToggle');
 
 // ---------- The lookup keeps the alternatives ----------
 
-check('the geocoder is asked for more than one answer', await page.evaluate(async () => {
-  // Drive a lookup and read what went out.
-  document.getElementById('exploreToggle').click();
-  return true;
-}));
-await page.waitForSelector('#exploreSearchForm');
+await page.evaluate(() => document.getElementById('pickSearchTrigger').click());
+await page.waitForSelector('#pickSearchInput');
 geocodeUrls = [];
-await page.fill('#exploreSearchInput', 'Newport');
-await page.evaluate(() => document.getElementById('exploreSearchForm').requestSubmit());
-await page.waitForTimeout(1200);
+await page.fill('#pickSearchInput', 'Newport');
+await page.evaluate(() => document.getElementById('pickSearchForm').requestSubmit());
+await page.waitForTimeout(1600);
 check('it no longer asks for a single result', geocodeUrls.some((u) => /limit=[2-9]/.test(u)) && !geocodeUrls.some((u) => /limit=1&/.test(u)),
   JSON.stringify(geocodeUrls).slice(0, 200));
 
-// ---------- Someone waiting gets asked ----------
+// ---------- Three Newports are three results, not one guess ----------
+// The question used to be asked after the fact, once a centre had been picked
+// for you. Showing them is better than asking about them: they arrive named by
+// where they are, and you take the one you meant.
 
-check('an ambiguous area opens the question', await page.evaluate(() =>
-  document.getElementById('placeModal').classList.contains('open') &&
-  document.querySelectorAll('[data-pick-location]').length >= 3));
-check('and names them by where they actually are', await page.evaluate(() => {
-  const text = document.getElementById('placeModal').textContent;
+const areaRows = await page.evaluate(() =>
+  Array.from(document.querySelectorAll('.search-result-area')).map((r) => r.textContent.replace(/\s+/g, ' ').trim()));
+check('every distinct Newport is offered', areaRows.length === 3, JSON.stringify(areaRows).slice(0, 240));
+check('and each says where it is', await page.evaluate(() => {
+  const text = document.querySelector('.search-results').textContent;
   return /Wales/.test(text) && /Shropshire/.test(text) && /Isle of Wight/.test(text);
-}), await page.evaluate(() => document.getElementById('placeModal').textContent.slice(0, 200)));
-check('nothing has been decided while it is open', await page.evaluate(() =>
-  !/Around/.test(document.getElementById('view').textContent)));
+}), JSON.stringify(areaRows).slice(0, 240));
+check('each is marked as a town rather than a place in one', await page.evaluate(() =>
+  document.querySelectorAll('.search-result-area .area-badge').length === 3));
 
-// Choosing the third one must set that one, not the geocoder's first.
-await page.evaluate(() => document.querySelectorAll('[data-pick-location]')[2].click());
-await page.waitForTimeout(600);
-check('the one chosen is the one used', /Isle of Wight|Newport/.test(
-  await page.evaluate(() => document.getElementById('view').textContent)));
-check('and it is centred there, not on the first match', await page.evaluate(() => {
-  const text = document.getElementById('view').textContent;
-  return /Around/.test(text);
-}), await page.evaluate(() => document.getElementById('view').textContent.slice(0, 200)));
+// Taking the third one must centre on the third one.
+await page.evaluate(() => document.querySelectorAll('.search-result-area [data-around-candidate]')[2].click());
+await page.waitForSelector('#exploreRunBtn', { timeout: 8000 });
+await page.waitForTimeout(400);
+check('looking around one uses the one you picked', await page.evaluate(() =>
+  /Around/.test(document.getElementById('view').textContent)));
+check('and nothing was searched for on the way there', await page.evaluate(() =>
+  !!document.getElementById('exploreRunBtn') && document.getElementById('exploreRunBtn').disabled));
 
 // ---------- An unambiguous name is not turned into a question ----------
 
