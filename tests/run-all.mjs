@@ -42,6 +42,7 @@ const SUITES = [
   "test_heuristics.mjs",
   "test_addcity.mjs",
   "test_ambiguous.mjs",
+  "test_offline.mjs",
 ];
 
 const MIME = {

@@ -1307,6 +1307,50 @@
     placeModal.classList.remove("open");
   }
 
+  // ---------- Connection ----------
+  // Every feature that needs the network failed in its own words - search said
+  // "check your connection", Explore reported an AI error, weather just showed
+  // yesterday's numbers with no sign they were old. In a glen with no signal
+  // that is three different puzzles instead of one fact. This says the fact
+  // once, at the top, and gets out of the way when it stops being true.
+  const appBanner = document.getElementById("appBanner");
+
+  function isOffline() {
+    return typeof navigator.onLine === "boolean" && !navigator.onLine;
+  }
+
+  function refreshBanner() {
+    if (!appBanner) return;
+    if (isOffline()) {
+      appBanner.className = "app-banner offline";
+      appBanner.innerHTML =
+        `<span>📵 No connection — your places, plan and notes all still work. Search, weather and maps need signal.</span>`;
+      appBanner.hidden = false;
+      return;
+    }
+    if (backupIsOverdue()) {
+      appBanner.className = "app-banner nudge";
+      appBanner.innerHTML =
+        `<span>${esc(backupAgeLine())} Everything is only on this phone.</span>` +
+        `<button class="app-banner-action" id="bannerBackup">Back up</button>`;
+      appBanner.hidden = false;
+      const btn = document.getElementById("bannerBackup");
+      if (btn) {
+        btn.addEventListener("click", async () => {
+          const res = await exportBackup();
+          toast(res.message);
+          refreshBanner();
+        });
+      }
+      return;
+    }
+    appBanner.hidden = true;
+    appBanner.innerHTML = "";
+  }
+
+  window.addEventListener("online", refreshBanner);
+  window.addEventListener("offline", refreshBanner);
+
   // ---------- Backup ----------
   // Everything lives in this device's localStorage, which an uninstall, a
   // "clear data", or a lost phone erases with no recovery. This writes the
@@ -1372,6 +1416,34 @@
     return `${slug || "trip"}-backup-${date}.json`;
   }
 
+  // Everything lives in this phone's localStorage, which Android will clear
+  // under storage pressure and a reinstall wipes outright. The export has
+  // always existed; what was missing was any reason to remember it exists.
+  const LAST_BACKUP_KEY = "last-backup-at-v1";
+  const BACKUP_STALE_MS = 7 * 24 * 60 * 60 * 1000;
+
+  function lastBackupAt() {
+    const v = readJson(LAST_BACKUP_KEY, null);
+    return typeof v === "number" ? v : null;
+  }
+
+  function backupAgeLine() {
+    const at = lastBackupAt();
+    if (!at) return "Never backed up.";
+    const days = Math.floor((Date.now() - at) / (24 * 60 * 60 * 1000));
+    if (days <= 0) return "Backed up today.";
+    if (days === 1) return "Backed up yesterday.";
+    return `Backed up ${days} days ago.`;
+  }
+
+  // Nags only when there is something to lose and it has been a while - a
+  // prompt on an empty board would be teaching you to dismiss it.
+  function backupIsOverdue() {
+    if (loadPicks().length < 3) return false;
+    const at = lastBackupAt();
+    return !at || Date.now() - at > BACKUP_STALE_MS;
+  }
+
   async function exportBackup() {
     const json = buildBackup();
     // A Blob download is the reliable route in a WebView; the share sheet is
@@ -1387,6 +1459,7 @@
       a.click();
       document.body.removeChild(a);
       setTimeout(() => URL.revokeObjectURL(url), 5000);
+      localStorage.setItem(LAST_BACKUP_KEY, JSON.stringify(Date.now()));
       return { ok: true, message: `Saved ${backupFilename()} to your downloads.` };
     } catch (e) {
       return { ok: false, message: `Couldn't save the file: ${e.message || e}` };
@@ -1727,6 +1800,22 @@
             </p>
 
             <div class="settings-divider"></div>
+            <label class="settings-label">Offline maps</label>
+            <p class="settings-hint">
+              Maps are the one part of the app that needs signal. This fetches the area
+              around your saved places so they still draw in a glen with no bars.
+              Everything else — your places, the plan, notes, the forecast already
+              fetched — works offline regardless.
+            </p>
+            <p class="settings-hint" id="tileCount">Checking what's stored…</p>
+            <div class="settings-btn-row">
+              <button class="modal-btn modal-btn-primary" id="downloadTilesBtn">⬇ Download map area</button>
+              <button class="modal-btn" id="clearTilesBtn">Clear</button>
+            </div>
+            <pre class="settings-result" id="tileResult" hidden></pre>
+
+            <div class="settings-divider"></div>
+
             <label class="settings-label">Backup</label>
             <p class="settings-hint">
               Everything is stored only on this phone. Export a copy you can keep or send
@@ -1734,8 +1823,9 @@
               API keys are deliberately left out of the file, so it's safe to send;
               you'll enter the key again on the other device.
             </p>
+            <p class="settings-hint${backupIsOverdue() ? " backup-overdue" : ""}"><b>${esc(backupAgeLine())}</b></p>
             <div class="settings-btn-row">
-              <button class="modal-btn" id="exportBackupBtn">⬇ Export</button>
+              <button class="modal-btn${backupIsOverdue() ? " modal-btn-primary" : ""}" id="exportBackupBtn">⬇ Export</button>
               <button class="modal-btn" id="importBackupBtn">⬆ Import</button>
             </div>
             <input type="file" id="importBackupFile" accept="application/json,.json" hidden />
@@ -1758,6 +1848,56 @@
       backupOut.className = "settings-result " + (result.ok ? "ok" : "bad");
       backupOut.textContent = result.message;
     };
+
+    const tileCountEl = document.getElementById("tileCount");
+    const tileResult = document.getElementById("tileResult");
+    const showTileCount = async () => {
+      const n = await countTiles();
+      if (!tileCountEl) return;
+      tileCountEl.textContent = n
+        ? `${n.toLocaleString("en-GB")} map tiles stored on this phone.`
+        : "No map area stored yet — maps will need signal.";
+    };
+    showTileCount();
+
+    const dlBtn = document.getElementById("downloadTilesBtn");
+    if (dlBtn) {
+      dlBtn.addEventListener("click", async () => {
+        if (tileDownload.running) {
+          // The same button stops it: a download you cannot stop on a hotel
+          // connection is its own problem.
+          tileDownload.cancelled = true;
+          dlBtn.textContent = "Stopping…";
+          return;
+        }
+        tileDownload.running = true;
+        tileDownload.cancelled = false;
+        dlBtn.textContent = "Stop";
+        if (tileResult) {
+          tileResult.hidden = false;
+          tileResult.textContent = "Starting…";
+        }
+        const res = await downloadTiles((done, total) => {
+          if (tileResult) tileResult.textContent = `${done} of ${total}…`;
+        });
+        tileDownload.running = false;
+        dlBtn.textContent = "⬇ Download map area";
+        if (tileResult) tileResult.textContent = res.message;
+        showTileCount();
+      });
+    }
+
+    const clearBtn = document.getElementById("clearTilesBtn");
+    if (clearBtn) {
+      clearBtn.addEventListener("click", async () => {
+        await clearTiles();
+        if (tileResult) {
+          tileResult.hidden = false;
+          tileResult.textContent = "Stored map area cleared.";
+        }
+        showTileCount();
+      });
+    }
 
     document.getElementById("exportBackupBtn").addEventListener("click", async () => {
       showBackupResult(await exportBackup());
@@ -2352,6 +2492,63 @@
     return plan.items[dayId] || [];
   }
 
+  // ---------- Times ----------
+  // Times are typed by hand into a small box on a phone, so "9", "9.30" and
+  // "0930" all have to mean what they obviously mean. Returns minutes since
+  // midnight, or null for anything that isn't a time.
+  function timeToMinutes(value) {
+    const s = String(value || "").trim();
+    if (!s) return null;
+    const m = /^(\d{1,2})\s*[:.h]?\s*(\d{2})?\s*(am|pm)?$/i.exec(s);
+    if (!m) return null;
+    let hours = Number(m[1]);
+    const mins = m[2] ? Number(m[2]) : 0;
+    const suffix = (m[3] || "").toLowerCase();
+    if (mins > 59) return null;
+    if (suffix === "pm" && hours < 12) hours += 12;
+    if (suffix === "am" && hours === 12) hours = 0;
+    if (hours > 23) return null;
+    return hours * 60 + mins;
+  }
+
+  function formatTime(value) {
+    const mins = timeToMinutes(value);
+    if (mins == null) return String(value || "").trim();
+    return `${String(Math.floor(mins / 60)).padStart(2, "0")}:${String(mins % 60).padStart(2, "0")}`;
+  }
+
+  // A day reads in the order you will walk it, not the order things happened
+  // to be added. Anything without a time keeps its position at the end: an
+  // unscheduled stop is a loose end, and sorting it into the middle of the day
+  // would imply a decision nobody made.
+  function itemsInDayOrder(items) {
+    return items
+      .map((it, i) => ({ it, i, mins: timeToMinutes(it.time) }))
+      .sort((a, b) => {
+        if (a.mins == null && b.mins == null) return a.i - b.i;
+        if (a.mins == null) return 1;
+        if (b.mins == null) return -1;
+        return a.mins - b.mins || a.i - b.i;
+      })
+      .map((x) => x.it);
+  }
+
+  // Which stop "NEXT" should point at. Only meaningful on the day itself -
+  // on any other day the first stop is the next one you will do.
+  function nextItemIndex(ordered, isToday, now) {
+    if (!isToday) return ordered.length ? 0 : -1;
+    const minsNow = now.getHours() * 60 + now.getMinutes();
+    // A stop counts as still ahead for a while after its time: standing
+    // outside somewhere at 10:05 for a 10:00 booking, the next thing is
+    // still that booking.
+    const GRACE_MINS = 60;
+    const idx = ordered.findIndex((it) => {
+      const m = timeToMinutes(it.time);
+      return m == null || m + GRACE_MINS >= minsNow;
+    });
+    return idx;
+  }
+
   function addToPlan(dayId, pickId) {
     const plan = loadPlan();
     const list = planItems(plan, dayId).slice();
@@ -2383,7 +2580,10 @@
     const list = planItems(plan, dayId).slice();
     const item = list.find((it) => it.pickId === pickId);
     if (!item) return;
-    item.time = time;
+    // "9", "9.30", "930" and "7pm" are all what someone means on a phone
+    // keyboard, and all have to sort against each other afterwards. Anything
+    // that isn't a time is kept as typed rather than thrown away.
+    item.time = formatTime(time);
     plan.items[dayId] = list;
     savePlan(plan);
   }
@@ -2612,7 +2812,7 @@
     }
 
     plan.days.forEach((day) => {
-      const items = planItems(plan, day.id);
+      const items = itemsInDayOrder(planItems(plan, day.id));
       // Quiet here: on a list of days, "forecast lands nearer the time"
       // repeated six times is noise, and a rain nudge per day is nagging.
       const redrawItinerary = () => {
@@ -2771,7 +2971,11 @@
       // steal focus mid-typing.
       input.addEventListener("blur", () => {
         const [dayId, pickId] = input.getAttribute("data-plan-time").split("|");
-        setPlanItemTime(dayId, pickId, input.value.trim());
+        const before = input.value.trim();
+        setPlanItemTime(dayId, pickId, before);
+        // Re-render only when the day's order actually changed - otherwise
+        // tabbing between two times would redraw the list under your finger.
+        if (formatTime(before) !== before || before) renderItinerary();
       });
     });
     view.querySelectorAll("[data-remove-day]").forEach((btn) => {
@@ -5479,12 +5683,238 @@
     pickMiniMaps.length = 0;
   }
 
+  // ---------- Map tiles, kept for when there is no signal ----------
+  // Everything else in the app already works offline: the shell is bundled,
+  // the places are on the device, the forecast is cached. The maps were the
+  // exception - every one of them went grey the moment the signal did, which
+  // is exactly where a map earns its place. Tiles are now cached as blobs in
+  // IndexedDB, and the trip's area can be fetched ahead of leaving.
+  const TILE_DB = "trip-tiles-v1";
+  const TILE_STORE = "tiles";
+  let tileDbPromise = null;
+
+  function tileDb() {
+    if (tileDbPromise) return tileDbPromise;
+    tileDbPromise = new Promise((resolve, reject) => {
+      if (!window.indexedDB) return reject(new Error("no indexeddb"));
+      const req = indexedDB.open(TILE_DB, 1);
+      req.onupgradeneeded = () => {
+        if (!req.result.objectStoreNames.contains(TILE_STORE)) req.result.createObjectStore(TILE_STORE);
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    }).catch((e) => {
+      tileDbPromise = null;
+      throw e;
+    });
+    return tileDbPromise;
+  }
+
+  function tileKey(z, x, y) {
+    return `${z}/${x}/${y}`;
+  }
+
+  async function readTile(z, x, y) {
+    const db = await tileDb();
+    return new Promise((resolve) => {
+      const req = db.transaction(TILE_STORE, "readonly").objectStore(TILE_STORE).get(tileKey(z, x, y));
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => resolve(null);
+    });
+  }
+
+  async function writeTile(z, x, y, blob) {
+    const db = await tileDb();
+    return new Promise((resolve) => {
+      const tx = db.transaction(TILE_STORE, "readwrite");
+      tx.objectStore(TILE_STORE).put(blob, tileKey(z, x, y));
+      tx.oncomplete = () => resolve(true);
+      tx.onerror = () => resolve(false);
+    });
+  }
+
+  async function countTiles() {
+    try {
+      const db = await tileDb();
+      return await new Promise((resolve) => {
+        const req = db.transaction(TILE_STORE, "readonly").objectStore(TILE_STORE).count();
+        req.onsuccess = () => resolve(req.result || 0);
+        req.onerror = () => resolve(0);
+      });
+    } catch (e) {
+      return 0;
+    }
+  }
+
+  async function clearTiles() {
+    try {
+      const db = await tileDb();
+      await new Promise((resolve) => {
+        const tx = db.transaction(TILE_STORE, "readwrite");
+        tx.objectStore(TILE_STORE).clear();
+        tx.oncomplete = resolve;
+        tx.onerror = resolve;
+      });
+    } catch (e) {
+      /* nothing cached to clear */
+    }
+  }
+
+  function tileUrl(z, x, y) {
+    const sub = ["a", "b", "c"][(x + y) % 3];
+    return `https://${sub}.tile.openstreetmap.org/${z}/${x}/${y}.png`;
+  }
+
+  // Cache first, network second, and whatever the network returns is kept. So
+  // anywhere you have looked at with signal is still there without it.
+  const CachedTileLayer = L.TileLayer.extend({
+    createTile: function (coords, done) {
+      const img = document.createElement("img");
+      img.alt = "";
+      const finish = (err) => done(err || null, img);
+
+      readTile(coords.z, coords.x, coords.y)
+        .then((blob) => {
+          if (blob) {
+            img.src = URL.createObjectURL(blob);
+            img.onload = () => {
+              URL.revokeObjectURL(img.src);
+              finish();
+            };
+            img.onerror = () => finish();
+            return null;
+          }
+          return fetch(tileUrl(coords.z, coords.x, coords.y))
+            .then((res) => (res.ok ? res.blob() : null))
+            .then((fetched) => {
+              if (!fetched) {
+                finish(new Error("tile unavailable"));
+                return;
+              }
+              writeTile(coords.z, coords.x, coords.y, fetched).catch(() => {});
+              img.src = URL.createObjectURL(fetched);
+              img.onload = () => {
+                URL.revokeObjectURL(img.src);
+                finish();
+              };
+              img.onerror = () => finish();
+            });
+        })
+        .catch(() => finish(new Error("tile unavailable")));
+
+      return img;
+    },
+  });
+
   function addTileLayer(map) {
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    new CachedTileLayer("", {
       attribution: "© OpenStreetMap contributors",
       maxZoom: 19,
     }).addTo(map);
   }
+
+  // ---------- Fetching the trip's area before leaving ----------
+  function lonToTileX(lon, z) {
+    return Math.floor(((lon + 180) / 360) * Math.pow(2, z));
+  }
+
+  function latToTileY(lat, z) {
+    const rad = (lat * Math.PI) / 180;
+    return Math.floor(((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2) * Math.pow(2, z));
+  }
+
+  // Zoom 11 is "which glen", 15 is "which street". Past 15 the tile count
+  // quadruples for detail you can fetch when you are standing there.
+  const OFFLINE_ZOOMS = [11, 12, 13, 14, 15];
+  // A ceiling so a board covering the whole country cannot quietly pull down
+  // a hundred thousand tiles from a service run on donations.
+  const OFFLINE_TILE_CAP = 2500;
+
+  function tilesForBounds(bounds, zooms) {
+    const list = [];
+    zooms.forEach((z) => {
+      const x1 = lonToTileX(bounds.west, z);
+      const x2 = lonToTileX(bounds.east, z);
+      const y1 = latToTileY(bounds.north, z);
+      const y2 = latToTileY(bounds.south, z);
+      for (let x = Math.min(x1, x2); x <= Math.max(x1, x2); x++) {
+        for (let y = Math.min(y1, y2); y <= Math.max(y1, y2); y++) {
+          list.push({ z, x, y });
+        }
+      }
+    });
+    return list;
+  }
+
+  // A margin around the saved places, because you walk between them rather
+  // than teleporting to each one.
+  function savedPlacesBounds(padDegrees) {
+    const located = loadPicks().filter((p) => p.lat != null);
+    if (!located.length) return null;
+    const pad = padDegrees == null ? 0.08 : padDegrees;
+    const lats = located.map((p) => p.lat);
+    const lons = located.map((p) => p.lon);
+    return {
+      north: Math.max.apply(null, lats) + pad,
+      south: Math.min.apply(null, lats) - pad,
+      east: Math.max.apply(null, lons) + pad,
+      west: Math.min.apply(null, lons) - pad,
+    };
+  }
+
+  // Deliberately serial with a pause between requests. OpenStreetMap's tile
+  // policy asks that bulk downloading be avoided; a few hundred tiles for one
+  // family's week, fetched politely, is a different thing from scraping, and
+  // the cap plus the delay keep it that way.
+  async function downloadTiles(onProgress) {
+    const bounds = savedPlacesBounds();
+    if (!bounds) return { ok: false, message: "Save a few places first — the download follows where they are." };
+
+    let wanted = tilesForBounds(bounds, OFFLINE_ZOOMS);
+    const total = wanted.length;
+    let trimmed = false;
+    if (wanted.length > OFFLINE_TILE_CAP) {
+      // Drop the most detailed zoom first: it is the biggest and the least
+      // needed, since street detail is what you have signal for in a town.
+      wanted = tilesForBounds(bounds, OFFLINE_ZOOMS.slice(0, -1));
+      trimmed = true;
+    }
+    if (wanted.length > OFFLINE_TILE_CAP) wanted = wanted.slice(0, OFFLINE_TILE_CAP);
+
+    let done = 0;
+    let saved = 0;
+    for (const c of wanted) {
+      if (tileDownload.cancelled) break;
+      done++;
+      try {
+        const already = await readTile(c.z, c.x, c.y);
+        if (!already) {
+          const res = await fetch(tileUrl(c.z, c.x, c.y));
+          if (res.ok) {
+            await writeTile(c.z, c.x, c.y, await res.blob());
+            saved++;
+          }
+          await new Promise((r) => setTimeout(r, 60));
+        }
+      } catch (e) {
+        // A missing tile is a grey square later, not a failed download.
+      }
+      if (onProgress && done % 5 === 0) onProgress(done, wanted.length);
+    }
+    if (onProgress) onProgress(done, wanted.length);
+
+    if (tileDownload.cancelled) {
+      return { ok: true, message: `Stopped — ${saved} new tiles kept. What downloaded still works offline.` };
+    }
+    return {
+      ok: true,
+      message:
+        `Saved ${wanted.length} tiles around your places.` +
+        (trimmed ? ` Street-level detail was left out to stay under ${OFFLINE_TILE_CAP} tiles (${total} would have been needed).` : ""),
+    };
+  }
+
+  const tileDownload = { running: false, cancelled: false };
 
   // `items` may be a filtered subset of what's on screen, so `cardIndex` maps
   // an item back to the data-candidate it belongs to - without it a pin on a
@@ -6590,8 +7020,12 @@
     }
 
     const plan = loadPlan();
-    const items = (plan.items[current.day.id] || []).filter((it) => byId[it.pickId]);
+    const items = itemsInDayOrder((plan.items[current.day.id] || []).filter((it) => byId[it.pickId]));
     const dayCode = dayCodeFromLabel(current.day.label);
+    // Was always the first stop of the day, which by mid-afternoon pointed at
+    // something finished hours ago - on the one screen meant for use while you
+    // are out of the flat.
+    const nextIdx = nextItemIndex(items, current.isToday, new Date());
 
     // Weather belongs at the top of Today: it's the one thing that changes a
     // plan before you've left the flat.
@@ -6622,18 +7056,20 @@
         const prev = idx > 0 ? byId[items[idx - 1].pickId] : null;
         const leg = walkLeg(prev, p);
         const mayBeClosed = closedOnDay(p.openingHours, dayCode);
-        const isNext = idx === 0;
+        const isNext = idx === nextIdx;
+        const done = current.isToday && nextIdx >= 0 && idx < nextIdx;
 
         if (leg && leg.mins >= 5) {
           html += `<div class="today-leg">${legLabel(leg)}</div>`;
         }
 
         html += `
-          <div class="card today-card${isNext ? " next" : ""}">
+          <div class="card today-card${isNext ? " next" : ""}${done ? " done" : ""}">
             ${isNext ? `<div class="today-next-flag">NEXT</div>` : ""}
+            ${done ? `<div class="today-done-flag">EARLIER</div>` : ""}
             <div class="today-card-head">
               <div>
-                <div class="today-time">${esc(it.time || "—")}</div>
+                <div class="today-time">${esc(formatTime(it.time) || "—")}</div>
                 <div class="today-name">${esc(p.name)}${
                   p.booked ? ` <span class="booked-badge">booked</span>` : ""
                 }</div>
@@ -6785,6 +7221,7 @@
       if (tabHistory.length > TAB_HISTORY_MAX) tabHistory.shift();
     }
     view.dataset.activeTab = name;
+    refreshBanner();
     // A throw inside a render used to leave the screen blank with no way back
     // - a real risk mid-trip, where the app failing is worse than any single
     // feature failing. Catch it, say so, and keep the tab bar usable.
