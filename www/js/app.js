@@ -2816,6 +2816,183 @@
     savePlan(plan);
   }
 
+  // ---------- Days made when you need them ----------
+  // Scheduling used to require a plan to exist first: the day chips only
+  // appeared once days had been added in the Itinerary tab, and a saved place
+  // met "Add days in the Itinerary tab first" - a trip you have to set up
+  // before you can use it. But a day is only a label with a date in it, and
+  // the date is already known the moment you say "today" or tap one on a
+  // calendar. So it is made on the spot.
+  // Written the way the bundled days are, so dayLabelToDate() can read back
+  // anything this creates.
+  const WEEKDAY_TITLES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const MONTH_TITLES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+  function labelForDate(date) {
+    return `${WEEKDAY_TITLES[date.getDay()]} ${date.getDate()} ${MONTH_TITLES[date.getMonth()]}`;
+  }
+
+  // Days are kept in date order, and the "Day N" numbering follows from that
+  // rather than from the order they happened to be created - a day added
+  // after the fact belongs where it falls, not at the end.
+  function renumberDays(plan) {
+    const year = new Date().getFullYear();
+    const dated = plan.days.map((d, i) => ({ d, i, when: dayLabelToDate(d.label, year) }));
+    dated.sort((a, b) => {
+      if (a.when && b.when) return a.when - b.when || a.i - b.i;
+      if (a.when) return -1;
+      if (b.when) return 1;
+      return a.i - b.i;
+    });
+    plan.days = dated.map((x, idx) => {
+      const bare = String(x.d.label).replace(/^Day\s*\d+\s*·\s*/i, "");
+      return { id: x.d.id, label: x.when ? `Day ${idx + 1} · ${bare}` : x.d.label };
+    });
+    return plan;
+  }
+
+  // Returns the day for that date, making it if it does not exist yet.
+  function ensureDayFor(date) {
+    const plan = loadPlan();
+    const year = date.getFullYear();
+    const existing = plan.days.find((d) => {
+      const when = dayLabelToDate(d.label, year);
+      return when && sameDay(when, date);
+    });
+    if (existing) return existing.id;
+
+    const id = `d${Date.now()}`;
+    plan.days.push({ id, label: `Day ? · ${labelForDate(date)}` });
+    renumberDays(plan);
+    savePlan(plan);
+    return id;
+  }
+
+  // The sheet that puts a place on a day. Today and tomorrow are named rather
+  // than dated because that is how you think about them; the trip's own days
+  // come next; and any other date is a tap on the calendar. Nothing here needs
+  // an itinerary to exist first - a day that does not exist yet is made.
+  function openDaySheet(pickId, opts) {
+    const options = opts || {};
+    const pick = loadPicks().find((p) => p.id === pickId);
+    if (!pick) return;
+
+    const draw = () => {
+      const plan = loadPlan();
+      const today = new Date();
+      const tomorrow = new Date(today.getTime() + 24 * 60 * 60 * 1000);
+      const year = today.getFullYear();
+
+      const onDay = (dayId) => (plan.items[dayId] || []).some((it) => it.pickId === pickId);
+      const dayFor = (date) =>
+        plan.days.find((d) => {
+          const when = dayLabelToDate(d.label, year);
+          return when && sameDay(when, date);
+        });
+
+      const quick = [
+        { label: "Today", date: today },
+        { label: "Tomorrow", date: tomorrow },
+      ]
+        .map((q) => {
+          const day = dayFor(q.date);
+          const on = day && onDay(day.id);
+          return `<button class="move-chip${on ? " active" : ""}" data-day-quick="${q.date.toISOString()}">${
+            on ? "✓ " : ""
+          }${q.label}</button>`;
+        })
+        .join("");
+
+      const existing = plan.days
+        .map(
+          (d) =>
+            `<button class="day-chip${onDay(d.id) ? " on" : ""}" data-day-toggle="${esc(d.id)}">${esc(
+              shortDayLabel(d.label)
+            )}</button>`
+        )
+        .join("");
+
+      placeModal.innerHTML = `
+        <div class="modal-backdrop" data-close="1">
+          <div class="modal-sheet" role="dialog" aria-label="Put it on a day">
+            <div class="modal-handle"></div>
+            <button class="modal-close" data-close="1" aria-label="Close">✕</button>
+            <div class="modal-body">
+              <h2 class="modal-title">When are you going?</h2>
+              <div class="modal-subtitle">${esc(pick.name)}</div>
+
+              <label class="settings-label">Soon</label>
+              <div class="move-row">${quick}</div>
+
+              ${
+                plan.days.length
+                  ? `<label class="settings-label">Days you have</label>
+                     <div class="day-assign-row">${existing}</div>`
+                  : `<p class="settings-hint">You have no days planned yet — picking one above makes it.</p>`
+              }
+
+              <label class="settings-label">Another date</label>
+              <div class="cost-field">
+                <input class="settings-input" type="date" id="dayDatePick" />
+              </div>
+              <p class="settings-hint">The day is made if it doesn't exist, and slots into the trip in date order.</p>
+
+              <button class="modal-btn modal-btn-primary" id="daySheetDone" style="width:100%;margin-top:16px;">Done</button>
+            </div>
+          </div>
+        </div>
+      `;
+      placeModal.classList.add("open");
+
+      placeModal.querySelectorAll("[data-close]").forEach((el) =>
+        el.addEventListener("click", (e) => {
+          if (e.target === el) finish();
+        })
+      );
+
+      const put = (date) => {
+        const dayId = ensureDayFor(date);
+        const already = (loadPlan().items[dayId] || []).some((it) => it.pickId === pickId);
+        if (already) removeFromPlan(dayId, pickId);
+        else addToPlan(dayId, pickId);
+        draw();
+      };
+
+      placeModal.querySelectorAll("[data-day-quick]").forEach((b) =>
+        b.addEventListener("click", () => put(new Date(b.getAttribute("data-day-quick"))))
+      );
+      placeModal.querySelectorAll("[data-day-toggle]").forEach((b) =>
+        b.addEventListener("click", () => {
+          const dayId = b.getAttribute("data-day-toggle");
+          if (onDay(dayId)) removeFromPlan(dayId, pickId);
+          else addToPlan(dayId, pickId);
+          draw();
+        })
+      );
+      const datePick = document.getElementById("dayDatePick");
+      if (datePick) {
+        datePick.addEventListener("change", () => {
+          if (!datePick.value) return;
+          // Parsed as local rather than UTC: "2026-08-19" is that day where
+          // you are, not the small hours of the day before.
+          const [y, m, d] = datePick.value.split("-").map(Number);
+          put(new Date(y, m - 1, d));
+        });
+      }
+      document.getElementById("daySheetDone").addEventListener("click", finish);
+    };
+
+    const finish = () => {
+      closePlaceModal();
+      const days = loadPlan().days.filter((d) => (loadPlan().items[d.id] || []).some((it) => it.pickId === pickId));
+      if (days.length) toast(`${pick.name} — ${days.map((d) => shortDayLabel(d.label)).join(", ")}`);
+      if (options.onDone) options.onDone();
+      else showView(view.dataset.activeTab || "picks");
+    };
+
+    draw();
+  }
+
   function removePlanDay(dayId) {
     const plan = loadPlan();
     plan.days = plan.days.filter((d) => d.id !== dayId);
@@ -4951,18 +5128,17 @@
 
             <label class="settings-label">Which days</label>
             <div class="day-assign-row">
-              ${
-                plan.days.length
-                  ? plan.days
-                      .map(
-                        (d) =>
-                          `<button class="day-chip${scheduled[d.id] ? " on" : ""}" data-assign-day="${esc(
-                            p.id
-                          )}|${esc(d.id)}">${esc(shortDayLabel(d.label))}</button>`
-                      )
-                      .join("")
-                  : `<span class="settings-hint">Add days in the Itinerary tab first.</span>`
-              }
+              ${plan.days
+                .map(
+                  (d) =>
+                    `<button class="day-chip${scheduled[d.id] ? " on" : ""}" data-assign-day="${esc(
+                      p.id
+                    )}|${esc(d.id)}">${esc(shortDayLabel(d.label))}</button>`
+                )
+                .join("")}
+              <button class="day-chip add" data-day-sheet="${esc(p.id)}">${
+                plan.days.length ? "+ Day" : "📅 Put it on a day"
+              }</button>
             </div>
 
             ${
@@ -5137,6 +5313,14 @@
           renderPicks();
           toast(`Moved to ${folder}`);
         });
+      });
+    });
+
+    placeModal.querySelectorAll("[data-day-sheet]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const id = btn.getAttribute("data-day-sheet");
+        closePlaceModal();
+        openDaySheet(id);
       });
     });
 
@@ -5394,6 +5578,16 @@
                       r.name
                     )}">🧭</button>`
                   : ""
+              }
+              ${
+                // Straight from a result onto a day. It saves it on the way if
+                // it isn't saved yet - the two were always going to happen
+                // together, and making them two errands was the friction.
+                r.isArea
+                  ? ""
+                  : `<button class="search-around" data-day-candidate="${i}" aria-label="Put ${esc(
+                      r.name
+                    )} on a day">📅</button>`
               }
             </div>
           </div>
@@ -5722,6 +5916,23 @@
 
     // Adding doesn't close the screen: on a trip you rarely want exactly one
     // café. The button becomes a tick so it's obvious what's already in.
+    searchOverlay.querySelectorAll("[data-day-candidate]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const c = pickSearch.results[Number(btn.getAttribute("data-day-candidate"))];
+        if (!c) return;
+        const id = pickId("custom", c.name);
+        if (!loadPicks().some((p) => p.id === id)) {
+          // Saved where it obviously belongs, or Unsorted - the question on
+          // screen is which day, and stacking a second one behind it is how
+          // this got tiring in the first place.
+          const folder = confidentFolderFor(c.lat, c.lon) || suggestedFolderFor(c.lat, c.lon) || "Unsorted";
+          confirmAddCandidate(c, folder);
+          renderSearchOverlay();
+        }
+        openDaySheet(id, { onDone: () => renderSearchOverlay() });
+      });
+    });
+
     const refine = document.getElementById("refineForm");
     if (refine) {
       refine.addEventListener("submit", (e) => {

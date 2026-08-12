@@ -1621,6 +1621,12 @@ body {
    rather than one more setting in it. */
 /* Two actions per result: save it, or look around it. */
 /* Looks and behaves like the field it always looked like. */
+/* The chip that makes a day rather than choosing one. */
+.day-chip.add {
+  border-style: dashed;
+  font-weight: 700;
+}
+
 .refine-bar { margin-top: 4px; }
 .refine-bar input { font-size: 13px; }
 
