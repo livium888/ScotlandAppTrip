@@ -47,6 +47,7 @@ const SUITES = [
   "test_pickcity.mjs",
   "test_ontheday.mjs",
   "test_review.mjs",
+  "test_tripidea.mjs",
 ];
 
 const MIME = {

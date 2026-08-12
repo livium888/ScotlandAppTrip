@@ -2164,7 +2164,8 @@
 
   // Whatever is behind the save needs to show it: the search list, or the tab.
   function afterSaveRefresh() {
-    if (searchOverlay.classList.contains("open")) renderSearchOverlay();
+    if (ideaOverlay.classList.contains("open")) renderIdea();
+    else if (searchOverlay.classList.contains("open")) renderSearchOverlay();
     else if (view.dataset.activeTab) showView(view.dataset.activeTab);
   }
 
@@ -2851,11 +2852,24 @@
     savePlan(plan);
   }
 
+  // A day's id was the millisecond it was made, which was unique for exactly
+  // as long as days were only ever made one tap at a time. Building a whole
+  // trip at once makes several inside the same millisecond: they came out
+  // sharing an id, so every stop landed on the first of them and the others
+  // were days you could see and could not fill.
+  function newDayId(plan) {
+    let id;
+    do {
+      id = `d${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+    } while (plan.days.some((d) => d.id === id));
+    return id;
+  }
+
   function addPlanDay(label) {
     const trimmed = (label || "").trim();
     if (!trimmed) return;
     const plan = loadPlan();
-    plan.days.push({ id: `d${Date.now()}`, label: trimmed });
+    plan.days.push({ id: newDayId(plan), label: trimmed });
     savePlan(plan);
   }
 
@@ -2927,7 +2941,7 @@
     const existing = datedDays(plan.days).find((x) => x.when && sameDay(x.when, date));
     if (existing) return existing.d.id;
 
-    const id = `d${Date.now()}`;
+    const id = newDayId(plan);
     // No placeholder prefix: renumberDays writes the number, and anything it
     // has to strip first is a chance to get the label wrong.
     plan.days.push({ id, label: labelForDate(date) });
@@ -3268,18 +3282,24 @@
 
     let html = "";
 
-    if (!picks.length) {
-      html += `<div class="card"><p class="pick-status">Nothing saved yet. Bookmark places in Places/Eats, search in Picks, or share a place into the app from Google Maps - then schedule them here.</p></div>`;
-    } else {
-      html += `
-        <div class="card plan-ai-card">
-          <button class="plan-ai-btn" id="autoPlanBtn" ${planBusy ? "disabled" : ""}>
-            ${planBusy ? "Planning your days…" : "✨ Plan my days for me"}
-          </button>
-          ${planNote ? `<p class="pick-status">${esc(planNote)}</p>` : ""}
-        </div>
-      `;
-    }
+    // Two different jobs, and which one you need depends on what you have.
+    // With places saved, the question is how to arrange them. With nothing
+    // saved - which is where every trip starts - there is nothing to arrange,
+    // and the honest answer is to go and find some, together.
+    html += `
+      <div class="card plan-ai-card">
+        ${
+          picks.length
+            ? `<button class="plan-ai-btn" id="autoPlanBtn" ${planBusy ? "disabled" : ""}>
+                 ${planBusy ? "Planning your days…" : "✨ Plan my days for me"}
+               </button>
+               ${planNote ? `<p class="pick-status">${esc(planNote)}</p>` : ""}`
+            : `<p class="pick-status">Nothing saved yet — so there is nothing to arrange into days.</p>`
+        }
+        <button class="plan-ai-btn plan-idea-btn" id="tripIdeaBtn">🧭 Suggest a trip</button>
+        <p class="settings-hint" style="text-align:center;">Say where you are and how far you'll go — you get whole routes back, with the stops already in order.</p>
+      </div>
+    `;
 
     plan.days.forEach((day) => {
       const items = itemsInDayOrder(planItems(plan, day.id));
@@ -3405,6 +3425,8 @@
   function wireMyPlan() {
     const autoBtn = document.getElementById("autoPlanBtn");
     if (autoBtn) autoBtn.addEventListener("click", autoPlanDays);
+    const ideaBtn = document.getElementById("tripIdeaBtn");
+    if (ideaBtn) ideaBtn.addEventListener("click", openTripIdea);
 
     view.querySelectorAll("[data-plan-add]").forEach((btn) => {
       btn.addEventListener("click", () => {
@@ -5441,6 +5463,992 @@
     });
   }
 
+  // ---------- Suggest a trip: build the question, then the route ----------
+  // Search answers a question you already know how to ask. "I'm in Edinburgh
+  // and I want to head towards the Highlands, no more than 100 miles" is not
+  // that: it is a shape of trip, and the hard part is knowing what to ask for
+  // in the first place. Most people do not, which is why a blank box marked
+  // "describe your trip" gets a one-word answer and a disappointing result.
+  //
+  // So the question is built rather than typed. Each part is a row of chips
+  // drawn from what the app already knows - your saved areas, the days in your
+  // plan, who is travelling - and every answer changes the advice on the parts
+  // still to come: choose 250 miles for a day out and it says so. The sentence
+  // at the top is the actual question, readable before it is asked.
+  //
+  // What comes back is several whole routes, not a list of places: each with
+  // its days, its stops in driving order, and an alternative for every stop.
+  // From there a trip is one tap - the stops are saved and laid out across
+  // real days, which is the thing you wanted and could not otherwise get
+  // without adding thirty places by hand.
+  const ideaOverlay = document.getElementById("ideaOverlay");
+
+  const IDEA_OPTION_COUNT = 3;
+  const IDEA_MEASURE_MAX = 12; // geocode lookups per option, at 1/sec
+
+  const IDEA_MILES = [25, 50, 100, 150, 250];
+  const IDEA_SPANS = [
+    { key: "1", label: "A day out", days: 1 },
+    { key: "2", label: "2 days", days: 2 },
+    { key: "3", label: "3 days", days: 3 },
+    { key: "7", label: "A week", days: 7 },
+  ];
+  const IDEA_DIRECTIONS = ["north", "south", "east", "west", "the coast", "inland"];
+  const IDEA_PACE = [
+    { key: "easy", label: "Take it easy", line: "two or three stops a day, with time at each" },
+    { key: "steady", label: "A steady pace", line: "three or four stops a day" },
+    { key: "full", label: "See as much as we can", line: "as much as genuinely fits" },
+  ];
+  // Interests are category keys, so the user's own rewording of a category in
+  // Settings reaches the trip planner too rather than only Explore.
+  const IDEA_INTEREST_KEYS = [
+    "historic", "viewpoint", "walk", "museum", "beach", "garden",
+    "animals", "playground", "restaurant", "cafe", "pub", "market",
+  ];
+
+  const IDEA_KINDS = {
+    see: { icon: "📷", label: "See", category: "Attraction" },
+    eat: { icon: "🍽️", label: "Eat", category: "Restaurant" },
+    stop: { icon: "🚗", label: "Stop", category: "Stop" },
+    stay: { icon: "🛏️", label: "Stay", category: "Accommodation" },
+  };
+
+  function ideaKind(kind) {
+    return IDEA_KINDS[String(kind || "").toLowerCase()] || IDEA_KINDS.stop;
+  }
+
+  function blankBrief() {
+    return { from: "", towards: "", miles: null, spanKey: "", who: "", interests: [], pace: "", extra: "" };
+  }
+
+  let tripIdea = null;
+  let ideaGeneration = 0;
+  let ideaStartGeo = null; // {query, lat, lon} for the "how far is that really" check
+
+  function loadIdea() {
+    const stored = readJson(boardKey(activeBoard().id, "idea"), null) || {};
+    const brief = Object.assign(blankBrief(), stored.brief || {});
+    if (!Array.isArray(brief.interests)) brief.interests = [];
+    if (!brief.who) brief.who = loadTripSettings().travellers || "";
+    const options = normaliseIdeaOptions(stored.options);
+    return {
+      brief,
+      options,
+      // "loading" is never restored: a request that was in flight when the app
+      // closed is not in flight now.
+      status: options.length ? "done" : "idle",
+      view: options.length ? "results" : "brief",
+      expanded: Math.min(Number(stored.expanded) || 0, Math.max(0, options.length - 1)),
+      askedAs: String(stored.askedAs || ""),
+      error: "",
+    };
+  }
+
+  function saveIdea() {
+    if (!tripIdea) return;
+    localStorage.setItem(
+      boardKey(activeBoard().id, "idea"),
+      JSON.stringify({
+        brief: tripIdea.brief,
+        options: tripIdea.options,
+        expanded: tripIdea.expanded,
+        askedAs: tripIdea.askedAs,
+      })
+    );
+  }
+
+  // Everything the model sends back is treated as untrusted shape as well as
+  // untrusted text: counts are clamped, types coerced, and anything without a
+  // name is dropped rather than rendered as an empty row.
+  function normaliseIdeaOptions(raw) {
+    const list = Array.isArray(raw) ? raw : raw && Array.isArray(raw.options) ? raw.options : [];
+    return list
+      .slice(0, 4)
+      .map((o, oi) => {
+        if (!o || typeof o !== "object") return null;
+        const days = (Array.isArray(o.days) ? o.days : []).slice(0, 10).map((d, di) => ({
+          label: String((d && d.label) || `Day ${di + 1}`).slice(0, 40),
+          stops: (Array.isArray(d && d.stops) ? d.stops : [])
+            .slice(0, 10)
+            .map((s) => {
+              if (!s || !s.name) return null;
+              return {
+                name: String(s.name).slice(0, 120),
+                kind: String(s.kind || "stop").toLowerCase(),
+                area: String(s.area || "").slice(0, 80),
+                why: String(s.why || "").slice(0, 300),
+                time: String(s.time || "").slice(0, 8),
+                claimedMiles: Number(s.milesFromStart) >= 0 ? Math.round(Number(s.milesFromStart)) : null,
+                alternatives: (Array.isArray(s.alternatives) ? s.alternatives : [])
+                  .slice(0, 3)
+                  .filter((a) => a && a.name)
+                  .map((a) => ({
+                    name: String(a.name).slice(0, 120),
+                    area: String(a.area || "").slice(0, 80),
+                    why: String(a.why || "").slice(0, 300),
+                  })),
+                lat: typeof s.lat === "number" ? s.lat : null,
+                lon: typeof s.lon === "number" ? s.lon : null,
+                address: String(s.address || "").slice(0, 200),
+                crowMiles: typeof s.crowMiles === "number" ? s.crowMiles : null,
+              };
+            })
+            .filter(Boolean),
+        }));
+        if (!days.some((d) => d.stops.length)) return null;
+        return {
+          title: String(o.title || `Option ${oi + 1}`).slice(0, 80),
+          summary: String(o.summary || "").slice(0, 400),
+          miles: Number(o.miles) > 0 ? Math.round(Number(o.miles)) : null,
+          measured: !!o.measured,
+          days: days.filter((d) => d.stops.length),
+        };
+      })
+      .filter(Boolean);
+  }
+
+  function ideaSpanDays() {
+    const b = tripIdea.brief;
+    if (b.spanKey === "plan") return Math.max(1, loadPlan().days.length);
+    const found = IDEA_SPANS.find((s) => s.key === b.spanKey);
+    return found ? found.days : 0;
+  }
+
+  function ideaInterestLabels() {
+    return tripIdea.brief.interests
+      .map((k) => {
+        const cat = findCategory(k);
+        return cat ? cat.label.toLowerCase() : k;
+      })
+      .filter(Boolean);
+  }
+
+  // The question in plain English. It is the thing being asked, so it is shown
+  // rather than described - "what will happen when I press the button" should
+  // never be a matter of trust.
+  function ideaSentence() {
+    const b = tripIdea.brief;
+    const blank = (text) => `<span class="idea-blank">${esc(text)}</span>`;
+    const said = (text) => `<b>${esc(text)}</b>`;
+    const days = ideaSpanDays();
+    const pace = IDEA_PACE.find((p) => p.key === b.pace);
+    const interests = ideaInterestLabels();
+
+    const parts = [
+      `I'm in ${b.from.trim() ? said(b.from.trim()) : blank("somewhere")}`,
+      b.towards.trim() ? `heading ${said(b.towards.trim())}` : blank("heading anywhere"),
+      b.miles ? `up to ${said(`${b.miles} miles`)} away` : blank("any distance"),
+      days ? `over ${said(days === 1 ? "one day" : `${days} days`)}` : blank("for a day or two"),
+    ];
+    let text = parts.join(", ") + ".";
+    if (b.who.trim()) text += ` We're ${said(b.who.trim())}.`;
+    if (interests.length) text += ` We like ${said(interests.join(", "))}.`;
+    if (pace) text += ` ${said(pace.label)}.`;
+    if (b.extra.trim()) text += ` Also: ${said(b.extra.trim())}`;
+    return text;
+  }
+
+  function ideaSummaryLine() {
+    const b = tripIdea.brief;
+    const bits = [b.from.trim() || "anywhere"];
+    if (b.towards.trim()) bits.push(b.towards.trim());
+    if (b.miles) bits.push(`${b.miles} mi`);
+    const days = ideaSpanDays();
+    if (days) bits.push(days === 1 ? "1 day" : `${days} days`);
+    return bits.join(" · ");
+  }
+
+  // The advice that changes as the question is built. Every one of these reads
+  // the answers already given: this is the part that makes a question builder
+  // worth more than the same fields on a form.
+  function ideaHint(key) {
+    const b = tripIdea.brief;
+    const days = ideaSpanDays();
+    const areas = loadPicks().filter((p) => p.major).length;
+
+    switch (key) {
+      case "from":
+        if (!b.from.trim()) {
+          return areas
+            ? "Where the trip starts. Your saved areas are here, or type anywhere."
+            : "Where the trip starts — a town or city, or where you are right now.";
+        }
+        return `Everything else is measured from ${b.from.trim()}.`;
+      case "towards":
+        if (!b.towards.trim()) {
+          return b.from.trim()
+            ? `Optional. A direction from ${b.from.trim()}, or a region you have in mind — leave it open and you'll get a spread.`
+            : "Optional — a direction or a region, if you have one in mind.";
+        }
+        return `The suggestions will follow ${b.towards.trim()} rather than spreading in every direction.`;
+      case "miles":
+        if (!b.miles) return "How far from the start you're willing to go. Straight-line, roughly — roads are longer.";
+        if (b.miles <= 50) return `${b.miles} miles is an easy out-and-back with time at each stop.`;
+        if (b.miles <= 100) {
+          return days > 1
+            ? `${b.miles} miles across ${days} days is comfortable — you can stop properly rather than driving past things.`
+            : `${b.miles} miles there and back is most of a day's driving. Expect two or three stops, not five.`;
+        }
+        return days > 1
+          ? `${b.miles} miles is a real distance — worth an overnight rather than doubling back.`
+          : `${b.miles} miles in one day is mostly driving. Two days would suit it better.`;
+      case "span": {
+        const planned = loadPlan().days.length;
+        if (!days) {
+          return planned
+            ? `How long you've got. You already have ${planned} day${planned === 1 ? "" : "s"} planned — I can fit the trip to those.`
+            : "How long you've got. Days get made for you at the end — nothing to set up first.";
+        }
+        if (days === 1) return "One day. The suggestions will stay close enough to get home.";
+        return `${days} days. Each one gets its own stops, in the order you'd drive them.`;
+      }
+      case "interests": {
+        const chosen = ideaInterestLabels();
+        if (!chosen.length) return "Pick a few. Anything you skip, the suggestions decide for you.";
+        if (chosen.length > 5) return `${chosen.length} is a lot to fit — the first few carry the most weight.`;
+        return `Looking for ${chosen.join(", ")}.`;
+      }
+      case "pace": {
+        const pace = IDEA_PACE.find((p) => p.key === b.pace);
+        if (!pace) return "How full you want the days to be.";
+        // Two answers that fight each other, said once rather than silently
+        // producing a plan nobody can actually do.
+        if (pace.key === "full" && /child|toddler|kid|year-old|baby|pram|buggy/i.test(b.who)) {
+          return `${pace.line} — though with a young child that is usually one stop more than the day has in it.`;
+        }
+        if (pace.key === "full" && days === 1 && b.miles > 100) {
+          return `${pace.line} — with ${b.miles} miles to cover in a day, most of it will be the drive.`;
+        }
+        return pace.line;
+      }
+      case "who":
+        return b.who.trim()
+          ? "Used here and everywhere else the app asks the AI for something."
+          : "Who's going. It changes the answers more than anything else here.";
+      case "extra":
+        return "Anything the rows above don't cover — “no motorways”, “we have the dog”, “back by six”.";
+      default:
+        return "";
+    }
+  }
+
+  // Which row to point at next: the first thing not yet answered, so the
+  // screen always has one obvious move rather than eight equal ones.
+  function ideaNextSlot() {
+    const b = tripIdea.brief;
+    if (!b.from.trim()) return "from";
+    if (!b.miles) return "miles";
+    if (!b.spanKey) return "span";
+    if (!b.interests.length) return "interests";
+    return "";
+  }
+
+  const ideaChip = (label, attrs, on) =>
+    `<button class="search-chip idea-chip${on ? " on" : ""}" ${attrs}>${esc(label)}</button>`;
+
+  const ideaSetChip = (key, value, label, on) =>
+    ideaChip(label, `data-idea-key="${esc(key)}" data-idea-value="${esc(String(value))}"`, on);
+
+  function ideaSlotHtml(key, label, chipsHtml, fieldHtml, answered) {
+    const next = ideaNextSlot() === key;
+    return `
+      <section class="idea-slot${answered ? " done" : ""}${next ? " next" : ""}" data-idea-slot="${esc(key)}">
+        <div class="idea-slot-head">
+          <span class="idea-slot-label">${esc(label)}</span>
+          ${answered ? `<span class="idea-slot-tick" aria-label="answered">✓</span>` : ""}
+          ${next ? `<span class="idea-slot-next">next</span>` : ""}
+        </div>
+        <p class="idea-slot-hint">${esc(ideaHint(key))}</p>
+        ${chipsHtml ? `<div class="search-chips idea-chips">${chipsHtml}</div>` : ""}
+        ${fieldHtml || ""}
+      </section>
+    `;
+  }
+
+  function ideaBriefHtml() {
+    const b = tripIdea.brief;
+    const picks = loadPicks();
+    const dest = (activeBoard().destination || loadTripSettings().destination || "").trim();
+
+    // Starting points worth offering: the areas you have saved, the folders
+    // you file under, and the trip's own region. Deduplicated, because those
+    // three overlap almost by definition.
+    const startNames = [];
+    picks.filter((p) => p.major).forEach((p) => startNames.push(p.name));
+    loadFolders().forEach((f) => {
+      if (f !== "Unsorted") startNames.push(f);
+    });
+    if (dest) startNames.push(dest);
+    const starts = startNames.filter((n, i) => n && startNames.indexOf(n) === i).slice(0, 8);
+
+    const fromChips =
+      `${ideaChip("📍 Where I am now", 'id="ideaGps" data-idea-gps="1"', false)}` +
+      starts.map((n) => ideaSetChip("from", n, n, b.from.trim() === n)).join("");
+
+    const towardsChips =
+      ideaSetChip("towards", "", "Anywhere", !b.towards.trim()) +
+      IDEA_DIRECTIONS.map((d) => ideaSetChip("towards", d, d, b.towards.trim() === d)).join("") +
+      picks
+        .filter((p) => p.major && p.name !== b.from.trim())
+        .slice(0, 4)
+        .map((p) => ideaSetChip("towards", `towards ${p.name}`, `towards ${p.name}`, b.towards.trim() === `towards ${p.name}`))
+        .join("");
+
+    const milesChips =
+      IDEA_MILES.map((m) => ideaSetChip("miles", m, `${m} miles`, b.miles === m)).join("") +
+      ideaSetChip("miles", "", "No limit", !b.miles);
+
+    const planned = loadPlan().days.length;
+    const spanChips =
+      IDEA_SPANS.map((s) => ideaSetChip("spanKey", s.key, s.label, b.spanKey === s.key)).join("") +
+      (planned
+        ? ideaSetChip("spanKey", "plan", `The ${planned} day${planned === 1 ? "" : "s"} I have`, b.spanKey === "plan")
+        : "");
+
+    const interestChips = IDEA_INTEREST_KEYS.map((k) => {
+      const cat = findCategory(k);
+      if (!cat) return "";
+      return ideaChip(
+        `${cat.icon} ${cat.label}`,
+        `data-idea-interest="${esc(k)}"`,
+        b.interests.includes(k)
+      );
+    }).join("");
+
+    const paceChips = IDEA_PACE.map((p) => ideaSetChip("pace", p.key, p.label, b.pace === p.key)).join("");
+
+    return `
+      <div class="idea-sentence-wrap">
+        <div class="section-label">Your question</div>
+        <p class="idea-sentence" id="ideaSentence">${ideaSentence()}</p>
+      </div>
+
+      ${ideaSlotHtml(
+        "from",
+        "Where from",
+        fromChips,
+        `<input class="settings-input idea-input" type="text" data-idea-text="from"
+                placeholder="e.g. Edinburgh" value="${esc(b.from)}" />`,
+        !!b.from.trim()
+      )}
+
+      ${ideaSlotHtml(
+        "towards",
+        "Which way",
+        towardsChips,
+        `<input class="settings-input idea-input" type="text" data-idea-text="towards"
+                placeholder="e.g. towards the Highlands" value="${esc(b.towards)}" />`,
+        !!b.towards.trim()
+      )}
+
+      ${ideaSlotHtml("miles", "How far", milesChips, "", !!b.miles)}
+
+      ${ideaSlotHtml("span", "How long", spanChips, "", !!b.spanKey)}
+
+      ${ideaSlotHtml("interests", "What you're after", interestChips, "", !!b.interests.length)}
+
+      ${ideaSlotHtml("pace", "How full the days should be", paceChips, "", !!b.pace)}
+
+      ${ideaSlotHtml(
+        "who",
+        "Who's going",
+        "",
+        `<input class="settings-input idea-input" type="text" data-idea-text="who"
+                placeholder="e.g. family of 3, 4-year-old who walks" value="${esc(b.who)}" />`,
+        !!b.who.trim()
+      )}
+
+      ${ideaSlotHtml(
+        "extra",
+        "Anything else",
+        "",
+        `<input class="settings-input idea-input" type="text" data-idea-text="extra"
+                placeholder="e.g. no motorways, back by six" value="${esc(b.extra)}" />`,
+        !!b.extra.trim()
+      )}
+
+      <button class="modal-btn modal-btn-primary idea-run" id="ideaRun">✨ Suggest trips</button>
+      <p class="settings-hint idea-run-hint">${
+        tripIdea.brief.from.trim()
+          ? "Three routes, each with its stops in driving order."
+          : "Where you're starting from is the one thing needed."
+      }</p>
+    `;
+  }
+
+  function ideaStopHtml(oi, di, si, stop, radius) {
+    const kind = ideaKind(stop.kind);
+    const saved = loadPicks().some((p) => p.id === pickId("custom", stop.name));
+    const miles = stop.crowMiles != null ? stop.crowMiles : stop.claimedMiles;
+    const over = radius && stop.crowMiles != null && stop.crowMiles > radius;
+    const path = `${oi}|${di}|${si}`;
+    const meta = [stop.area, miles != null ? `${miles} mi out` : ""].filter(Boolean).join(" · ");
+
+    return `
+      <div class="idea-stop${over ? " over" : ""}">
+        <span class="idea-stop-kind" title="${esc(kind.label)}">${kind.icon}</span>
+        <button class="result-tap idea-stop-main" data-idea-preview="${esc(path)}">
+          <span class="idea-stop-name">${esc(stop.name)}${
+            stop.time ? ` <span class="idea-stop-time">${esc(stop.time)}</span>` : ""
+          }</span>
+          ${meta ? `<span class="idea-stop-meta">${esc(meta)}</span>` : ""}
+          ${stop.why ? `<span class="idea-stop-why">${esc(stop.why)}</span>` : ""}
+          ${
+            over
+              ? `<span class="idea-stop-warn">⚠ ${esc(String(stop.crowMiles))} miles from ${esc(
+                  tripIdea.brief.from.trim()
+                )} in a straight line — past your ${esc(String(radius))}</span>`
+              : ""
+          }
+        </button>
+        <div class="idea-stop-actions">
+          <button class="candidate-add${saved ? " saved" : ""}" data-idea-add="${esc(path)}"
+                  aria-label="${saved ? "Saved" : `Save ${esc(stop.name)}`}">${saved ? "✓" : "＋"}</button>
+          <button class="search-around" data-idea-day="${esc(path)}"
+                  aria-label="Put ${esc(stop.name)} on a day">📅</button>
+          ${
+            stop.alternatives.length
+              ? `<button class="search-around" data-idea-swap="${esc(path)}"
+                         aria-label="Swap for ${esc(stop.alternatives[0].name)}">🔄</button>`
+              : ""
+          }
+        </div>
+      </div>
+    `;
+  }
+
+  function ideaResultsHtml() {
+    const b = tripIdea.brief;
+
+    if (tripIdea.status === "loading") {
+      return `
+        <div class="card idea-loading">
+          <p class="pick-status">Working out some routes…</p>
+          <p class="settings-hint">${esc(ideaSummaryLine())}</p>
+        </div>
+      `;
+    }
+
+    if (tripIdea.status === "error") {
+      return `
+        <div class="card">
+          <h2 class="modal-title">That didn't work</h2>
+          <p class="pick-status">${esc(tripIdea.error)}</p>
+          <div class="settings-btn-row">
+            <button class="modal-btn modal-btn-primary" id="ideaRetry">Try again</button>
+            <button class="modal-btn" data-idea-edit="1">Change the question</button>
+          </div>
+        </div>
+      `;
+    }
+
+    // The full question, not the header's shortened version of it: what was
+    // asked is the only thing that explains what came back.
+    let html = `
+      <div class="idea-asked">
+        <div class="section-label">You asked for</div>
+        <p class="idea-asked-line">${ideaSentence()}</p>
+        <button class="link-btn" data-idea-edit="1">Change the question</button>
+      </div>
+    `;
+
+    tripIdea.options.forEach((option, oi) => {
+      const open = tripIdea.expanded === oi;
+      const stopCount = option.days.reduce((n, d) => n + d.stops.length, 0);
+      const meta = [
+        `${option.days.length} day${option.days.length === 1 ? "" : "s"}`,
+        `${stopCount} stop${stopCount === 1 ? "" : "s"}`,
+        option.miles ? `about ${option.miles} miles` : "",
+      ]
+        .filter(Boolean)
+        .join(" · ");
+
+      html += `
+        <div class="card idea-option${open ? " open" : ""}">
+          <button class="idea-option-head" data-idea-option="${oi}" aria-expanded="${open ? "true" : "false"}">
+            <span class="idea-option-title">${esc(option.title)}</span>
+            <span class="idea-option-meta">${esc(meta)}</span>
+            ${option.summary ? `<span class="idea-option-summary">${esc(option.summary)}</span>` : ""}
+            <span class="idea-option-chevron">${open ? "⌃" : "⌄"}</span>
+          </button>
+      `;
+
+      if (open) {
+        option.days.forEach((day, di) => {
+          html += `<div class="idea-day"><div class="idea-day-label">${esc(day.label)}</div>`;
+          day.stops.forEach((stop, si) => {
+            html += ideaStopHtml(oi, di, si, stop, b.miles);
+          });
+          html += `</div>`;
+        });
+        html += `
+          <div class="settings-btn-row idea-option-actions">
+            <button class="modal-btn modal-btn-primary" data-idea-use="${oi}">Build this trip</button>
+            <button class="modal-btn" data-idea-saveall="${oi}">Save the places</button>
+          </div>
+          <p class="settings-hint">Building it saves every stop and lays them out across days — you can move anything afterwards.</p>
+        `;
+      }
+      html += `</div>`;
+    });
+
+    html += `
+      <form class="search-bar refine-bar" id="ideaRefineForm">
+        <input type="text" id="ideaRefineInput" placeholder="Not quite? Tell the AI what to change"
+               autocomplete="off" value="${esc(b.extra || "")}" />
+        <button type="submit" aria-label="Ask again with this">Again</button>
+      </form>
+    `;
+    return html;
+  }
+
+  function renderIdea() {
+    if (!tripIdea) return;
+    const showResults = tripIdea.view === "results";
+    ideaOverlay.innerHTML = `
+      <div class="search-head">
+        <button class="search-back" data-idea-close="1" aria-label="Close">←</button>
+        <div class="idea-head-text">
+          <div class="idea-head-title">${showResults ? "Trip suggestions" : "Plan a trip"}</div>
+          <div class="idea-head-sub">${
+            showResults ? esc(ideaSummaryLine()) : "Answer as much or as little as you like"
+          }</div>
+        </div>
+      </div>
+      <div class="search-body">${showResults ? ideaResultsHtml() : ideaBriefHtml()}</div>
+    `;
+    ideaOverlay.classList.add("open");
+    wireIdea();
+  }
+
+  function openTripIdea() {
+    // It can be reached from the search screen, and two full-screen overlays
+    // stacked on each other is one back press too many.
+    if (searchOverlay.classList.contains("open")) closeSearchOverlay();
+    tripIdea = loadIdea();
+    renderIdea();
+  }
+
+  function closeIdea() {
+    ideaOverlay.classList.remove("open");
+    ideaOverlay.innerHTML = "";
+    if (tripIdea) saveIdea();
+    if (view.dataset.activeTab) showView(view.dataset.activeTab);
+  }
+
+  function ideaStopAt(path) {
+    const [oi, di, si] = String(path).split("|").map(Number);
+    const option = tripIdea.options[oi];
+    const day = option && option.days[di];
+    const stop = day && day.stops[si];
+    return stop ? { option, day, stop, oi, di, si } : null;
+  }
+
+  // A suggestion, in the shape the rest of the app already understands - so a
+  // stop can be previewed, saved and enriched by exactly the same code that
+  // handles a search result. Deliberately no displayName unless a real address
+  // has been resolved: the geocoder hint wants the town, not "Name, Town".
+  function ideaCandidate(stop) {
+    return {
+      name: stop.name,
+      area: stop.area || "",
+      city: stop.area || "",
+      address: stop.address || "",
+      displayName: stop.address || "",
+      description: stop.why || "",
+      category: ideaKind(stop.kind).category,
+      lat: stop.lat != null ? stop.lat : null,
+      lon: stop.lon != null ? stop.lon : null,
+      aiSuggested: true,
+    };
+  }
+
+  // A road trip is organised by the towns it passes through, which is what the
+  // Picks list already does with areas. So a stop is filed under its own town,
+  // creating that folder if it is new - the alternative is thirty places in
+  // Unsorted, which is no filing at all.
+  function ideaFolderFor(stop) {
+    const area = (stop.area || "").trim();
+    const folders = loadFolders();
+    const existing = folders.find((f) => f.toLowerCase() === area.toLowerCase());
+    if (existing) return existing;
+    const confident = stop.lat != null ? confidentFolderFor(stop.lat, stop.lon) : null;
+    if (confident && confident !== "Unsorted") return confident;
+    if (area) return addFolder(area) || "Unsorted";
+    return "Unsorted";
+  }
+
+  function ideaSaveStop(stop) {
+    const candidate = ideaCandidate(stop);
+    const id = pickId("custom", candidate.name);
+    // confirmAddCandidate saves synchronously and only then goes off to
+    // geocode, so several in a row do not race each other.
+    if (!loadPicks().some((p) => p.id === id)) confirmAddCandidate(candidate, ideaFolderFor(stop));
+    return id;
+  }
+
+  // Days for a route: the ones already in the plan, in date order, and any
+  // still needed made as consecutive dates after them. A plan that starts on
+  // the 18th gets the 18th, 19th, 20th - not three days bolted onto today.
+  function ideaDaysFor(option) {
+    const plan = loadPlan();
+    const dated = datedDays(plan.days).filter((x) => x.when).sort((a, b) => a.when - b.when);
+    const start = dated.length ? dated[0].when : new Date();
+    const ids = [];
+    for (let i = 0; i < option.days.length; i++) {
+      ids.push(ensureDayFor(new Date(start.getFullYear(), start.getMonth(), start.getDate() + i)));
+    }
+    return ids;
+  }
+
+  function useIdeaOption(index) {
+    const option = tripIdea.options[index];
+    if (!option) return;
+    const dayIds = ideaDaysFor(option);
+    let placed = 0;
+    option.days.forEach((day, di) => {
+      const dayId = dayIds[di];
+      if (!dayId) return;
+      day.stops.forEach((stop) => {
+        const id = ideaSaveStop(stop);
+        addToPlan(dayId, id);
+        // A time only if the model gave one. Inventing "10:00" for everything
+        // reads as a schedule somebody decided, and it wasn't.
+        if (stop.time) setPlanItemTime(dayId, id, stop.time);
+        placed++;
+      });
+    });
+    saveIdea();
+    closeIdea();
+    showView("itinerary");
+    toast(`${option.title} — ${placed} stops across ${dayIds.length} day${dayIds.length === 1 ? "" : "s"}`);
+  }
+
+  function saveIdeaOptionPlaces(index) {
+    const option = tripIdea.options[index];
+    if (!option) return;
+    let added = 0;
+    option.days.forEach((day) =>
+      day.stops.forEach((stop) => {
+        if (!loadPicks().some((p) => p.id === pickId("custom", stop.name))) added++;
+        ideaSaveStop(stop);
+      })
+    );
+    renderIdea();
+    toast(added ? `Saved ${added} place${added === 1 ? "" : "s"} to Picks` : "Already saved");
+  }
+
+  // Where the trip starts, as coordinates, so "no more than 100 miles" can be
+  // checked rather than taken on trust. Cached per query - it does not change
+  // while the question stays the same.
+  async function ideaStartPoint() {
+    const from = tripIdea.brief.from.trim();
+    if (!from) return null;
+    if (ideaStartGeo && ideaStartGeo.query === from) return ideaStartGeo;
+    let geo = null;
+    try {
+      geo = await geocodePlace(from, null);
+    } catch (e) {
+      geo = null;
+    }
+    ideaStartGeo = geo ? { query: from, lat: geo.lat, lon: geo.lon } : null;
+    return ideaStartGeo;
+  }
+
+  // The model's mileage is a claim; this is a measurement. Stops are looked up
+  // one at a time (Nominatim asks for a request a second) and the screen
+  // updates as each lands, so a route with a stop 200 miles away says so
+  // rather than looking like every other route.
+  async function measureIdeaOption(index) {
+    const generation = ideaGeneration;
+    const option = tripIdea.options[index];
+    if (!option || option.measured) return;
+    option.measured = true;
+    const start = await ideaStartPoint();
+    const stops = option.days.reduce((all, d) => all.concat(d.stops), []).slice(0, IDEA_MEASURE_MAX);
+
+    for (const stop of stops) {
+      if (generation !== ideaGeneration || !ideaOverlay.classList.contains("open")) return;
+      if (stop.lat == null) {
+        let geo = null;
+        try {
+          geo = await geocodePlace(stop.name, stop.area || null);
+        } catch (e) {
+          geo = null;
+        }
+        if (geo) {
+          stop.lat = geo.lat;
+          stop.lon = geo.lon;
+          stop.address = geo.address || "";
+        }
+      }
+      if (start && stop.lat != null && stop.crowMiles == null) {
+        stop.crowMiles = Math.round(toMiles(haversineKm(start.lat, start.lon, stop.lat, stop.lon)));
+      }
+      // Never while something is being typed into: a redraw mid-sentence
+      // throws the caret away, and the refine box lives on this screen.
+      const active = document.activeElement;
+      if (!(active && ideaOverlay.contains(active) && active.tagName === "INPUT")) renderIdea();
+    }
+    saveIdea();
+  }
+
+  async function runTripIdea() {
+    const key = loadTripSettings().geminiKey.trim();
+    if (!key) {
+      closeIdea();
+      openSettings();
+      toast("Add a Gemini key and this can plan trips");
+      return;
+    }
+    const b = tripIdea.brief;
+    if (!b.from.trim()) {
+      tripIdea.view = "brief";
+      renderIdea();
+      const field = ideaOverlay.querySelector('[data-idea-text="from"]');
+      if (field) field.focus();
+      toast("Where are you starting from?");
+      return;
+    }
+    // Said once here, it applies to search and Explore too - the same fact
+    // should not need typing in three places.
+    if (b.who.trim() && b.who.trim() !== loadTripSettings().travellers.trim()) {
+      saveTripSettings({ travellers: b.who.trim() });
+    }
+
+    const generation = ++ideaGeneration;
+    tripIdea.status = "loading";
+    tripIdea.view = "results";
+    tripIdea.error = "";
+    renderIdea();
+
+    try {
+      const { text } = await callGemini(key, ideaPrompt(), { grounded: true });
+      if (generation !== ideaGeneration) return;
+      const options = normaliseIdeaOptions(extractJson(text));
+      if (!options.length) throw new Error("The model didn't send back a trip that could be read.");
+      tripIdea.options = options;
+      tripIdea.expanded = 0;
+      tripIdea.status = "done";
+      tripIdea.askedAs = ideaSummaryLine();
+    } catch (e) {
+      if (generation !== ideaGeneration) return;
+      tripIdea.status = "error";
+      tripIdea.error = (e && e.message) || String(e);
+    }
+    saveIdea();
+    renderIdea();
+    if (tripIdea.status === "done") measureIdeaOption(tripIdea.expanded);
+  }
+
+  function ideaPrompt() {
+    const b = tripIdea.brief;
+    const days = ideaSpanDays();
+    const settings = loadTripSettings();
+    const dest = (activeBoard().destination || settings.destination || "").trim();
+    const from = b.from.trim();
+    const scopedFrom =
+      dest && !new RegExp(`\\b${dest.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(from)
+        ? `${from}, ${dest}`
+        : from;
+
+    const facts = [`Starting point: ${scopedFrom}`];
+    if (b.towards.trim()) facts.push(`Heading: ${b.towards.trim()}`);
+    facts.push(
+      b.miles
+        ? `Maximum distance from the start: ${b.miles} miles`
+        : "No distance limit given - keep it to what the time allows"
+    );
+    facts.push(days ? `Time available: ${days === 1 ? "one day" : `${days} days`}` : "Time available: a day out");
+    const who = (b.who || settings.travellers || "").trim();
+    if (who) facts.push(`Travellers: ${who}`);
+    if (settings.preferences.trim()) facts.push(`What matters to us: ${settings.preferences.trim()}`);
+    if (b.interests.length) facts.push(`Interested in: ${b.interests.map((k) => categoryPrompt(k)).join("; ")}`);
+    const pace = IDEA_PACE.find((p) => p.key === b.pace);
+    if (pace) facts.push(`Pace: ${pace.label} - ${pace.line}`);
+    if (b.extra.trim()) facts.push(`Also, specifically: ${b.extra.trim()}`);
+
+    return (
+      `Plan a trip and give ${IDEA_OPTION_COUNT} genuinely different options for it - ` +
+      `different routes or areas, not the same one reordered.\n\n` +
+      `${facts.join("\n")}\n\n` +
+      `Use search to check every place exists and is currently open.\n\n` +
+      `Rules:\n` +
+      (b.miles ? `- Nothing further than ${b.miles} miles from ${from} by road.\n` : "") +
+      `- Order the stops the way you would actually drive them.\n` +
+      `- Every day needs somewhere to eat, marked as such.\n` +
+      `- Give each stop one nearby alternative, so there is a choice.\n` +
+      `- Real, specific, named places. Never "a local cafe" or "a nearby walk".\n\n` +
+      `Reply with ONLY JSON, no other text:\n` +
+      `{"options":[{"title":"short name for the route","summary":"one sentence",` +
+      `"miles":total driving miles as a number,"days":[{"label":"Day 1","stops":[` +
+      `{"name":"exact place name","kind":"see"|"eat"|"stop"|"stay","area":"town or area",` +
+      `"why":"one short sentence","milesFromStart":number,"time":"" or "12:30",` +
+      `"alternatives":[{"name":"","area":"","why":""}]}]}]}]}`
+    );
+  }
+
+  function wireIdea() {
+    ideaOverlay.querySelectorAll("[data-idea-close]").forEach((b) =>
+      b.addEventListener("click", () => closeIdea())
+    );
+
+    ideaOverlay.querySelectorAll("[data-idea-key]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const key = btn.getAttribute("data-idea-key");
+        const raw = btn.getAttribute("data-idea-value");
+        const value = key === "miles" ? (raw ? Number(raw) : null) : raw;
+        // Tapping the chip that is already on clears it: the same control both
+        // ways, as everywhere else in the app.
+        tripIdea.brief[key] = tripIdea.brief[key] === value ? (key === "miles" ? null : "") : value;
+        saveIdea();
+        renderIdea();
+      });
+    });
+
+    ideaOverlay.querySelectorAll("[data-idea-interest]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const key = btn.getAttribute("data-idea-interest");
+        const list = tripIdea.brief.interests;
+        const at = list.indexOf(key);
+        if (at < 0) list.push(key);
+        else list.splice(at, 1);
+        saveIdea();
+        renderIdea();
+      });
+    });
+
+    ideaOverlay.querySelectorAll("[data-idea-text]").forEach((input) => {
+      const key = input.getAttribute("data-idea-text");
+      input.addEventListener("input", () => {
+        tripIdea.brief[key] = input.value;
+        // The sentence is the point of the screen, so it keeps up with the
+        // keystroke. The advice around it waits for the field to be left,
+        // because redrawing mid-word would take the caret with it.
+        const sentence = document.getElementById("ideaSentence");
+        if (sentence) sentence.innerHTML = ideaSentence();
+      });
+      input.addEventListener("blur", () => {
+        tripIdea.brief[key] = input.value;
+        saveIdea();
+        if (tripIdea.view === "brief") renderIdea();
+      });
+    });
+
+    const gps = ideaOverlay.querySelector("[data-idea-gps]");
+    if (gps) {
+      gps.addEventListener("click", async () => {
+        gps.textContent = "Finding you…";
+        try {
+          const pos = await currentPosition();
+          const place = await reverseGeocode(pos.lat, pos.lon);
+          tripIdea.brief.from = (place && (place.name || place.address)) || `${pos.lat.toFixed(3)}, ${pos.lon.toFixed(3)}`;
+          ideaStartGeo = { query: tripIdea.brief.from, lat: pos.lat, lon: pos.lon };
+          saveIdea();
+        } catch (e) {
+          toast("Couldn't get your location");
+        }
+        renderIdea();
+      });
+    }
+
+    const run = document.getElementById("ideaRun");
+    if (run) run.addEventListener("click", () => runTripIdea());
+    const retry = document.getElementById("ideaRetry");
+    if (retry) retry.addEventListener("click", () => runTripIdea());
+
+    ideaOverlay.querySelectorAll("[data-idea-edit]").forEach((b) =>
+      b.addEventListener("click", () => {
+        tripIdea.view = "brief";
+        renderIdea();
+      })
+    );
+
+    ideaOverlay.querySelectorAll("[data-idea-option]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const i = Number(btn.getAttribute("data-idea-option"));
+        tripIdea.expanded = tripIdea.expanded === i ? -1 : i;
+        saveIdea();
+        renderIdea();
+        if (tripIdea.expanded === i) measureIdeaOption(i);
+      });
+    });
+
+    ideaOverlay.querySelectorAll("[data-idea-add]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const at = ideaStopAt(btn.getAttribute("data-idea-add"));
+        if (!at) return;
+        ideaSaveStop(at.stop);
+        renderIdea();
+        toast(`Saved ${at.stop.name}`);
+      });
+    });
+
+    ideaOverlay.querySelectorAll("[data-idea-day]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const at = ideaStopAt(btn.getAttribute("data-idea-day"));
+        if (!at) return;
+        const id = ideaSaveStop(at.stop);
+        openDaySheet(id, { onDone: () => renderIdea() });
+      });
+    });
+
+    // Swapping rotates rather than replaces: the stop you had goes to the back
+    // of its own alternatives, so tapping again cycles and tapping enough
+    // times brings back the one you started with. Nothing is lost.
+    ideaOverlay.querySelectorAll("[data-idea-swap]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const at = ideaStopAt(btn.getAttribute("data-idea-swap"));
+        if (!at || !at.stop.alternatives.length) return;
+        const stop = at.stop;
+        const next = stop.alternatives.shift();
+        stop.alternatives.push({ name: stop.name, area: stop.area, why: stop.why });
+        stop.name = next.name;
+        stop.area = next.area || stop.area;
+        stop.why = next.why || "";
+        // Everything positional belonged to the old place.
+        stop.lat = null;
+        stop.lon = null;
+        stop.address = "";
+        stop.crowMiles = null;
+        stop.claimedMiles = null;
+        saveIdea();
+        renderIdea();
+        at.option.measured = false;
+        measureIdeaOption(at.oi);
+      });
+    });
+
+    ideaOverlay.querySelectorAll("[data-idea-preview]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const at = ideaStopAt(btn.getAttribute("data-idea-preview"));
+        if (!at) return;
+        // The whole day is handed over, so the preview's own next/previous
+        // moves along the route rather than dead-ending on one stop.
+        const list = at.day.stops.map(ideaCandidate);
+        openCandidatePreview(at.si, list);
+      });
+    });
+
+    ideaOverlay.querySelectorAll("[data-idea-use]").forEach((btn) =>
+      btn.addEventListener("click", () => useIdeaOption(Number(btn.getAttribute("data-idea-use"))))
+    );
+    ideaOverlay.querySelectorAll("[data-idea-saveall]").forEach((btn) =>
+      btn.addEventListener("click", () => saveIdeaOptionPlaces(Number(btn.getAttribute("data-idea-saveall"))))
+    );
+
+    const refine = document.getElementById("ideaRefineForm");
+    if (refine) {
+      refine.addEventListener("submit", (e) => {
+        e.preventDefault();
+        const field = document.getElementById("ideaRefineInput");
+        tripIdea.brief.extra = field ? field.value.trim() : "";
+        if (field) field.blur();
+        runTripIdea();
+      });
+    }
+  }
+
   // ---------- Picks: search-and-confirm with a real map ----------
 
   let pickSearch = { query: "", status: "idle", results: [] }; // idle | loading | done | error
@@ -5556,6 +6564,15 @@
         (r) => `<button class="search-chip" data-recent="${esc(r)}">${esc(r)}</button>`
       ).join("");
       body += `</div>`;
+
+      // Searching finds one place at a time, which is the wrong tool when you
+      // do not yet know what you are looking for. This is the other door, and
+      // it belongs here because this is where that realisation happens.
+      body += `
+        <div class="section-label">Or don't search at all</div>
+        <button class="search-chip search-chip-wide" data-open-idea-search="1">🧭 Suggest me a trip</button>
+        <p class="settings-hint" style="text-align:center;">Say where you're starting and how far you'll go.</p>
+      `;
 
       // Not everything has a name you'd type. Somewhere you drove past, a
       // stretch of coast, the far side of a loch - point at it instead.
@@ -5925,6 +6942,9 @@
   function wireSearchOverlay() {
     searchOverlay.querySelectorAll("[data-search-close]").forEach((b) =>
       b.addEventListener("click", dismissSearchOverlay)
+    );
+    searchOverlay.querySelectorAll("[data-open-idea-search]").forEach((b) =>
+      b.addEventListener("click", () => openTripIdea())
     );
 
     const form = document.getElementById("pickSearchForm");
@@ -7161,8 +8181,10 @@
             <li><b>Share from Google Maps</b> — tap Share on a place, pick this app</li>
             <li><b>Search</b> — by name, or describe what you want</li>
             <li><b>Explore around a place</b> — cafés, museums, playgrounds nearby</li>
+            <li><b>Have a trip suggested</b> — say roughly where and how far, get whole routes back</li>
           </ul>
           <button class="modal-btn modal-btn-primary" data-open-search="1" style="width:100%;margin-top:12px;">🔍 Search for a place</button>
+          <button class="modal-btn" data-open-idea="1" style="width:100%;margin-top:8px;">🧭 Suggest a trip</button>
           <p class="settings-hint">Tapping ♡ on a guide suggestion below saves it here too.</p>
         </div>
       `;
@@ -7293,6 +8315,9 @@
     }
     view.querySelectorAll("[data-open-search]").forEach((b) =>
       b.addEventListener("click", () => openSearchOverlay(""))
+    );
+    view.querySelectorAll("[data-open-idea]").forEach((b) =>
+      b.addEventListener("click", () => openTripIdea())
     );
 
     // No per-pick maps in the list any more: the single map lives in the
@@ -7898,6 +8923,12 @@
   // first: close what's open, then walk back through the tabs you came
   // through, and only ask about leaving when there is genuinely nothing left.
   function handleBackIntent() {
+    // Ahead of the search overlay because the trip planner can be opened from
+    // it: back undoes the last thing that opened, not the first.
+    if (ideaOverlay.classList.contains("open")) {
+      closeIdea();
+      return true;
+    }
     if (searchOverlay.classList.contains("open")) {
       closeSearchOverlay();
       return true;
