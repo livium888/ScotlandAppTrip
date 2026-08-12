@@ -363,7 +363,7 @@
   // A search you can't see the question behind is one you can't correct.
   let lastAiPrompt = "";
 
-  async function callGemini(key, prompt, { grounded = false } = {}) {
+  async function callGemini(key, prompt, { grounded = false, json = false, maxTokens = 0 } = {}) {
     lastAiPrompt = prompt;
     const model = await resolveGeminiModel(key);
     // Discovered names already include the "models/" prefix.
@@ -372,7 +372,15 @@
       contents: [{ parts: [{ text: prompt }] }],
       generationConfig: { temperature: 0.2 },
     };
-    if (grounded) body.tools = [{ google_search: {} }];
+    // A whole trip is a lot of JSON, and the default output cap cuts it off
+    // mid-object - which arrives as a reply that cannot be parsed and reads,
+    // from the outside, exactly like "it didn't work".
+    if (maxTokens) body.generationConfig.maxOutputTokens = maxTokens;
+    // Asking the API for JSON rather than asking the model nicely in the
+    // prompt. Not combined with grounding: search results come back as prose
+    // with citations, and the two settings fight.
+    if (json) body.generationConfig.responseMimeType = "application/json";
+    else if (grounded) body.tools = [{ google_search: {} }];
 
     const res = await fetch(`${GEMINI_BASE}/${path}:generateContent?key=${encodeURIComponent(key)}`, {
       method: "POST",
@@ -478,56 +486,28 @@
     const parsed = extractJson(text);
     if (!Array.isArray(parsed) || !parsed.length) throw new Error("gemini returned no usable places");
 
-    // Resolve each suggestion against OSM so the map pin and address are real
-    // rather than model-generated.
-    const resolved = await Promise.all(
-      parsed.slice(0, 5).map(async (item) => {
-        if (!item || !item.name) return null;
-        let geo = null;
-        try {
-          // Postcode first when there is one: "The Bakehouse, PH16 5AN" has
-          // exactly one answer, where "The Bakehouse, Newport" has thirty.
-          geo = await geocodePlace(item.name, postcodeIn(item.postcode) || item.area || null, anchor);
-        } catch (e) {
-          geo = null;
-        }
-        // The geocode landed outside the area. Two different things look
-        // identical here, and the model's own words are the only evidence
-        // available to tell them apart:
-        //
-        //   "The Blue Door, Pitlochry" -> the model says it is local, and OSM
-        //      simply has not mapped it. The suggestion is probably right and
-        //      the coordinate is certainly wrong, so the place is kept without
-        //      a position: still saveable, readable, and placeable on a day,
-        //      just not drawn somewhere it is not.
-        //
-        //   "Far Bakery, Sennen" -> the model has named somewhere it was told
-        //      not to. That is a wrong answer, not an unmapped one, and it is
-        //      dropped and counted so the screen can say so.
-        let outsideAnchor = false;
-        if (geo && anchor && !withinAnchor(anchor, geo.lat, geo.lon, ANCHOR_GRACE)) {
-          outsideAnchor = !claimsToBeNear(item.area, anchor);
-          geo = null;
-        }
-        return {
-          name: item.name,
-          displayName: geo && geo.address ? geo.address : item.area || "",
-          lat: geo ? geo.lat : null,
-          lon: geo ? geo.lon : null,
-          type: geo ? geo.category : null,
-          category: geo ? geo.category : null,
-          website: geo ? geo.website : null,
-          phone: geo ? geo.phone : null,
-          openingHours: geo ? geo.openingHours : null,
-          address: geo ? geo.address : null,
-          description: item.why || "",
-          aiSuggested: true,
-          outsideAnchor,
-          sources,
-        };
-      })
-    );
-    return resolved.filter(Boolean);
+    // Names come back in one response; positions take a lookup each, against a
+    // service that asks for about a request a second. Waiting for all of them
+    // before showing anything meant a blank screen for two seconds while the
+    // answer sat in memory, which is most of why this felt slow and broken.
+    //
+    // So the list is returned as soon as the model has spoken, and the
+    // positions are filled in behind it - see placeSearchResults.
+    return parsed
+      .slice(0, 5)
+      .filter((item) => item && item.name)
+      .map((item) => ({
+        name: String(item.name),
+        area: item.area || "",
+        postcode: postcodeIn(item.postcode) || "",
+        displayName: "",
+        lat: null,
+        lon: null,
+        description: item.why || "",
+        aiSuggested: true,
+        needsPlacing: true,
+        sources,
+      }));
   }
 
   // ---------- Boards ----------
@@ -1126,11 +1106,18 @@
     queries.push(scopedQuery(name));
     queries.push(name);
 
-    // Tried bounded first when a search is anchored, then unbounded: a place
-    // genuinely outside the area should still be findable, but it must not win
-    // against one inside it.
-    const box = anchor ? `&bounded=1&viewbox=${encodeURIComponent(anchorViewbox(anchor))}` : "";
-    const attempts = box ? queries.map((q) => ({ q, box })).concat(queries.map((q) => ({ q, box: "" }))) : queries.map((q) => ({ q, box: "" }));
+    // Every attempt is a request to a service that asks for about one a
+    // second, so the number of them is the speed of the whole feature. This
+    // was six per name - three queries, each tried bounded and then unbounded
+    // - which for five results is thirty requests before anything appears.
+    //
+    // The unbounded half was pure waste when anchored: every caller refuses a
+    // coordinate outside the area anyway, so the answers it went to fetch were
+    // thrown away on arrival. Bounded only, with the box widened by the same
+    // grace the refusal uses, and the redundant region-scoped query dropped
+    // when there is already a hint to go on.
+    const box = anchor ? `&bounded=1&viewbox=${encodeURIComponent(anchorViewbox(anchor, ANCHOR_GRACE))}` : "";
+    const attempts = (anchor ? (cityHint ? [queries[0], queries[2]] : [queries[2]]) : queries).map((q) => ({ q, box }));
 
     for (const attempt of attempts) {
       const url =
@@ -5623,17 +5610,45 @@
   // untrusted text: counts are clamped, types coerced, and anything without a
   // name is dropped rather than rendered as an empty row.
   function normaliseIdeaOptions(raw) {
-    const list = Array.isArray(raw) ? raw : raw && Array.isArray(raw.options) ? raw.options : [];
+    // Models are asked for {"options":[...]} and answer with that most of the
+    // time. The rest of the time they answer with {"trips":[...]}, or an array
+    // on its own, or the same thing under whatever key seemed natural - and
+    // every one of those used to come out as "no trip", which is
+    // indistinguishable from the request having failed.
+    const listFrom = (v) => {
+      if (Array.isArray(v)) return v;
+      if (!v || typeof v !== "object") return [];
+      const named = ["options", "trips", "itineraries", "routes", "suggestions", "plans"];
+      for (const key of named) if (Array.isArray(v[key])) return v[key];
+      // Nothing recognised by name: the only array of objects in there is
+      // overwhelmingly likely to be it.
+      const arrays = Object.keys(v)
+        .map((k) => v[k])
+        .filter((x) => Array.isArray(x) && x.length && typeof x[0] === "object");
+      return arrays.length === 1 ? arrays[0] : [];
+    };
+    const stopsFrom = (d) => {
+      if (Array.isArray(d)) return d;
+      if (!d || typeof d !== "object") return [];
+      for (const key of ["stops", "places", "items", "activities"]) if (Array.isArray(d[key])) return d[key];
+      return [];
+    };
+    const list = listFrom(raw);
     return list
       .slice(0, 4)
       .map((o, oi) => {
         if (!o || typeof o !== "object") return null;
-        const days = (Array.isArray(o.days) ? o.days : []).slice(0, 10).map((d, di) => ({
-          label: String((d && d.label) || `Day ${di + 1}`).slice(0, 40),
-          stops: (Array.isArray(d && d.stops) ? d.stops : [])
+        const rawDays = Array.isArray(o.days) ? o.days : Array.isArray(o.itinerary) ? o.itinerary : [];
+        const days = rawDays.slice(0, 10).map((d, di) => ({
+          label: String((d && (d.label || d.day || d.title)) || `Day ${di + 1}`).slice(0, 40),
+          stops: stopsFrom(d)
             .slice(0, 10)
+            // A stop given as a bare name is still a stop.
+            .map((s) => (typeof s === "string" ? { name: s } : s))
             .map((s) => {
-              if (!s || !s.name) return null;
+              if (!s) return null;
+              if (!s.name && s.place) s = Object.assign({}, s, { name: s.place });
+              if (!s.name) return null;
               return {
                 name: String(s.name).slice(0, 120),
                 kind: String(s.kind || "stop").toLowerCase(),
@@ -5659,8 +5674,8 @@
         }));
         if (!days.some((d) => d.stops.length)) return null;
         return {
-          title: String(o.title || `Option ${oi + 1}`).slice(0, 80),
-          summary: String(o.summary || "").slice(0, 400),
+          title: String(o.title || o.name || `Option ${oi + 1}`).slice(0, 80),
+          summary: String(o.summary || o.description || "").slice(0, 400),
           miles: Number(o.miles) > 0 ? Math.round(Number(o.miles)) : null,
           measured: !!o.measured,
           days: days.filter((d) => d.stops.length),
@@ -6488,10 +6503,27 @@
     renderIdea();
 
     try {
-      const { text } = await callGemini(key, ideaPrompt(), { grounded: true });
-      if (generation !== ideaGeneration) return;
-      const options = normaliseIdeaOptions(extractJson(text));
-      if (!options.length) throw new Error("The model didn't send back a trip that could be read.");
+      // Grounded first: checking the places exist is worth a lot. But grounded
+      // replies come back as prose with citations often enough that asking for
+      // a whole trip's JSON that way fails outright - which is what "it just
+      // doesn't return anything" was. So a second attempt goes without search
+      // and with the API's own JSON mode, which cannot answer in prose.
+      let options = [];
+      let raw = "";
+      for (const attempt of [{ grounded: true, maxTokens: 8192 }, { json: true, maxTokens: 8192 }]) {
+        const { text } = await callGemini(key, ideaPrompt(), attempt);
+        if (generation !== ideaGeneration) return;
+        raw = text;
+        options = normaliseIdeaOptions(extractJson(text));
+        if (options.length) break;
+      }
+      if (!options.length) {
+        throw new Error(
+          `The model answered, but not with a trip that could be read.${
+            raw ? ` It said: "${raw.trim().slice(0, 160)}…"` : " It sent nothing at all."
+          }`
+        );
+      }
       tripIdea.options = options;
       // All closed: the first question is which route, and one opened by
       // default puts the other two below a screen and a half of stops, where
@@ -6533,7 +6565,19 @@
     const who = (b.who || settings.travellers || "").trim();
     if (who) facts.push(`Travellers: ${who}`);
     if (settings.preferences.trim()) facts.push(`What matters to us: ${settings.preferences.trim()}`);
-    if (b.interests.length) facts.push(`Interested in: ${b.interests.map((k) => categoryPrompt(k)).join("; ")}`);
+    if (b.interests.length) {
+      // The category's own long phrasing is right for a single-category search
+      // and wrong here: twelve of them turned the request into pages of
+      // instruction, and what came back was truncated or nothing at all.
+      const wanted = b.interests
+        .slice(0, 6)
+        .map((k) => {
+          const cat = findCategory(k);
+          return cat ? cat.label.toLowerCase() : k;
+        })
+        .filter(Boolean);
+      if (wanted.length) facts.push(`Interested in: ${wanted.join(", ")}`);
+    }
     const pace = IDEA_PACE.find((p) => p.key === b.pace);
     if (pace) facts.push(`Pace: ${pace.label} - ${pace.line}`);
     if (b.extra.trim()) facts.push(`Also, specifically: ${b.extra.trim()}`);
@@ -6866,7 +6910,18 @@
       const results = seed
         ? [seed].concat(found.filter((r) => normalisedName(r.name) !== normalisedName(seed.name)))
         : found;
-      pickSearch = { query: q, status: "done", results, guidance: extra, anchor, outside: lastSearchOutside };
+      pickSearch = {
+        query: q,
+        status: "done",
+        results,
+        guidance: extra,
+        anchor,
+        outside: lastSearchOutside,
+        placing: results.some((r) => r.needsPlacing),
+      };
+      renderSearchOverlay();
+      placeSearchResults(generation, anchor);
+      return;
     } catch (e) {
       if (generation !== searchGeneration) return;
       pickSearch = { query: q, status: seed ? "done" : "error", results: seed ? [seed] : [], guidance: extra, anchor: searchAnchor };
@@ -6874,7 +6929,60 @@
     renderSearchOverlay();
   }
 
+  // Fills in where each result actually is, one at a time, updating the screen
+  // as each lands. Sequential on purpose: five parallel lookups is a burst at
+  // a free service that asks for one a second, and being rate-limited is
+  // slower than going in order.
+  async function placeSearchResults(generation, anchor) {
+    const list = pickSearch.results || [];
+    for (const r of list) {
+      if (generation !== searchGeneration) return;
+      if (!r.needsPlacing) continue;
+      let geo = null;
+      try {
+        geo = await geocodePlace(r.name, r.postcode || r.area || null, anchor);
+      } catch (e) {
+        geo = null;
+      }
+      if (generation !== searchGeneration) return;
+      r.needsPlacing = false;
+
+      if (geo && anchor && !withinAnchor(anchor, geo.lat, geo.lon, ANCHOR_GRACE)) {
+        // Same rule as everywhere else: a place the model itself put somewhere
+        // else is a wrong answer and goes; one it called local is probably
+        // unmapped, and keeps its name but not that coordinate.
+        if (!claimsToBeNear(r.area, anchor)) {
+          pickSearch.results = pickSearch.results.filter((x) => x !== r);
+          pickSearch.outside = (pickSearch.outside || 0) + 1;
+        }
+        geo = null;
+      }
+      if (geo) {
+        r.lat = geo.lat;
+        r.lon = geo.lon;
+        r.displayName = geo.address || r.area || "";
+        r.address = geo.address || "";
+        r.type = r.type || geo.category;
+        r.category = r.category || geo.category;
+        r.website = r.website || geo.website;
+        r.phone = r.phone || geo.phone;
+        r.openingHours = r.openingHours || geo.openingHours;
+      }
+      const active = document.activeElement;
+      if (!(active && searchOverlay.contains(active) && active.tagName === "INPUT")) renderSearchOverlay();
+    }
+    if (generation === searchGeneration) {
+      pickSearch.placing = false;
+      renderSearchOverlay();
+    }
+  }
+
+  let searchScroll = 0;
+  let searchScrollId = "";
+
   function renderSearchOverlay() {
+    const previous = searchOverlay.querySelector(".search-body");
+    if (previous) searchScroll = previous.scrollTop;
     const recents = loadRecentSearches();
     const results = pickSearch.results || [];
     const filtered =
@@ -7026,6 +7134,9 @@
         `;
       });
       body += `</div>`;
+      if (pickSearch.placing) {
+        body += `<p class="settings-hint search-placing">Finding them on the map…</p>`;
+      }
       if (pickSearch.outside) {
         body += `
           <p class="settings-hint search-outside">
@@ -7082,6 +7193,12 @@
       <div class="search-body">${body}</div>
     `;
     searchOverlay.classList.add("open");
+    // Positions arrive one at a time and each one redraws this screen, so
+    // without keeping the scroll the list would jump back to the top under
+    // your thumb five times in a row.
+    const scroller = searchOverlay.querySelector(".search-body");
+    if (scroller && searchScrollId === `${pickSearch.query}|${pickSearch.status}`) scroller.scrollTop = searchScroll;
+    searchScrollId = `${pickSearch.query}|${pickSearch.status}`;
     wireSearchOverlay();
     if (document.getElementById("pickSearchMap")) {
       destroyMiniMaps();
@@ -7728,8 +7845,8 @@
     };
   }
 
-  function anchorViewbox(anchor) {
-    const b = anchorBox(anchor);
+  function anchorViewbox(anchor, grace) {
+    const b = anchorBox(grace && grace !== 1 ? Object.assign({}, anchor, { miles: anchorMiles(anchor) * grace }) : anchor);
     return `${b.west},${b.north},${b.east},${b.south}`;
   }
 

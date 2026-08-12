@@ -343,8 +343,11 @@ check('and the distance, as a rule not a hint',
   /Maximum distance from the start: 100 miles/.test(prompt) && /Nothing further than 100 miles/.test(prompt));
 check('and how long for', /Time available: 2 days/.test(prompt));
 check('and who is going', /4-year-old who walks/.test(prompt));
-check('and what you are after, in the category\'s own words',
-  /castles, ruins and historic buildings/.test(prompt), prompt.slice(0, 400));
+// Named plainly rather than in each category's long phrasing: twelve of those
+// turned the request into pages of instruction, and what came back was
+// truncated or nothing at all.
+check('and what you are after, in a few words rather than a few paragraphs',
+  /Interested in: historic sites, easy walks/.test(prompt), prompt.slice(0, 400));
 check('and your own words, as written', /no motorways/.test(prompt));
 check('it asks for several whole routes, not a list of places',
   /genuinely different options/.test(prompt) && /Order the stops the way you would actually drive them/.test(prompt));
@@ -597,6 +600,113 @@ check('every tap target is big enough to hit', await page.evaluate(() => {
   .filter((b) => b.offsetParent !== null)
   .map((b) => ({ t: b.className || b.id, h: Math.round(b.getBoundingClientRect().height) }))
   .filter((b) => b.h < 32))));
+
+// ---------- When the model answers awkwardly ----------
+// Reported as trip suggestions simply not returning anything. Three separate
+// causes, all of which look identical from the outside.
+
+// 1. A grounded reply is prose with citations round the JSON, or no JSON at
+//    all. The second attempt drops search and uses the API's own JSON mode.
+let attempts = [];
+await page.unroute(/generativelanguage\.googleapis\.com/);
+await page.route(/generativelanguage\.googleapis\.com/, (route) => {
+  if (/\/models\?/.test(route.request().url())) {
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+      models: [{ name: 'models/gemini-3.5-flash-lite', supportedGenerationMethods: ['generateContent'] }] }) });
+  }
+  const body = JSON.parse(route.request().postData() || '{}');
+  attempts.push({
+    grounded: !!body.tools,
+    json: (body.generationConfig || {}).responseMimeType || '',
+    maxTokens: (body.generationConfig || {}).maxOutputTokens || 0,
+  });
+  const text = attempts.length === 1
+    ? 'Here are some ideas for your trip! I looked at several sources [1][2] and would suggest heading north.'
+    : JSON.stringify(TRIP);
+  return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+    candidates: [{ content: { parts: [{ text }] } }] }) });
+});
+
+await seed();
+await page.evaluate(() => document.querySelector('[data-view="itinerary"]').click());
+await page.waitForTimeout(400);
+await page.evaluate(() => document.getElementById('tripIdeaBtn').click());
+await page.waitForSelector('#ideaOverlay.open', { timeout: 4000 });
+await chip('Edinburgh');
+await page.waitForTimeout(200);
+await goToStep('review');
+await next();
+await page.waitForSelector('.idea-option', { timeout: 10000 });
+check('a reply that is prose rather than JSON is retried, not given up on',
+  attempts.length === 2, JSON.stringify(attempts));
+check('the first attempt uses search, the second uses JSON mode',
+  attempts[0].grounded && /json/.test(attempts[1].json), JSON.stringify(attempts));
+check('and the trip arrives', await page.evaluate(() =>
+  /Up the A9/.test(document.getElementById('ideaOverlay').textContent)));
+check('and asks for enough room that a whole trip is not cut off mid-object',
+  attempts.every((a) => a.maxTokens >= 4096), JSON.stringify(attempts));
+
+// 2. The model answers with the right thing under a different key.
+await page.unroute(/generativelanguage\.googleapis\.com/);
+await page.route(/generativelanguage\.googleapis\.com/, (route) => {
+  if (/\/models\?/.test(route.request().url())) {
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+      models: [{ name: 'models/gemini-3.5-flash-lite', supportedGenerationMethods: ['generateContent'] }] }) });
+  }
+  // "trips" not "options"; "itinerary" not "days"; "places" not "stops"; and
+  // one stop given as a bare string.
+  return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+    candidates: [{ content: { parts: [{ text: JSON.stringify({ trips: [{
+      name: 'The scenic way', description: 'Slower, prettier.', miles: 60,
+      itinerary: [{ day: 'Day 1', places: [
+        { place: 'Dunkeld Cathedral', kind: 'see', area: 'Dunkeld', why: 'Ruins by the river.' },
+        'The Taybank',
+      ] }],
+    }] }) }] } }] }) });
+});
+await seed();
+await page.evaluate(() => document.querySelector('[data-view="itinerary"]').click());
+await page.waitForTimeout(400);
+await page.evaluate(() => document.getElementById('tripIdeaBtn').click());
+await page.waitForSelector('#ideaOverlay.open', { timeout: 4000 });
+await chip('Edinburgh');
+await page.waitForTimeout(200);
+await goToStep('review');
+await next();
+await page.waitForSelector('.idea-option', { timeout: 10000 });
+check('a trip under a different key is still a trip', await page.evaluate(() =>
+  /The scenic way/.test(document.getElementById('ideaOverlay').textContent)),
+  await page.evaluate(() => document.getElementById('ideaOverlay').textContent.slice(0, 200)));
+await page.evaluate(() => document.querySelectorAll('[data-idea-option]')[0].click());
+await page.waitForTimeout(600);
+check('including a stop written as a bare name', await page.evaluate(() =>
+  /Taybank/.test(document.getElementById('ideaOverlay').textContent)));
+
+// 3. When it really cannot be read, say what came back rather than nothing.
+await page.unroute(/generativelanguage\.googleapis\.com/);
+await page.route(/generativelanguage\.googleapis\.com/, (route) => {
+  if (/\/models\?/.test(route.request().url())) {
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+      models: [{ name: 'models/gemini-3.5-flash-lite', supportedGenerationMethods: ['generateContent'] }] }) });
+  }
+  return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+    candidates: [{ content: { parts: [{ text: 'I am sorry, I cannot help with that request.' }] } }] }) });
+});
+await seed();
+await page.evaluate(() => document.querySelector('[data-view="itinerary"]').click());
+await page.waitForTimeout(400);
+await page.evaluate(() => document.getElementById('tripIdeaBtn').click());
+await page.waitForSelector('#ideaOverlay.open', { timeout: 4000 });
+await chip('Edinburgh');
+await page.waitForTimeout(200);
+await goToStep('review');
+await next();
+await page.waitForTimeout(3000);
+check('a refusal is reported with what it actually said', await page.evaluate(() =>
+  /cannot help with that request/.test(document.getElementById('ideaOverlay').textContent)),
+  await page.evaluate(() => document.getElementById('ideaOverlay').textContent.slice(0, 260)));
+check('and offers a way on rather than a dead end', await page.evaluate(() =>
+  !!document.getElementById('ideaRetry') && !!document.querySelector('[data-idea-edit]')));
 
 await browser.close();
 console.log(failures === 0 ? '\nALL TESTS PASSED' : `\n${failures} FAILED`);
