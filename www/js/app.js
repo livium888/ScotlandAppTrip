@@ -491,6 +491,24 @@
         } catch (e) {
           geo = null;
         }
+        // The geocode landed outside the area. Two different things look
+        // identical here, and the model's own words are the only evidence
+        // available to tell them apart:
+        //
+        //   "The Blue Door, Pitlochry" -> the model says it is local, and OSM
+        //      simply has not mapped it. The suggestion is probably right and
+        //      the coordinate is certainly wrong, so the place is kept without
+        //      a position: still saveable, readable, and placeable on a day,
+        //      just not drawn somewhere it is not.
+        //
+        //   "Far Bakery, Sennen" -> the model has named somewhere it was told
+        //      not to. That is a wrong answer, not an unmapped one, and it is
+        //      dropped and counted so the screen can say so.
+        let outsideAnchor = false;
+        if (geo && anchor && !withinAnchor(anchor, geo.lat, geo.lon, ANCHOR_GRACE)) {
+          outsideAnchor = !claimsToBeNear(item.area, anchor);
+          geo = null;
+        }
         return {
           name: item.name,
           displayName: geo && geo.address ? geo.address : item.area || "",
@@ -504,6 +522,7 @@
           address: geo ? geo.address : null,
           description: item.why || "",
           aiSuggested: true,
+          outsideAnchor,
           sources,
         };
       })
@@ -992,7 +1011,9 @@
     const pick = picks.find((p) => p.id === id);
     if (!pick || pick.lat != null) return;
     try {
-      const candidates = await geocodeCandidates(pick.name, pick.city);
+      const candidates = (await geocodeCandidates(pick.name, pick.city, loadAnchor())).filter((c) =>
+        withinAnchor(loadAnchor(), c.lat, c.lon, ANCHOR_GRACE)
+      );
       const geo = candidates.length ? candidates[0] : null;
       picks = loadPicks();
       const fresh = picks.find((p) => p.id === id);
@@ -1321,7 +1342,9 @@
     if (view.dataset.activeTab === "picks") renderPicks();
 
     const [candidates, wiki] = await Promise.all([
-      geocodeCandidates(pick.name, pick.city).catch(() => []),
+      geocodeCandidates(pick.name, pick.city, loadAnchor())
+        .then((list) => list.filter((c) => withinAnchor(loadAnchor(), c.lat, c.lon, ANCHOR_GRACE)))
+        .catch(() => []),
       wikiEnrich(pick.name).catch(() => null),
     ]);
     const geo = candidates.length ? candidates[0] : null;
@@ -4517,7 +4540,12 @@
       if (!item || !item.name) continue;
       let geo = null;
       try {
-        geo = await geocodePlace(item.name, item.area || centre.name);
+        geo = await geocodePlace(item.name, item.area || centre.name, {
+          name: centre.name,
+          lat: centre.lat,
+          lon: centre.lon,
+          miles: toMiles(radiusMetres / 1000),
+        });
       } catch (e) {
         geo = null;
       }
@@ -6404,7 +6432,11 @@
       if (stop.lat == null) {
         let geo = null;
         try {
-          geo = await geocodePlace(stop.name, stop.area || null);
+          geo = await geocodePlace(
+            stop.name,
+            stop.area || null,
+            start ? { name: tripIdea.brief.from, lat: start.lat, lon: start.lon, miles: tripIdea.brief.miles || 150 } : null
+          );
         } catch (e) {
           geo = null;
         }
@@ -6624,7 +6656,7 @@
         try {
           const pos = await currentPosition();
           const place = await reverseGeocode(pos.lat, pos.lon);
-          tripIdea.brief.from = (place && (place.name || place.address)) || `${pos.lat.toFixed(3)}, ${pos.lon.toFixed(3)}`;
+          tripIdea.brief.from = place || `${pos.lat.toFixed(3)}, ${pos.lon.toFixed(3)}`;
           ideaStartGeo = { query: tripIdea.brief.from, lat: pos.lat, lon: pos.lon };
           saveIdea();
         } catch (e) {
@@ -7095,7 +7127,7 @@
     if (needsEnrich) {
       Promise.all([
         r.description && r.website ? null : wikiEnrich(r.name).catch(() => null),
-        r.lat == null ? geocodePlace(r.name, r.city || null).catch(() => null) : null,
+        r.lat == null ? geocodeWithinAnchor(r.name, r.postcode || r.city || null) : null,
       ])
         .then(([wiki, geo]) => {
           if (wiki) {
@@ -7300,9 +7332,9 @@
                 : ""
             }
 
-            <label class="settings-label">Or a town or postcode</label>
+            <label class="settings-label">Or a town, postcode or coordinates</label>
             <form class="search-bar" id="anchorForm">
-              <input type="text" id="anchorInput" placeholder="e.g. Pitlochry, or PH16"
+              <input type="text" id="anchorInput" placeholder="Pitlochry · PH16 · 56.7028, -3.7317"
                      autocomplete="off" value="${esc(current && !current.fromPick ? current.name : "")}" />
               <button type="submit" aria-label="Use this">Set</button>
             </form>
@@ -7310,8 +7342,9 @@
 
             <div class="settings-btn-row" style="margin-top:12px;">
               <button class="modal-btn" id="anchorHere">📍 Where I am now</button>
-              <button class="modal-btn" id="anchorAnywhere">🌍 Anywhere</button>
+              <button class="modal-btn" id="anchorMap">🗺 Point at it</button>
             </div>
+            <button class="modal-btn" id="anchorAnywhere" style="width:100%;margin-top:8px;">🌍 Anywhere</button>
           </div>
         </div>
       </div>
@@ -7375,7 +7408,7 @@
           const pos = await currentPosition();
           const place = await reverseGeocode(pos.lat, pos.lon).catch(() => null);
           apply({
-            name: (place && (place.name || place.address)) || "where you are",
+            name: place || "where you are",
             lat: pos.lat,
             lon: pos.lon,
             miles,
@@ -7385,6 +7418,27 @@
         }
       });
     }
+    // Pointing at a spot is the honest way to give a coordinate, and it is the
+    // reason the box now parses them at all: someone reaching for coordinates
+    // has a place in mind that has no name worth typing.
+    const onMap = document.getElementById("anchorMap");
+    if (onMap) {
+      onMap.addEventListener("click", () => {
+        closePlaceModal();
+        openMapPicker(
+          // The picker has already named the point it is centred on.
+          (point) => apply({
+            name: point.name || formatLatLon(point.lat, point.lon),
+            lat: point.lat,
+            lon: point.lon,
+            miles,
+            fromPoint: true,
+          }),
+          { centre: current ? { lat: current.lat, lon: current.lon } : null, title: "Where should I look?" }
+        );
+      });
+    }
+
     const anywhere = document.getElementById("anchorAnywhere");
     if (anywhere) anywhere.addEventListener("click", () => apply(null));
   }
@@ -7684,16 +7738,93 @@
     return toMiles(haversineKm(anchor.lat, anchor.lon, lat, lon)) <= anchorMiles(anchor) * (grace || 1);
   }
 
+  // The rule that closes the whole class of these bugs: a coordinate outside
+  // the area being searched is never assigned to anything.
+  //
+  // Bounding the search was only half of it. Every lookup that ran *after* the
+  // search - the preview map, the save, the background enrich - called the
+  // geocoder with no anchor at all, so a result that arrived without
+  // coordinates (an AI suggestion OSM has never heard of) got placed by an
+  // unbounded name lookup. That is how a correct-looking result turned into a
+  // pin in Oxford the moment you opened or saved it.
+  //
+  // Refusing is deliberate: no coordinates is a place you can still save, read
+  // and put on a day. Wrong coordinates are a map that lies, a distance that
+  // lies, and a folder chosen from both.
+  async function geocodeWithinAnchor(name, hint, anchor) {
+    const bound = anchor === undefined ? loadAnchor() : anchor;
+    const geo = await geocodePlace(name, hint, bound).catch(() => null);
+    if (!geo) return null;
+    if (bound && !withinAnchor(bound, geo.lat, geo.lon, ANCHOR_GRACE)) return null;
+    return geo;
+  }
+
+  // Whether a result's own stated area agrees with where we are looking. Not
+  // a geocode - just the two names - because this only has to separate "the
+  // model thinks this is local" from "the model has named somewhere else".
+  function claimsToBeNear(area, anchor) {
+    if (!anchor || !area) return false;
+    const flat = (s) => String(s).toLowerCase().replace(/[^a-z ]+/g, "").trim();
+    const a = flat(area);
+    const b = flat(anchor.name);
+    if (!a || !b) return false;
+    return a.includes(b) || b.includes(a);
+  }
+
   function describeAnchor(anchor) {
     if (!anchor) return "Anywhere";
     return `${anchor.name} · ${anchorMiles(anchor)} miles`;
   }
 
-  // Turning what someone typed into an anchor: a postcode if it is one - the
-  // sharpest thing anyone can give us - otherwise a place name.
+  // A pair of decimal degrees, however it was pasted: "56.7028, -3.7317",
+  // "56.7028 -3.7317", or with N/S/E/W after each number.
+  //
+  // This exists because a coordinate typed into the box was being handed to a
+  // *text search*, which is not what a coordinate is for. Nominatim answers
+  // "56.7028, -3.7317" with whatever text it can match - and it matched
+  // something in Oxford. So the anchor itself, the thing meant to keep results
+  // local, was being set to the wrong end of the country before a single
+  // search ran.
+  const LATLON_RE =
+    /^\s*(-?\d{1,3}(?:\.\d+)?)\s*([NnSs])?\s*[, ]\s*(-?\d{1,3}(?:\.\d+)?)\s*([EeWw])?\s*$/;
+
+  function parseLatLon(text) {
+    const m = String(text || "").match(LATLON_RE);
+    if (!m) return null;
+    let lat = Number(m[1]);
+    let lon = Number(m[3]);
+    if (/[Ss]/.test(m[2] || "")) lat = -lat;
+    if (/[Ww]/.test(m[4] || "")) lon = -lon;
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+    if (Math.abs(lat) > 90 || Math.abs(lon) > 180) return null;
+    return { lat, lon };
+  }
+
+  function formatLatLon(lat, lon) {
+    return `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+  }
+
+  // Turning what someone typed into an anchor: coordinates used as
+  // coordinates, a postcode if it is one - the sharpest thing anyone can give
+  // us - otherwise a place name.
   async function anchorFromText(text, miles) {
     const raw = String(text || "").trim();
     if (!raw) return null;
+
+    const point = parseLatLon(raw);
+    if (point) {
+      // Named from the map rather than looked up by name, so the label is
+      // right even when nothing is nearby to name it after.
+      const place = await reverseGeocode(point.lat, point.lon).catch(() => null);
+      return {
+        name: place || formatLatLon(point.lat, point.lon),
+        lat: point.lat,
+        lon: point.lon,
+        miles: miles || DEFAULT_ANCHOR_MILES,
+        fromPoint: true,
+      };
+    }
+
     const postcode = postcodeIn(raw);
     const geo = await geocodePlace(postcode || raw, null).catch(() => null);
     if (!geo) return null;
@@ -7710,6 +7841,12 @@
   // outright: typing one is the clearest possible statement of where you mean,
   // and it would be perverse to search somewhere else.
   async function anchorForQuery(query) {
+    const point = parseLatLon(query);
+    if (point) {
+      const stored = loadAnchor();
+      const found = await anchorFromText(query, stored ? anchorMiles(stored) : DEFAULT_ANCHOR_MILES);
+      if (found) return found;
+    }
     const postcode = postcodeIn(query);
     if (postcode) {
       const stored = loadAnchor();
@@ -7754,7 +7891,7 @@
     // screen would be empty with a footnote - and the bounded-first lookup has
     // already put the local one on top when there is one.
     const results = found.filter((r) => {
-      if (withinAnchor(anchor, r.lat, r.lon, ANCHOR_GRACE)) return true;
+      if (!r.outsideAnchor && withinAnchor(anchor, r.lat, r.lon, ANCHOR_GRACE)) return true;
       lastSearchOutside++;
       return false;
     });
@@ -8759,7 +8896,9 @@
     const [wiki, geoCandidates] = await Promise.all([
       wikiEnrich(candidate.name).catch(() => null),
       needsGeo
-        ? geocodeCandidates(candidate.name, geographicHint(candidate)).catch(() => [])
+        ? geocodeCandidates(candidate.name, geographicHint(candidate), loadAnchor())
+            .then((list) => list.filter((c) => withinAnchor(loadAnchor(), c.lat, c.lon, ANCHOR_GRACE)))
+            .catch(() => [])
         : Promise.resolve([]),
     ]);
     const geo = geoCandidates.length ? geoCandidates[0] : null;

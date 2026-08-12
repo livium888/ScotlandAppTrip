@@ -49,6 +49,7 @@ const SUITES = [
   "test_review.mjs",
   "test_tripidea.mjs",
   "test_anchor.mjs",
+  "test_searchflow.mjs",
 ];
 
 const MIME = {
