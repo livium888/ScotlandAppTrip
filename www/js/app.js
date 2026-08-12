@@ -8,10 +8,21 @@
 
   const STORAGE_KEY = "scotland-trip-packing-v1";
 
+  // Escapes for BOTH text content and attribute values, because it is used for
+  // both - about sixty double-quoted attributes are built from place names,
+  // and those names come from search results, the AI and shared links.
+  //
+  // This used to set .textContent and read .innerHTML back, which escapes
+  // & < > and nothing else. In text that is fine. Inside "..." it is not: a
+  // place called `Bar" onmouseover="…` closed the attribute and installed a
+  // live event handler, on a page whose localStorage holds the API key. The
+  // quote characters are the whole point, so they are escaped explicitly
+  // rather than left to an element's serialiser.
+  const ESCAPES = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;", "`": "&#96;" };
+
   function esc(s) {
-    const d = document.createElement("div");
-    d.textContent = s;
-    return d.innerHTML;
+    if (s === null || s === undefined) return "";
+    return String(s).replace(/[&<>"'`]/g, (c) => ESCAPES[c]);
   }
 
   function cityColor(city) {
@@ -2159,7 +2170,6 @@
 
   // A toast with one tappable action, which is how a reversible choice should
   // be offered: act first, correct after, rather than prompt before.
-  let toastActionTimer = null;
   function toastWithAction(message, actionLabel, onAction) {
     let el = document.getElementById("toast");
     if (!el) {
@@ -2170,17 +2180,17 @@
     }
     el.innerHTML = `<span>${esc(message)}</span><button class="toast-action" type="button">${esc(actionLabel)}</button>`;
     el.classList.add("show", "with-action");
-    clearTimeout(toastActionTimer);
+    clearToastTimer();
     const hide = () => {
       el.classList.remove("show", "with-action");
       el.innerHTML = "";
     };
     el.querySelector(".toast-action").addEventListener("click", () => {
-      clearTimeout(toastActionTimer);
+      clearToastTimer();
       hide();
       onAction();
     });
-    toastActionTimer = setTimeout(hide, 5000);
+    toastTimer = setTimeout(hide, 5000);
   }
 
   // Where a place goes is now always your call. The app still works out which
@@ -2276,8 +2286,13 @@
       // questions that no longer apply.
       placeModal.querySelectorAll("[data-label-major]").forEach((b) =>
         b.addEventListener("click", () => {
+          const wasMajor = state.major;
           state.major = b.getAttribute("data-label-major") === "1";
+          // An area is filed under its own name. Changing your mind has to put
+          // the folder back too, or the place lands in a folder named after
+          // itself that was never created and appears nowhere else.
           if (state.major) state.folder = opts.name;
+          else if (wasMajor) state.folder = opts.folder || "Unsorted";
           draw();
         })
       );
@@ -2490,7 +2505,17 @@
     }
   }
 
+  // Both kinds of toast share one element, so they must share one timer. They
+  // did not: a plain toast fired moments before an actionable one left its own
+  // 2.4s timer running, which then hid the element - taking "Undo", "Change"
+  // and "Just a place" off screen less than halfway through the 5s they were
+  // supposed to be offered for.
   let toastTimer = null;
+  function clearToastTimer() {
+    clearTimeout(toastTimer);
+    toastTimer = null;
+  }
+
   function toast(message) {
     let el = document.getElementById("toast");
     if (!el) {
@@ -2500,8 +2525,9 @@
       document.body.appendChild(el);
     }
     el.textContent = message;
+    el.classList.remove("with-action");
     el.classList.add("show");
-    clearTimeout(toastTimer);
+    clearToastTimer();
     toastTimer = setTimeout(() => el.classList.remove("show"), 2400);
   }
 
@@ -2784,14 +2810,31 @@
     savePlan(plan);
   }
 
+  // Moves the item past its neighbour AS DISPLAYED. The screen shows the day in
+  // time order; the array is in the order things were added. Swapping array
+  // neighbours therefore moved a pair that were not next to each other on
+  // screen - or appeared to do nothing at all - as soon as any item had a
+  // time. The reorder is done in display order and the result written back.
   function movePlanItem(dayId, pickId, delta) {
     const plan = loadPlan();
-    const list = planItems(plan, dayId).slice();
-    const i = list.findIndex((it) => it.pickId === pickId);
+    const shown = itemsInDayOrder(planItems(plan, dayId));
+    const i = shown.findIndex((it) => it.pickId === pickId);
     const j = i + delta;
-    if (i < 0 || j < 0 || j >= list.length) return;
-    [list[i], list[j]] = [list[j], list[i]];
-    plan.items[dayId] = list;
+    if (i < 0 || j < 0 || j >= shown.length) return;
+
+    // Two timed stops keep their times; swapping them without swapping the
+    // times would put the list straight back where it was on the next render.
+    const a = shown[i];
+    const b = shown[j];
+    const aTime = a.time;
+    const bTime = b.time;
+    if (timeToMinutes(aTime) != null || timeToMinutes(bTime) != null) {
+      a.time = bTime;
+      b.time = aTime;
+    }
+    shown[i] = b;
+    shown[j] = a;
+    plan.items[dayId] = shown;
     savePlan(plan);
   }
 
@@ -2832,37 +2875,62 @@
     return `${WEEKDAY_TITLES[date.getDay()]} ${date.getDate()} ${MONTH_TITLES[date.getMonth()]}`;
   }
 
+  // Labels carry a day and a month but no year, so a trip running 29 Dec to
+  // 2 Jan parsed every day into the same year: January sorted before December,
+  // the numbering came out backwards, and the forecast lookup asked about
+  // dates ten months in the past. The year is carried along the sequence
+  // instead - when a day lands before the one before it, the trip has crossed
+  // into the next year.
+  function datedDays(days) {
+    let year = new Date().getFullYear();
+    let previous = null;
+    return days.map((d, i) => {
+      let when = dayLabelToDate(d.label, year);
+      if (when && previous && when < previous) {
+        year += 1;
+        when = dayLabelToDate(d.label, year);
+      }
+      if (when) previous = when;
+      return { d, i, when };
+    });
+  }
+
+  // Strips whatever "Day N · " prefix a label carries. Deliberately not
+  // \d+ - a label mid-creation reads "Day ? · Wed 12 Aug", and requiring
+  // digits left the old prefix in place so renumbering produced
+  // "Day 1 · Day ? · Wed 12 Aug", saved and shown exactly like that.
+  function bareDayLabel(label) {
+    return String(label || "").replace(/^Day\s*[^·]*·\s*/i, "");
+  }
+
   // Days are kept in date order, and the "Day N" numbering follows from that
   // rather than from the order they happened to be created - a day added
   // after the fact belongs where it falls, not at the end.
   function renumberDays(plan) {
-    const year = new Date().getFullYear();
-    const dated = plan.days.map((d, i) => ({ d, i, when: dayLabelToDate(d.label, year) }));
+    const dated = datedDays(plan.days);
     dated.sort((a, b) => {
       if (a.when && b.when) return a.when - b.when || a.i - b.i;
       if (a.when) return -1;
       if (b.when) return 1;
       return a.i - b.i;
     });
-    plan.days = dated.map((x, idx) => {
-      const bare = String(x.d.label).replace(/^Day\s*\d+\s*·\s*/i, "");
-      return { id: x.d.id, label: x.when ? `Day ${idx + 1} · ${bare}` : x.d.label };
-    });
+    plan.days = dated.map((x, idx) => ({
+      id: x.d.id,
+      label: x.when ? `Day ${idx + 1} · ${bareDayLabel(x.d.label)}` : x.d.label,
+    }));
     return plan;
   }
 
   // Returns the day for that date, making it if it does not exist yet.
   function ensureDayFor(date) {
     const plan = loadPlan();
-    const year = date.getFullYear();
-    const existing = plan.days.find((d) => {
-      const when = dayLabelToDate(d.label, year);
-      return when && sameDay(when, date);
-    });
-    if (existing) return existing.id;
+    const existing = datedDays(plan.days).find((x) => x.when && sameDay(x.when, date));
+    if (existing) return existing.d.id;
 
     const id = `d${Date.now()}`;
-    plan.days.push({ id, label: `Day ? · ${labelForDate(date)}` });
+    // No placeholder prefix: renumberDays writes the number, and anything it
+    // has to strip first is a chance to get the label wrong.
+    plan.days.push({ id, label: labelForDate(date) });
     renumberDays(plan);
     savePlan(plan);
     return id;
@@ -2881,14 +2949,13 @@
       const plan = loadPlan();
       const today = new Date();
       const tomorrow = new Date(today.getTime() + 24 * 60 * 60 * 1000);
-      const year = today.getFullYear();
 
       const onDay = (dayId) => (plan.items[dayId] || []).some((it) => it.pickId === pickId);
-      const dayFor = (date) =>
-        plan.days.find((d) => {
-          const when = dayLabelToDate(d.label, year);
-          return when && sameDay(when, date);
-        });
+      const dated = datedDays(plan.days);
+      const dayFor = (date) => {
+        const hit = dated.find((x) => x.when && sameDay(x.when, date));
+        return hit && hit.d;
+      };
 
       const quick = [
         { label: "Today", date: today },
@@ -2984,8 +3051,14 @@
 
     const finish = () => {
       closePlaceModal();
-      const days = loadPlan().days.filter((d) => (loadPlan().items[d.id] || []).some((it) => it.pickId === pickId));
+      const plan = loadPlan();
+      const days = plan.days.filter((d) => (plan.items[d.id] || []).some((it) => it.pickId === pickId));
       if (days.length) toast(`${pick.name} — ${days.map((d) => shortDayLabel(d.label)).join(", ")}`);
+      // Today only appears once the trip has a day in it, and tab visibility is
+      // recomputed by showView. The onDone branch redraws the search list
+      // instead, so without this the first day you ever create leaves Today
+      // hidden until you happen to switch tabs.
+      applyBoardTabs();
       if (options.onDone) options.onDone();
       else showView(view.dataset.activeTab || "picks");
     };
@@ -5428,9 +5501,16 @@
     if (view.dataset.activeTab === "picks") renderPicks();
   }
 
+  let searchGeneration = 0;
+
   async function runSearch(query, guidance, seed) {
     const q = (query || "").trim();
     if (!q) return;
+    // Two searches in flight and the slower one wins, whichever was asked
+    // first: type "Pitlochry", change your mind, search "Blair Atholl", and
+    // the Pitlochry results arrive afterwards under the Blair Atholl query.
+    // Only the newest search is allowed to write.
+    const generation = ++searchGeneration;
     rememberSearch(q);
     // Kept across a refine, so "cheap, with a garden" still applies when you
     // narrow the same search again.
@@ -5441,11 +5521,13 @@
     renderSearchOverlay();
     try {
       const found = await searchPlaces(q, extra);
+      if (generation !== searchGeneration) return;
       const results = seed
         ? [seed].concat(found.filter((r) => normalisedName(r.name) !== normalisedName(seed.name)))
         : found;
       pickSearch = { query: q, status: "done", results, guidance: extra };
     } catch (e) {
+      if (generation !== searchGeneration) return;
       pickSearch = { query: q, status: seed ? "done" : "error", results: seed ? [seed] : [], guidance: extra };
     }
     renderSearchOverlay();
@@ -5653,20 +5735,27 @@
   // before the list fills up with things you then have to weed out.
   let previewIndex = null;
   let previewList = null; // whichever list of results is being previewed
-  let previewEnriching = false;
+  // Deliberately per-candidate (r.enriching) rather than one global flag: the
+  // flag meant "some preview is loading", so a second one opened meanwhile was
+  // never fetched and sat on "Looking up details…" for good.
 
   function openCandidatePreview(index, list) {
     previewList = list || pickSearch.results;
     const r = previewList[index];
     if (!r) return;
     previewIndex = index;
-    renderCandidatePreview();
 
     // Search results arrive thin - an AI suggestion may be a name and a
     // sentence. Fill in the rest on opening rather than for every result in
     // the list, which would be dozens of requests for one you'll actually read.
-    if (!r.enriched && !previewEnriching) {
-      previewEnriching = true;
+    const needsEnrich = !r.enriched && !r.enriching;
+    // Flagged before the first render, not after it: the sheet draws
+    // "Looking up details…" from this, so setting it afterwards meant the one
+    // open that really was waiting never said so.
+    if (needsEnrich) r.enriching = true;
+    renderCandidatePreview();
+
+    if (needsEnrich) {
       Promise.all([
         r.description && r.website ? null : wikiEnrich(r.name).catch(() => null),
         r.lat == null ? geocodePlace(r.name, r.city || null).catch(() => null) : null,
@@ -5686,7 +5775,7 @@
           r.enriched = true;
         })
         .finally(() => {
-          previewEnriching = false;
+          r.enriching = false;
           if (previewIndex === index) renderCandidatePreview();
         });
     }
@@ -5728,7 +5817,7 @@
             ${r.description ? `<p class="place-notes" style="margin-top:10px;">${esc(r.description)}</p>` : ""}
             ${facts.map((f) => `<div class="place-fact">${f}</div>`).join("")}
             ${
-              previewEnriching
+              r.enriching
                 ? `<div class="place-fact preview-loading">Looking up details…</div>`
                 : ""
             }
@@ -6921,6 +7010,17 @@
 
   document.getElementById("mapBtn").addEventListener("click", () => openAllMap(defaultMapFilter()));
 
+  // What the geocoder may be told about where a place is. Deliberately NOT the
+  // folder: a folder is the user's own filing - "Unsorted", "Day trips",
+  // anything they typed - and feeding it to a geocoder both wastes the lookup
+  // (", Unsorted" matches nothing) and, when the folder happens to name a real
+  // place, can pull the wrong branch of a chain into view. Only what the
+  // result itself said about its location counts.
+  function geographicHint(candidate) {
+    const from = candidate.displayName || candidate.address || candidate.area || "";
+    return String(from).trim() || null;
+  }
+
   async function confirmAddCandidate(candidate, folder, opts) {
     const id = pickId("custom", candidate.name);
     const major = !!(opts && opts.major);
@@ -6974,7 +7074,9 @@
     const needsGeo = candidate.lat == null || candidate.lon == null;
     const [wiki, geoCandidates] = await Promise.all([
       wikiEnrich(candidate.name).catch(() => null),
-      needsGeo ? geocodeCandidates(candidate.name, folder || null).catch(() => []) : Promise.resolve([]),
+      needsGeo
+        ? geocodeCandidates(candidate.name, geographicHint(candidate)).catch(() => [])
+        : Promise.resolve([]),
     ]);
     const geo = geoCandidates.length ? geoCandidates[0] : null;
 
@@ -7448,9 +7550,17 @@
     );
   }
 
+  // Resolved through the plan rather than parsed alone, so a day in January on
+  // a trip that started in December gets next year rather than this one.
+  function dateForDayLabel(label) {
+    const hit = datedDays(loadPlan().days).find((x) => x.d.label === label);
+    if (hit && hit.when) return hit.when;
+    return dayLabelToDate(label, new Date().getFullYear());
+  }
+
   function forecastForDay(dayLabel, anchor, onUpdate) {
     if (!anchor || anchor.lat == null) return null;
-    const date = dayLabelToDate(dayLabel, new Date().getFullYear());
+    const date = dateForDayLabel(dayLabel);
     if (!date) return null; // an undated day like "Day 1" has no weather to give
     const ahead = daysFromNow(date);
     if (ahead < 0) return null;
@@ -7524,7 +7634,7 @@
     const plan = loadPlan();
     if (!plan.days.length) return null;
     const now = new Date();
-    const dated = plan.days.map((d) => ({ day: d, date: dayLabelToDate(d.label, now.getFullYear()) }));
+    const dated = datedDays(plan.days).map((x) => ({ day: x.d, date: x.when }));
 
     const today = dated.find((x) => x.date && sameDay(x.date, now));
     if (today) return { ...today, isToday: true };

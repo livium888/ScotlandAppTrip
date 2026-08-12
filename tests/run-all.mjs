@@ -46,6 +46,7 @@ const SUITES = [
   "test_friction.mjs",
   "test_pickcity.mjs",
   "test_ontheday.mjs",
+  "test_review.mjs",
 ];
 
 const MIME = {

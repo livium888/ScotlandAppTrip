@@ -61,7 +61,8 @@ team to align. The parts that do apply:
 
 ## Implementation
 
-Three findings, all fixed.
+Four findings, all fixed. The fourth was found later, by re-reading the
+escaper this document had already vouched for.
 
 ### 1. Stored XSS via a place name — **fixed**
 
@@ -77,17 +78,19 @@ which is the same origin as the app, with read access to `localStorage`, i.e.
 the API keys. A probe firing payloads through every ingestion path and walking
 every screen confirmed execution twice before the fix, zero after.
 
-Everywhere else was already escaping properly; this was the one sink where the
-library, not the app, decided how the string was interpreted.
+This was the one sink where the library, not the app, decided how the string
+was interpreted. The claim I made at the time — that everywhere else was
+escaping properly — turned out to be half true, and finding 4 is the other
+half.
 
 *Covered by `test_security.mjs` — hostile names on all eight tabs, the results
 map, and the preview sheet.*
 
 ### 2. `javascript:` URLs in links — **fixed**
 
-`esc()` escapes `< > & " '`. It does nothing to `javascript:alert(1)`, which
-contains none of them. A website URL from OSM's `extratags.website` therefore
-went straight into an `href`, and tapping it would run script in the page.
+`esc()` does nothing to `javascript:alert(1)`, which contains no character any
+escaper touches. A website URL from OSM's `extratags.website` therefore went
+straight into an `href`, and tapping it would run script in the page.
 
 Added `safeUrl()`: only `http:`, `https:`, `mailto:` and `tel:` survive;
 bare domains and protocol-relative URLs are promoted to `https:`; everything
@@ -112,11 +115,53 @@ Keys are now stripped from the export, the Settings text says so, and a
 restore deliberately keeps whatever key is already on the receiving device
 rather than blanking it.
 
+### 4. The escaper only escaped three characters — **fixed**
+
+This document previously said `esc()` escaped `< > & " '`. It did not. It was
+written as:
+
+```js
+div.textContent = s;
+return div.innerHTML;   // escapes & < > and nothing else
+```
+
+`textContent`/`innerHTML` round-tripping escapes exactly the three characters
+that matter *between* tags. Quotes come back untouched, because in text
+position they are harmless. In attribute position they are the whole attack.
+Every value the app renders into an attribute — a note into `value=`, a folder
+name into `data-move-pick=`, a place name into `aria-label=` — could therefore
+close its attribute and open an event handler:
+
+```
+Cafe" onmouseover="…" data-x="   ->   <input value="Cafe" onmouseover="…" data-x="" />
+```
+
+`esc()` now maps `& < > " ' \`` through an explicit table, which is the only
+form that is correct in both positions.
+
+Two things made this last as long as it did, and both are worth naming:
+
+- **The test suite fired the wrong payload.** `test_security.mjs` used
+  `<img src=x onerror=…>` everywhere, which the broken escaper already
+  stopped. It proved the sink from finding 1 was fixed and nothing else.
+- **This document asserted the escaping was correct**, so nobody re-read it —
+  including me. A security note that states a property it never tested is not
+  evidence, and this section is the correction.
+
+Both suites now assert on the absence of any attribute beginning `on` in the
+whole document, which is the property that actually matters and does not
+depend on guessing the payload.
+
 ## Verification
 
-- **22 browser suites, ~300 assertions**, run in CI before every APK build.
-- **`test_security.mjs`** is new: hostile input on every screen, URL scheme
-  handling, and the backup redaction.
+- **31 browser suites**, run in CI before every APK build.
+- **`test_security.mjs`** covers hostile input on every screen, URL scheme
+  handling, the backup redaction, and — since finding 4 — quote breakout in
+  attribute position.
+- **`test_review.mjs`** is the regression suite for a later review of the
+  whole app: ten defects, one check each, every one of them written so that it
+  fails against the code as it was. Worth saying plainly why it exists: all
+  thirty other suites passed both before and after those ten fixes.
 - **A gap in my own tooling, found during this review.** The Android XML
   checker added after a previous build failure declared the manifest
   "well-formed" while it contained a comment inside an opening tag — a

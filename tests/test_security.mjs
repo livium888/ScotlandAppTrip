@@ -23,7 +23,13 @@ let executions = [];
 await page.exposeFunction('__pwned', (where) => executions.push(where));
 page.on('dialog', async (d) => { executions.push('dialog:' + d.message()); await d.dismiss(); });
 
+// Two shapes, because they get through in different places. The tag payload
+// needs a context where markup is parsed as markup; the quote payload only
+// needs a quote, and for a long time that was enough - the escaper was built
+// on textContent/innerHTML, which escapes < > & and nothing else, so every
+// value rendered into an attribute could close it and start a handler.
 const P = `<img src=x onerror="window.__pwned('img')">`;
+const Q = `" onmouseover="window.__pwned('attr')" data-x="`;
 
 // A hostile geocoder result. OpenStreetMap is world-editable, so this is a
 // question of when, not whether.
@@ -45,7 +51,7 @@ await page.route(/generativelanguage\.googleapis\.com/, (route) => {
 await page.route(/wikidata|wikipedia|overpass|open-meteo|photon|tile\./, (r) => r.abort());
 
 await page.goto(BASE, { waitUntil: 'load' });
-await page.evaluate((p) => {
+await page.evaluate(([p, q]) => {
   localStorage.clear();
   localStorage.setItem('trip-settings-v1', JSON.stringify({
     destination: 'Scotland', geminiKey: 'SECRET-GEMINI-KEY', googleKey: 'SECRET-GOOGLE-KEY',
@@ -53,13 +59,14 @@ await page.evaluate((p) => {
   }));
   localStorage.setItem('boards-v1', JSON.stringify({
     activeId: 'b-s', boards: [{ id: 'b-s', name: `Board ${p}`, destination: 'Edinburgh', dated: true, hasGuide: false, createdAt: 1 }] }));
+  localStorage.setItem('board:b-s:folders', JSON.stringify(['C', `Folder ${q}`]));
   localStorage.setItem('board:b-s:picks', JSON.stringify([{
-    id: 'custom:evil', name: `Pick ${p}`, city: 'C', category: `Cat ${p}`, note: `Note ${p}`,
-    description: `Desc ${p}`, address: `Addr ${p}`, website: `javascript:window.__pwned('web')`,
+    id: 'custom:evil', name: `Pick ${p}`, city: 'C', category: `Cat ${p}`, note: `Note ${q}`,
+    description: `Desc ${p}`, address: `Addr ${q}`, website: `javascript:window.__pwned('web')`,
     openingHours: `Hrs ${p}`, lat: 55.94, lon: -3.19, addedAt: 1 }]));
   localStorage.setItem('board:b-s:plan', JSON.stringify({
     days: [{ id: 'd1', label: 'Day 1 · Wed 19 Aug' }], items: { d1: [{ pickId: 'custom:evil', time: '10:00' }] } }));
-}, P);
+}, [P, Q]);
 await page.reload({ waitUntil: 'load' });
 await page.waitForTimeout(700);
 
@@ -69,6 +76,16 @@ for (const tab of ['today', 'overview', 'itinerary', 'places', 'eats', 'picks', 
   await page.waitForTimeout(250);
 }
 check('no script runs from a hostile place name on any tab', executions.length === 0, JSON.stringify(executions));
+
+// A quote is enough on its own: the app writes no inline handlers of its own,
+// so an attribute beginning "on" anywhere in the document means text that
+// arrived from outside has become markup.
+const eventAttrs = () => page.evaluate(() =>
+  Array.from(document.querySelectorAll('*'))
+    .flatMap((el) => Array.from(el.attributes).map((a) => a.name))
+    .filter((n) => /^on[a-z]/i.test(n)));
+check('a quote in hostile text cannot open an attribute', (await eventAttrs()).length === 0,
+  JSON.stringify(await eventAttrs()));
 
 // The map: Leaflet treats a string passed to bindTooltip/bindPopup as HTML,
 // which is exactly how this got through the first time.
@@ -107,6 +124,14 @@ const sheetHrefs = await page.evaluate(() =>
 check('a javascript: website is dropped rather than shown',
   !sheetHrefs.some((h) => /^javascript:/i.test(h || '')), JSON.stringify(sheetHrefs));
 check('still no execution after opening everything', executions.length === 0, JSON.stringify(executions));
+// The sheet renders the note straight into value= and the folders into
+// data-move-pick=, which is where a quote pays off if one ever gets through.
+check('nor from the sheet, where hostile text is rendered into attributes',
+  (await eventAttrs()).length === 0, JSON.stringify(await eventAttrs()));
+await page.evaluate(() => document.querySelectorAll('#placeModal *').forEach((el) =>
+  el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))));
+await page.waitForTimeout(200);
+check('and nothing runs when you move over it', executions.length === 0, JSON.stringify(executions));
 await page.evaluate(() => document.querySelector('#placeModal .modal-close')?.click());
 
 // --- Keys must not leave the device in a file meant to be shared ---
