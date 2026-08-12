@@ -5538,6 +5538,7 @@
       // closed is not in flight now.
       status: options.length ? "done" : "idle",
       view: options.length ? "results" : "brief",
+      step: 0,
       expanded: Math.min(Number(stored.expanded) || 0, Math.max(0, options.length - 1)),
       askedAs: String(stored.askedAs || ""),
       error: "",
@@ -5644,7 +5645,7 @@
     if (b.who.trim()) text += ` We're ${said(b.who.trim())}.`;
     if (interests.length) text += ` We like ${said(interests.join(", "))}.`;
     if (pace) text += ` ${said(pace.label)}.`;
-    if (b.extra.trim()) text += ` Also: ${said(b.extra.trim())}`;
+    if (b.extra.trim()) text += ` Also: ${said(b.extra.trim())}.`;
     return text;
   }
 
@@ -5685,13 +5686,13 @@
         if (!b.miles) return "How far from the start you're willing to go. Straight-line, roughly — roads are longer.";
         if (b.miles <= 50) return `${b.miles} miles is an easy out-and-back with time at each stop.`;
         if (b.miles <= 100) {
-          return days > 1
-            ? `${b.miles} miles across ${days} days is comfortable — you can stop properly rather than driving past things.`
-            : `${b.miles} miles there and back is most of a day's driving. Expect two or three stops, not five.`;
+          if (days > 1) return `${b.miles} miles across ${days} days is comfortable — you can stop properly rather than driving past things.`;
+          if (days === 1) return `${b.miles} miles there and back is most of a day's driving. Expect two or three stops, not five.`;
+          return `${b.miles} miles is a day's drive there and back, or an easy two days.`;
         }
-        return days > 1
-          ? `${b.miles} miles is a real distance — worth an overnight rather than doubling back.`
-          : `${b.miles} miles in one day is mostly driving. Two days would suit it better.`;
+        if (days > 1) return `${b.miles} miles is a real distance — worth an overnight rather than doubling back.`;
+        if (days === 1) return `${b.miles} miles in one day is mostly driving. Two days would suit it better.`;
+        return `${b.miles} miles is a long way for a day out — say how long you have and I'll say whether it fits.`;
       case "span": {
         const planned = loadPlan().days.length;
         if (!days) {
@@ -5732,15 +5733,55 @@
     }
   }
 
-  // Which row to point at next: the first thing not yet answered, so the
-  // screen always has one obvious move rather than eight equal ones.
-  function ideaNextSlot() {
+  // One question a screen, with Next under your thumb. The first version put
+  // all eight rows on one page, which meant scrolling down to answer and back
+  // up to see the sentence you were building - the answers and the thing they
+  // were adding up to could never be on screen together.
+  //
+  // A step is small enough that both fit: the question, its advice, the chips,
+  // and the sentence so far. Nothing here is required except where you are
+  // starting from, so Next is always the way forward and Skip is not a
+  // separate idea. The dots are tappable and Back always works, so nothing is
+  // one-way: it is a carousel, not a funnel.
+  const IDEA_STEPS = [
+    { key: "from", title: "Where are you starting from?", short: "From" },
+    { key: "towards", title: "Which way do you want to head?", short: "Towards" },
+    // Time before distance, deliberately: how long you have is what makes a
+    // distance sensible or silly, and the advice on the next screen can only
+    // say which if it already knows.
+    { key: "span", title: "How long have you got?", short: "Time" },
+    { key: "miles", title: "How far will you go?", short: "Distance" },
+    { key: "interests", title: "What are you after?", short: "Interests" },
+    { key: "pace", title: "How full should the days be?", short: "Pace" },
+    { key: "who", title: "Who's going?", short: "Who" },
+    { key: "extra", title: "Anything else?", short: "Extra" },
+    { key: "review", title: "Ready to ask?", short: "Review" },
+  ];
+
+  function ideaStepIndex() {
+    return Math.max(0, Math.min(IDEA_STEPS.length - 1, Number(tripIdea.step) || 0));
+  }
+
+  function ideaAnswered(key) {
     const b = tripIdea.brief;
-    if (!b.from.trim()) return "from";
-    if (!b.miles) return "miles";
-    if (!b.spanKey) return "span";
-    if (!b.interests.length) return "interests";
-    return "";
+    switch (key) {
+      case "from": return !!b.from.trim();
+      case "towards": return !!b.towards.trim();
+      case "miles": return !!b.miles;
+      case "span": return !!b.spanKey;
+      case "interests": return !!b.interests.length;
+      case "pace": return !!b.pace;
+      case "who": return !!b.who.trim();
+      case "extra": return !!b.extra.trim();
+      default: return false;
+    }
+  }
+
+  // Where to drop someone in: the first thing they have not answered, so
+  // coming back to an unfinished question carries on rather than restarting.
+  function ideaFirstUnanswered() {
+    const at = IDEA_STEPS.findIndex((s) => s.key !== "review" && !ideaAnswered(s.key));
+    return at < 0 ? IDEA_STEPS.length - 1 : at;
   }
 
   const ideaChip = (label, attrs, on) =>
@@ -5749,131 +5790,246 @@
   const ideaSetChip = (key, value, label, on) =>
     ideaChip(label, `data-idea-key="${esc(key)}" data-idea-value="${esc(String(value))}"`, on);
 
-  function ideaSlotHtml(key, label, chipsHtml, fieldHtml, answered) {
-    const next = ideaNextSlot() === key;
+  function ideaChipsFor(key) {
+    const b = tripIdea.brief;
+    const picks = loadPicks();
+
+    if (key === "from") {
+      // Starting points worth offering: the areas you have saved, the folders
+      // you file under, and the trip's own region. Deduplicated, because those
+      // three overlap almost by definition.
+      const dest = (activeBoard().destination || loadTripSettings().destination || "").trim();
+      const names = [];
+      picks.filter((p) => p.major).forEach((p) => names.push(p.name));
+      loadFolders().forEach((f) => {
+        if (f !== "Unsorted") names.push(f);
+      });
+      if (dest) names.push(dest);
+      return (
+        ideaChip("📍 Where I am now", 'id="ideaGps" data-idea-gps="1"', false) +
+        names
+          .filter((n, i) => n && names.indexOf(n) === i)
+          .slice(0, 8)
+          .map((n) => ideaSetChip("from", n, n, b.from.trim() === n))
+          .join("")
+      );
+    }
+
+    if (key === "towards") {
+      return (
+        ideaSetChip("towards", "", "Anywhere", !b.towards.trim()) +
+        IDEA_DIRECTIONS.map((d) => ideaSetChip("towards", d, d, b.towards.trim() === d)).join("") +
+        picks
+          .filter((p) => p.major && p.name !== b.from.trim())
+          .slice(0, 4)
+          .map((p) =>
+            ideaSetChip("towards", `towards ${p.name}`, `towards ${p.name}`, b.towards.trim() === `towards ${p.name}`)
+          )
+          .join("")
+      );
+    }
+
+    if (key === "miles") {
+      return (
+        IDEA_MILES.map((m) => ideaSetChip("miles", m, `${m} miles`, b.miles === m)).join("") +
+        ideaSetChip("miles", "", "No limit", !b.miles)
+      );
+    }
+
+    if (key === "span") {
+      const planned = loadPlan().days.length;
+      return (
+        IDEA_SPANS.map((s) => ideaSetChip("spanKey", s.key, s.label, b.spanKey === s.key)).join("") +
+        (planned
+          ? ideaSetChip("spanKey", "plan", `The ${planned} day${planned === 1 ? "" : "s"} I have`, b.spanKey === "plan")
+          : "")
+      );
+    }
+
+    if (key === "interests") {
+      return IDEA_INTEREST_KEYS.map((k) => {
+        const cat = findCategory(k);
+        return cat ? ideaChip(`${cat.icon} ${cat.label}`, `data-idea-interest="${esc(k)}"`, b.interests.includes(k)) : "";
+      }).join("");
+    }
+
+    if (key === "pace") {
+      return IDEA_PACE.map((p) => ideaSetChip("pace", p.key, p.label, b.pace === p.key)).join("");
+    }
+
+    return "";
+  }
+
+  const IDEA_FIELDS = {
+    from: "e.g. Edinburgh",
+    towards: "e.g. towards the Highlands",
+    who: "e.g. family of 3, 4-year-old who walks",
+    extra: "e.g. no motorways, back by six",
+  };
+
+  function ideaFieldFor(key) {
+    if (!IDEA_FIELDS[key]) return "";
+    return `<input class="settings-input idea-input" type="text" data-idea-text="${esc(key)}"
+                   placeholder="${esc(IDEA_FIELDS[key])}" value="${esc(tripIdea.brief[key] || "")}" />`;
+  }
+
+  function ideaProgressHtml() {
+    const at = ideaStepIndex();
+    const dots = IDEA_STEPS.map((s, i) => {
+      const state = i === at ? " now" : ideaAnswered(s.key) ? " on" : "";
+      return `<button class="idea-dot${state}" data-idea-step="${i}" aria-label="${esc(s.short)}"
+                      aria-current="${i === at ? "step" : "false"}"></button>`;
+    }).join("");
     return `
-      <section class="idea-slot${answered ? " done" : ""}${next ? " next" : ""}" data-idea-slot="${esc(key)}">
-        <div class="idea-slot-head">
-          <span class="idea-slot-label">${esc(label)}</span>
-          ${answered ? `<span class="idea-slot-tick" aria-label="answered">✓</span>` : ""}
-          ${next ? `<span class="idea-slot-next">next</span>` : ""}
-        </div>
-        <p class="idea-slot-hint">${esc(ideaHint(key))}</p>
-        ${chipsHtml ? `<div class="search-chips idea-chips">${chipsHtml}</div>` : ""}
-        ${fieldHtml || ""}
+      <div class="idea-progress">
+        <div class="idea-dots">${dots}</div>
+        <span class="idea-count">${at + 1} of ${IDEA_STEPS.length}</span>
+      </div>
+    `;
+  }
+
+  // The last screen: the whole question in one piece, with every part a way
+  // back to the step that set it. A wizard that cannot show you what you built
+  // is just a form with the answers hidden behind Back.
+  function ideaReviewHtml() {
+    const rows = IDEA_STEPS.filter((s) => s.key !== "review")
+      .map((s, i) => {
+        const answered = ideaAnswered(s.key);
+        return `
+          <button class="idea-review-row" data-idea-step="${i}">
+            <span class="idea-review-label">${esc(s.short)}</span>
+            <span class="idea-review-value${answered ? "" : " empty"}">${esc(ideaAnswerText(s.key))}</span>
+            <span class="idea-review-edit">Change</span>
+          </button>
+        `;
+      })
+      .join("");
+
+    return `
+      <p class="idea-sentence" id="ideaSentence">${ideaSentence()}</p>
+      <div class="idea-review">${rows}</div>
+    `;
+  }
+
+  function ideaAnswerText(key) {
+    const b = tripIdea.brief;
+    switch (key) {
+      case "from": return b.from.trim() || "not said";
+      case "towards": return b.towards.trim() || "anywhere";
+      case "miles": return b.miles ? `${b.miles} miles` : "no limit";
+      case "span": {
+        const days = ideaSpanDays();
+        return days ? (days === 1 ? "one day" : `${days} days`) : "not said";
+      }
+      case "interests": return ideaInterestLabels().join(", ") || "anything";
+      case "pace": {
+        const pace = IDEA_PACE.find((p) => p.key === b.pace);
+        return pace ? pace.label : "not said";
+      }
+      case "who": return b.who.trim() || "not said";
+      case "extra": return b.extra.trim() || "nothing";
+      default: return "";
+    }
+  }
+
+  function ideaBriefHtml() {
+    const at = ideaStepIndex();
+    const step = IDEA_STEPS[at];
+    const isReview = step.key === "review";
+
+    return `
+      ${ideaProgressHtml()}
+      <section class="idea-step" data-idea-slot="${esc(step.key)}" data-idea-step-key="${esc(step.key)}">
+        <h2 class="idea-step-title">${esc(step.title)}</h2>
+        <p class="idea-slot-hint">${esc(
+          isReview
+            ? "Change anything that isn't right, then ask. It keeps, so you can come back and change one thing."
+            : ideaHint(step.key)
+        )}</p>
+        ${
+          isReview
+            ? ideaReviewHtml()
+            : `${(() => {
+                const chips = ideaChipsFor(step.key);
+                return chips ? `<div class="search-chips idea-chips">${chips}</div>` : "";
+              })()}
+               ${ideaFieldFor(step.key)}
+               <div class="idea-so-far">
+                 <span class="idea-so-far-label">So far</span>
+                 <p class="idea-sentence idea-sentence-soft" id="ideaSentence">${ideaSentence()}</p>
+               </div>`
+        }
       </section>
     `;
   }
 
-  function ideaBriefHtml() {
-    const b = tripIdea.brief;
-    const picks = loadPicks();
-    const dest = (activeBoard().destination || loadTripSettings().destination || "").trim();
-
-    // Starting points worth offering: the areas you have saved, the folders
-    // you file under, and the trip's own region. Deduplicated, because those
-    // three overlap almost by definition.
-    const startNames = [];
-    picks.filter((p) => p.major).forEach((p) => startNames.push(p.name));
-    loadFolders().forEach((f) => {
-      if (f !== "Unsorted") startNames.push(f);
-    });
-    if (dest) startNames.push(dest);
-    const starts = startNames.filter((n, i) => n && startNames.indexOf(n) === i).slice(0, 8);
-
-    const fromChips =
-      `${ideaChip("📍 Where I am now", 'id="ideaGps" data-idea-gps="1"', false)}` +
-      starts.map((n) => ideaSetChip("from", n, n, b.from.trim() === n)).join("");
-
-    const towardsChips =
-      ideaSetChip("towards", "", "Anywhere", !b.towards.trim()) +
-      IDEA_DIRECTIONS.map((d) => ideaSetChip("towards", d, d, b.towards.trim() === d)).join("") +
-      picks
-        .filter((p) => p.major && p.name !== b.from.trim())
-        .slice(0, 4)
-        .map((p) => ideaSetChip("towards", `towards ${p.name}`, `towards ${p.name}`, b.towards.trim() === `towards ${p.name}`))
-        .join("");
-
-    const milesChips =
-      IDEA_MILES.map((m) => ideaSetChip("miles", m, `${m} miles`, b.miles === m)).join("") +
-      ideaSetChip("miles", "", "No limit", !b.miles);
-
-    const planned = loadPlan().days.length;
-    const spanChips =
-      IDEA_SPANS.map((s) => ideaSetChip("spanKey", s.key, s.label, b.spanKey === s.key)).join("") +
-      (planned
-        ? ideaSetChip("spanKey", "plan", `The ${planned} day${planned === 1 ? "" : "s"} I have`, b.spanKey === "plan")
-        : "");
-
-    const interestChips = IDEA_INTEREST_KEYS.map((k) => {
-      const cat = findCategory(k);
-      if (!cat) return "";
-      return ideaChip(
-        `${cat.icon} ${cat.label}`,
-        `data-idea-interest="${esc(k)}"`,
-        b.interests.includes(k)
-      );
-    }).join("");
-
-    const paceChips = IDEA_PACE.map((p) => ideaSetChip("pace", p.key, p.label, b.pace === p.key)).join("");
-
+  function ideaNavHtml() {
+    const at = ideaStepIndex();
+    const step = IDEA_STEPS[at];
+    const isReview = step.key === "review";
+    // Nothing is compulsory except where you are starting from, so the button
+    // says what pressing it does: Next when you have answered, Skip when you
+    // have not, and neither is a dead end. The one required answer is the
+    // exception - "Skip" on a button that cannot be pressed is a contradiction.
+    const blocked = step.key === "from" && !tripIdea.brief.from.trim();
+    const label = isReview ? "✨ Suggest trips" : ideaAnswered(step.key) || blocked ? "Next" : "Skip";
     return `
-      <div class="idea-sentence-wrap">
-        <div class="section-label">Your question</div>
-        <p class="idea-sentence" id="ideaSentence">${ideaSentence()}</p>
+      <div class="idea-nav">
+        <button class="modal-btn idea-back" data-idea-move="-1" ${at === 0 ? "disabled" : ""}>Back</button>
+        <button class="modal-btn modal-btn-primary idea-forward" id="${isReview ? "ideaRun" : "ideaNext"}"
+                ${blocked ? "disabled" : ""}>${label}</button>
       </div>
-
-      ${ideaSlotHtml(
-        "from",
-        "Where from",
-        fromChips,
-        `<input class="settings-input idea-input" type="text" data-idea-text="from"
-                placeholder="e.g. Edinburgh" value="${esc(b.from)}" />`,
-        !!b.from.trim()
-      )}
-
-      ${ideaSlotHtml(
-        "towards",
-        "Which way",
-        towardsChips,
-        `<input class="settings-input idea-input" type="text" data-idea-text="towards"
-                placeholder="e.g. towards the Highlands" value="${esc(b.towards)}" />`,
-        !!b.towards.trim()
-      )}
-
-      ${ideaSlotHtml("miles", "How far", milesChips, "", !!b.miles)}
-
-      ${ideaSlotHtml("span", "How long", spanChips, "", !!b.spanKey)}
-
-      ${ideaSlotHtml("interests", "What you're after", interestChips, "", !!b.interests.length)}
-
-      ${ideaSlotHtml("pace", "How full the days should be", paceChips, "", !!b.pace)}
-
-      ${ideaSlotHtml(
-        "who",
-        "Who's going",
-        "",
-        `<input class="settings-input idea-input" type="text" data-idea-text="who"
-                placeholder="e.g. family of 3, 4-year-old who walks" value="${esc(b.who)}" />`,
-        !!b.who.trim()
-      )}
-
-      ${ideaSlotHtml(
-        "extra",
-        "Anything else",
-        "",
-        `<input class="settings-input idea-input" type="text" data-idea-text="extra"
-                placeholder="e.g. no motorways, back by six" value="${esc(b.extra)}" />`,
-        !!b.extra.trim()
-      )}
-
-      <button class="modal-btn modal-btn-primary idea-run" id="ideaRun">✨ Suggest trips</button>
-      <p class="settings-hint idea-run-hint">${
-        tripIdea.brief.from.trim()
-          ? "Three routes, each with its stops in driving order."
-          : "Where you're starting from is the one thing needed."
-      }</p>
+      ${
+        blocked
+          ? `<p class="settings-hint idea-nav-hint">Needed — everything else is measured from here.</p>`
+          : ""
+      }
     `;
+  }
+
+  function ideaGo(delta) {
+    const at = ideaStepIndex();
+    const next = Math.max(0, Math.min(IDEA_STEPS.length - 1, at + delta));
+    if (next === at) return;
+    // Blocked only forwards: going back from an unanswered first step is not
+    // possible anyway, and trapping someone on a screen is never the answer.
+    if (delta > 0 && IDEA_STEPS[at].key === "from" && !tripIdea.brief.from.trim()) return;
+    ideaSlide = delta > 0 ? "next" : "back";
+    tripIdea.step = next;
+    saveIdea();
+    renderIdea();
+  }
+
+  function ideaJump(index) {
+    const at = ideaStepIndex();
+    if (index === at) return;
+    if (index > at && !tripIdea.brief.from.trim()) return;
+    ideaSlide = index > at ? "next" : "back";
+    tripIdea.step = index;
+    saveIdea();
+    renderIdea();
+  }
+
+  let ideaSlide = "";
+
+  // Typing has to change the screen without replacing it: a redraw mid-word
+  // takes the caret with it. So the three things that actually depend on the
+  // field are updated in place - the sentence, the advice, and whether the
+  // button says Skip or Next.
+  function refreshIdeaLive() {
+    const step = IDEA_STEPS[ideaStepIndex()];
+    const sentence = document.getElementById("ideaSentence");
+    if (sentence) sentence.innerHTML = ideaSentence();
+    const hint = ideaOverlay.querySelector(".idea-step .idea-slot-hint");
+    if (hint && step.key !== "review") hint.textContent = ideaHint(step.key);
+    const forward = ideaOverlay.querySelector(".idea-forward");
+    if (forward && step.key !== "review") {
+      const blocked = step.key === "from" && !tripIdea.brief.from.trim();
+      forward.textContent = ideaAnswered(step.key) || blocked ? "Next" : "Skip";
+      forward.disabled = blocked;
+    }
+    const dot = ideaOverlay.querySelector(".idea-dot.now");
+    if (dot) dot.classList.toggle("on", ideaAnswered(step.key));
   }
 
   function ideaStopHtml(oi, di, si, stop, radius) {
@@ -6005,6 +6161,8 @@
   function renderIdea() {
     if (!tripIdea) return;
     const showResults = tripIdea.view === "results";
+    const slide = ideaSlide ? ` idea-slide-${ideaSlide}` : "";
+    ideaSlide = "";
     ideaOverlay.innerHTML = `
       <div class="search-head">
         <button class="search-back" data-idea-close="1" aria-label="Close">←</button>
@@ -6015,7 +6173,8 @@
           }</div>
         </div>
       </div>
-      <div class="search-body">${showResults ? ideaResultsHtml() : ideaBriefHtml()}</div>
+      <div class="search-body${showResults ? "" : slide}">${showResults ? ideaResultsHtml() : ideaBriefHtml()}</div>
+      ${showResults ? "" : ideaNavHtml()}
     `;
     ideaOverlay.classList.add("open");
     wireIdea();
@@ -6026,6 +6185,8 @@
     // stacked on each other is one back press too many.
     if (searchOverlay.classList.contains("open")) closeSearchOverlay();
     tripIdea = loadIdea();
+    // Carry on where the question was left rather than starting it again.
+    tripIdea.step = ideaFirstUnanswered();
     renderIdea();
   }
 
@@ -6204,6 +6365,7 @@
     const b = tripIdea.brief;
     if (!b.from.trim()) {
       tripIdea.view = "brief";
+      tripIdea.step = 0;
       renderIdea();
       const field = ideaOverlay.querySelector('[data-idea-text="from"]');
       if (field) field.focus();
@@ -6322,18 +6484,62 @@
       const key = input.getAttribute("data-idea-text");
       input.addEventListener("input", () => {
         tripIdea.brief[key] = input.value;
-        // The sentence is the point of the screen, so it keeps up with the
-        // keystroke. The advice around it waits for the field to be left,
-        // because redrawing mid-word would take the caret with it.
-        const sentence = document.getElementById("ideaSentence");
-        if (sentence) sentence.innerHTML = ideaSentence();
+        refreshIdeaLive();
       });
       input.addEventListener("blur", () => {
         tripIdea.brief[key] = input.value;
         saveIdea();
-        if (tripIdea.view === "brief") renderIdea();
+      });
+      // On a phone the keyboard's own "go" is right there and the Next button
+      // is behind it, so it has to mean the same thing.
+      input.addEventListener("keydown", (e) => {
+        if (e.key !== "Enter") return;
+        e.preventDefault();
+        input.blur();
+        ideaGo(1);
       });
     });
+
+    ideaOverlay.querySelectorAll("[data-idea-move]").forEach((btn) =>
+      btn.addEventListener("click", () => ideaGo(Number(btn.getAttribute("data-idea-move"))))
+    );
+    ideaOverlay.querySelectorAll("[data-idea-step]").forEach((btn) =>
+      btn.addEventListener("click", () => ideaJump(Number(btn.getAttribute("data-idea-step"))))
+    );
+    const nextBtn = document.getElementById("ideaNext");
+    if (nextBtn) nextBtn.addEventListener("click", () => ideaGo(1));
+
+    // A carousel you cannot swipe is a slideshow. The buttons stay because a
+    // swipe is undiscoverable on its own, and because one hand on a pushchair
+    // is the normal case here.
+    const swipeArea = ideaOverlay.querySelector(".search-body");
+    if (swipeArea && tripIdea.view === "brief") {
+      let startX = null;
+      let startY = null;
+      swipeArea.addEventListener(
+        "touchstart",
+        (e) => {
+          const t = e.changedTouches[0];
+          startX = t.clientX;
+          startY = t.clientY;
+        },
+        { passive: true }
+      );
+      swipeArea.addEventListener(
+        "touchend",
+        (e) => {
+          if (startX == null) return;
+          const t = e.changedTouches[0];
+          const dx = t.clientX - startX;
+          const dy = t.clientY - startY;
+          startX = null;
+          // Comfortably horizontal, or it is a scroll that drifted.
+          if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+          ideaGo(dx < 0 ? 1 : -1);
+        },
+        { passive: true }
+      );
+    }
 
     const gps = ideaOverlay.querySelector("[data-idea-gps]");
     if (gps) {
@@ -6357,9 +6563,12 @@
     const retry = document.getElementById("ideaRetry");
     if (retry) retry.addEventListener("click", () => runTripIdea());
 
+    // Back to the question lands on the review screen, not step one: you came
+    // to change one thing, and everything is reachable from there.
     ideaOverlay.querySelectorAll("[data-idea-edit]").forEach((b) =>
       b.addEventListener("click", () => {
         tripIdea.view = "brief";
+        tripIdea.step = IDEA_STEPS.length - 1;
         renderIdea();
       })
     );

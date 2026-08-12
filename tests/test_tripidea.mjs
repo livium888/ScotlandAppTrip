@@ -113,6 +113,36 @@ const chip = (label) => page.evaluate((text) => {
   if (!el) throw new Error(`no chip "${text}"`);
   el.click();
 }, label);
+const stepKey = () => page.evaluate(() =>
+  (document.querySelector('.idea-step') || { dataset: {} }).dataset.ideaStepKey || '');
+const forward = () => page.evaluate(() => {
+  const el = document.querySelector('.idea-forward');
+  return el ? { label: el.textContent.trim(), disabled: el.disabled } : null;
+});
+const next = async () => {
+  await page.evaluate(() => document.querySelector('.idea-forward').click());
+  await page.waitForTimeout(250);
+};
+const back = async () => {
+  await page.evaluate(() => document.querySelector('.idea-back').click());
+  await page.waitForTimeout(250);
+};
+// A real horizontal drag, not a click on a button - the swipe has to work on
+// its own or it is not a carousel.
+const swipe = async (dx) => {
+  await page.evaluate((distance) => {
+    const el = document.querySelector('.search-body');
+    const touch = (x) => new Touch({ identifier: 1, target: el, clientX: x, clientY: 400 });
+    el.dispatchEvent(new TouchEvent('touchstart', { bubbles: true, changedTouches: [touch(200)] }));
+    el.dispatchEvent(new TouchEvent('touchend', { bubbles: true, changedTouches: [touch(200 + distance)] }));
+  }, dx);
+  await page.waitForTimeout(250);
+};
+// Walks the carousel to a named step, however many Nexts that takes.
+const goToStep = async (key) => {
+  for (let i = 0; i < 12 && (await stepKey()) !== key; i++) await next();
+  if ((await stepKey()) !== key) throw new Error(`never reached step "${key}"`);
+};
 
 async function seed(extra) {
   await page.evaluate((over) => {
@@ -146,70 +176,137 @@ check('the itinerary offers to suggest a trip', await page.evaluate(() => !!docu
 await page.evaluate(() => document.getElementById('tripIdeaBtn').click());
 await page.waitForSelector('#ideaOverlay.open', { timeout: 4000 });
 
-// ---------- The question, before it is asked ----------
+// ---------- One question a screen, Next under your thumb ----------
 
-check('the question is on screen as a sentence, not a form',
+check('it opens on the first question, by itself', (await stepKey()) === 'from', await stepKey());
+check('asked as a question, not labelled as a field', await page.evaluate(() =>
+  /Where are you starting from\?/.test(document.querySelector('.idea-step-title').textContent)));
+check('with a map of how many there are', await page.evaluate(() =>
+  document.querySelectorAll('.idea-dot').length === 9 && /1 of 9/.test(document.querySelector('.idea-count').textContent)));
+check('the sentence being built is on the same screen as the answer',
   /I'm in/.test(await sentence()), await sentence());
 check('and what is missing reads as missing', await page.evaluate(() =>
   document.querySelectorAll('#ideaSentence .idea-blank').length >= 3));
-check('the first thing to answer is marked', await page.evaluate(() =>
-  (document.querySelector('.idea-slot.next') || {}).getAttribute?.('data-idea-slot') === 'from'));
+
+// The one thing genuinely needed is the only thing that blocks.
+const held = await forward();
+check('the one required answer holds the way forward', held.disabled === true, JSON.stringify(held));
+check('and says why rather than just refusing', await page.evaluate(() =>
+  /Needed/.test(document.querySelector('.idea-nav-hint').textContent)));
+
 check('a saved area is offered as a starting point', await page.evaluate(() =>
   Array.from(document.querySelectorAll('.idea-chip')).some((c) => c.textContent.trim() === 'Edinburgh')));
-
-const beforeFrom = await hintFor('towards');
 await chip('Edinburgh');
-await page.waitForTimeout(300);
-check('choosing a start writes it into the sentence', /Edinburgh/.test(await sentence()), await sentence());
-check('and the advice below it changes to match',
-  (await hintFor('towards')) !== beforeFrom && /Edinburgh/.test(await hintFor('towards')),
-  await hintFor('towards'));
-check('the next thing to answer moves on', await page.evaluate(() =>
-  (document.querySelector('.idea-slot.next') || {}).getAttribute?.('data-idea-slot') === 'miles'));
+await page.waitForTimeout(250);
+check('answering it opens the way forward', (await forward()).disabled === false);
+check('and the button says Next once there is something to go on',
+  (await forward()).label === 'Next', JSON.stringify(await forward()));
+check('the answer is in the sentence straight away', /Edinburgh/.test(await sentence()), await sentence());
 
-// The advice is not a fixed string per row: it reads the answers already given.
-await chip('250 miles');
-await chip('A day out');
+await next();
+check('Next moves on one question', (await stepKey()) === 'towards', await stepKey());
+check('and the advice on it already knows the last answer',
+  /Edinburgh/.test(await hintFor('towards')), await hintFor('towards'));
+check('an unanswered question offers Skip rather than nothing',
+  (await forward()).label === 'Skip', JSON.stringify(await forward()));
+
+await page.fill('[data-idea-text="towards"]', 'towards the Highlands');
+await page.waitForTimeout(200);
+check('typing updates the sentence without redrawing the screen underneath',
+  /towards the Highlands/.test(await sentence()), await sentence());
+check('and the button turns from Skip to Next as you type',
+  (await forward()).label === 'Next', JSON.stringify(await forward()));
+
+// The keyboard's own go key is where your thumb already is.
+await page.press('[data-idea-text="towards"]', 'Enter');
 await page.waitForTimeout(300);
+check('Enter moves on too', (await stepKey()) === 'span', await stepKey());
+
+await back();
+check('Back goes back', (await stepKey()) === 'towards', await stepKey());
+check('with the answer still in it', await page.evaluate(() =>
+  document.querySelector('[data-idea-text="towards"]').value === 'towards the Highlands'));
+
+// A carousel you cannot swipe is a slideshow.
+await swipe(-140);
+check('swiping left moves on', (await stepKey()) === 'span', await stepKey());
+await swipe(140);
+check('and swiping right goes back', (await stepKey()) === 'towards', await stepKey());
+await swipe(-30);
+check('a small drag is a scroll, not a swipe', (await stepKey()) === 'towards', await stepKey());
+await next();
+
+// The advice is not a fixed string per screen: it reads the answers already
+// given, which is why how long comes before how far.
+await chip('A day out');
+await next();
+check('distance is asked after time', (await stepKey()) === 'miles', await stepKey());
+await chip('250 miles');
+await page.waitForTimeout(250);
 const overreach = await hintFor('miles');
 check('250 miles in one day is called what it is', /mostly driving|Two days would suit/i.test(overreach), overreach);
 
-await chip('250 miles'); // tapping the chip again clears it
+await chip('250 miles'); // the same chip again clears it
 await page.waitForTimeout(200);
 check('tapping the same chip again clears it', !/250 miles/.test(await sentence()), await sentence());
 
-await chip('100 miles');
+await page.evaluate(() => document.querySelectorAll('.idea-dot')[2].click());
+await page.waitForTimeout(250);
+check('a dot jumps straight to that question', (await stepKey()) === 'span', await stepKey());
 await chip('2 days');
-await page.waitForTimeout(300);
+await next();
+await chip('100 miles');
+await page.waitForTimeout(250);
 const comfortable = await hintFor('miles');
 check('100 miles across 2 days is called something else', /comfortable/i.test(comfortable), comfortable);
 
+await next();
+check('interests come next', (await stepKey()) === 'interests', await stepKey());
+await chip('🏰 Historic sites');
+await chip('🚶 Easy walks');
+await page.waitForTimeout(250);
+check('several can be picked without the screen moving on',
+  (await stepKey()) === 'interests' && /historic sites/.test(await sentence()) && /easy walks/.test(await sentence()),
+  await sentence());
+
+await next();
 // A young child and "see as much as we can" is a contradiction worth saying
-// once, rather than quietly producing a day nobody can do.
+// once, rather than quietly producing a day nobody can actually do.
 await chip('See as much as we can');
 await page.waitForTimeout(250);
 const paceHint = await hintFor('pace');
 check('a packed day with a four-year-old gets a word of warning',
   /young child/i.test(paceHint), paceHint);
 await chip('A steady pace');
+await page.waitForTimeout(200);
 
-await page.fill('[data-idea-text="towards"]', 'towards the Highlands');
-await page.evaluate(() => document.querySelector('[data-idea-text="towards"]').blur());
-await page.waitForTimeout(300);
-await chip('🏰 Historic sites');
-await chip('🚶 Easy walks');
-await page.waitForTimeout(250);
-check('interests go into the sentence in plain words',
-  /historic sites/.test(await sentence()) && /easy walks/.test(await sentence()), await sentence());
-
+await goToStep('extra');
 await page.fill('[data-idea-text="extra"]', 'no motorways');
-await page.evaluate(() => document.querySelector('[data-idea-text="extra"]').blur());
-await page.waitForTimeout(300);
+await page.waitForTimeout(200);
+await next();
 
+// ---------- The last screen shows the whole thing ----------
+
+check('the last screen is a review, not another question', (await stepKey()) === 'review', await stepKey());
 const built = await sentence();
 check('the whole question reads as one sentence',
   /I'm in Edinburgh/.test(built) && /towards the Highlands/.test(built) &&
   /100 miles/.test(built) && /2 days/.test(built) && /no motorways/.test(built), built);
+check('every answer is listed, with a way back to each', await page.evaluate(() =>
+  document.querySelectorAll('.idea-review-row').length === 8));
+check('showing what each one actually says', await page.evaluate(() => {
+  const values = Array.from(document.querySelectorAll('.idea-review-value')).map((v) => v.textContent.trim());
+  return values.includes('Edinburgh') && values.includes('100 miles') && values.includes('2 days');
+}), await page.evaluate(() =>
+  JSON.stringify(Array.from(document.querySelectorAll('.idea-review-value')).map((v) => v.textContent.trim()))));
+check('and asking is the only thing left to do',
+  (await forward()).label.includes('Suggest trips'), JSON.stringify(await forward()));
+
+await page.evaluate(() => document.querySelectorAll('.idea-review-row')[2].click());
+await page.waitForTimeout(250);
+check('a review row jumps back to the question it came from', (await stepKey()) === 'span', await stepKey());
+await goToStep('review');
+
 
 // ---------- What is actually asked ----------
 
@@ -369,7 +466,8 @@ await page.evaluate(() => document.getElementById('tripIdeaBtn').click());
 await page.waitForSelector('#ideaOverlay.open', { timeout: 4000 });
 await chip('Edinburgh');
 await page.waitForTimeout(200);
-await page.evaluate(() => document.getElementById('ideaRun').click());
+await goToStep('review');
+await next();
 await page.waitForTimeout(700);
 check('with no AI key it says where to put one rather than failing quietly',
   await page.evaluate(() => document.getElementById('placeModal').classList.contains('open') &&
