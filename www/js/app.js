@@ -175,7 +175,15 @@
     // inherit the Scotland trip's region.
     const board = activeBoard();
     const dest = (board.destination || loadTripSettings().destination || "").trim();
-    return dest ? `${text}, ${dest}` : text;
+    if (!dest) return text;
+    // A suggestion arrives already qualified - "Pitlochry, Perth and Kinross,
+    // Scotland" - and appending the destination again produced "..., Scotland,
+    // Scotland", which the geocoder answers with nothing at all. The town then
+    // vanished from its own search results and only the AI's cafés remained.
+    if (new RegExp(`(^|,\\s*)${dest.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*$`, "i").test(text.trim())) {
+      return text;
+    }
+    return `${text}, ${dest}`;
   }
 
   // ---------- Gemini (optional, free tier) ----------
@@ -4018,7 +4026,31 @@
       input.value = label;
       input.blur(); // drop the keyboard so the results get the screen
     }
-    runSearch(label);
+
+    // The suggestion already knows what it is and where it is - Photon told
+    // us "town", with coordinates. Tapping one used to throw all of that away
+    // and search by the name as a string, so whether the town appeared in its
+    // own results depended on a second lookup agreeing. When that lookup came
+    // back empty the town was simply missing and the screen filled with the
+    // AI's bars and cafés instead - which is the thing you did not ask for,
+    // in place of the one you did.
+    //
+    // It is carried through now. The town is the first result because you
+    // chose it, whatever the backends go on to say.
+    const seed = looksLikeMajorPlace({ kind: s.kind })
+      ? {
+          name: s.name,
+          displayName: label,
+          lat: s.lat,
+          lon: s.lon,
+          type: s.kind,
+          category: prettyCategory(s.kind),
+          description: "",
+          isArea: true,
+        }
+      : null;
+
+    runSearch(label, undefined, seed);
   }
 
   function onSuggestInput(value) {
@@ -5212,19 +5244,25 @@
     if (view.dataset.activeTab === "picks") renderPicks();
   }
 
-  async function runSearch(query, guidance) {
+  async function runSearch(query, guidance, seed) {
     const q = (query || "").trim();
     if (!q) return;
     rememberSearch(q);
     // Kept across a refine, so "cheap, with a garden" still applies when you
     // narrow the same search again.
     const extra = guidance === undefined ? pickSearch.guidance || "" : guidance;
-    pickSearch = { query: q, status: "loading", results: [], guidance: extra };
+    // A place you picked outright is shown while the rest is still loading:
+    // it is already the answer, and nothing that comes back can improve on it.
+    pickSearch = { query: q, status: "loading", results: seed ? [seed] : [], guidance: extra };
     renderSearchOverlay();
     try {
-      pickSearch = { query: q, status: "done", results: await searchPlaces(q, extra), guidance: extra };
+      const found = await searchPlaces(q, extra);
+      const results = seed
+        ? [seed].concat(found.filter((r) => normalisedName(r.name) !== normalisedName(seed.name)))
+        : found;
+      pickSearch = { query: q, status: "done", results, guidance: extra };
     } catch (e) {
-      pickSearch = { query: q, status: "error", results: [], guidance: extra };
+      pickSearch = { query: q, status: seed ? "done" : "error", results: seed ? [seed] : [], guidance: extra };
     }
     renderSearchOverlay();
   }
