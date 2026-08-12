@@ -2167,10 +2167,16 @@ button, select, input[type="text"], input[type="file"] { font-family: inherit; }
 }
 .idea-count { font-size: 11.5px; font-weight: 700; color: var(--text-muted); flex-shrink: 0; }
 
-/* The step fills the screen so the sentence being built can sit at the foot
-   of it rather than floating under the chips with a void beneath. */
-.idea-overlay .search-body { display: flex; flex-direction: column; }
-.idea-step { padding: 8px 0 4px; flex: 1; display: flex; flex-direction: column; }
+/* The step fills the screen so the sentence being built can sit at the foot of
+   it rather than floating under the chips with a void beneath.
+   Only the question screens: a column flex container shrinks its children to
+   fit rather than overflowing, so applying this to the results turned three
+   route cards into three 25px slivers with nothing scrollable. Hence
+   `flex: 1 0 auto` here too - grow into spare room, never shrink below the
+   content. */
+.idea-body { display: flex; flex-direction: column; }
+.idea-body > * { flex-shrink: 0; }
+.idea-step { padding: 8px 0 4px; flex: 1 0 auto; display: flex; flex-direction: column; }
 .idea-step-title {
   margin: 0;
   font-size: 22px;
@@ -2260,8 +2266,19 @@ button, select, input[type="text"], input[type="file"] { font-family: inherit; }
 @keyframes ideaInLeft { from { opacity: 0; transform: translateX(-26px); } }
 .plan-idea-btn { background: var(--accent); margin-top: 8px; }
 
-.idea-asked { margin: 8px 0 14px; }
-.idea-asked-line { margin: 0 0 6px; font-size: 13.5px; line-height: 1.5; color: var(--text-muted); }
+/* The question that produced these results. Two lines is enough to recognise
+   it; the whole thing is one tap away under Change. */
+.idea-asked { margin: 6px 0 14px; }
+.idea-asked-line {
+  margin: 0 0 4px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
 .idea-asked-line b { color: var(--text); font-weight: 600; }
 
 .idea-option { padding: 0; overflow: hidden; }
@@ -2273,15 +2290,38 @@ button, select, input[type="text"], input[type="file"] { font-family: inherit; }
   background: none;
   font-family: inherit;
   padding: 16px;
-  position: relative;
 }
-.idea-option-title { display: block; font-size: 16px; font-weight: 700; color: var(--text); padding-right: 24px; }
-.idea-option-meta { display: block; font-size: 12px; color: var(--text-muted); margin-top: 3px; }
+.idea-option-title { display: block; font-size: 17px; font-weight: 700; color: var(--text); line-height: 1.3; }
+.idea-option-meta {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  margin-top: 4px;
+}
 .idea-option-summary { display: block; font-size: 13.5px; line-height: 1.45; color: var(--text-muted); margin-top: 8px; }
-.idea-option-chevron { position: absolute; top: 16px; right: 16px; color: var(--text-muted); font-size: 15px; }
+/* What the route actually is: the places it goes through, in order. The line
+   that lets two closed cards be compared without opening either. */
+.idea-option-route {
+  display: block;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--surface-2);
+  border-radius: 10px;
+  padding: 8px 10px;
+  margin-top: 10px;
+}
+.idea-option-chevron {
+  display: block;
+  margin-top: 12px;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--accent);
+}
 .idea-option.open { border-color: var(--accent); }
-.idea-option-actions { padding: 0 16px; }
-.idea-option .settings-hint { padding: 0 16px 14px; }
+.idea-option-actions { padding: 4px 16px 0; }
+.idea-option .settings-hint { padding: 8px 16px 14px; }
 
 .idea-day { padding: 0 16px; }
 .idea-day-label {
@@ -2290,28 +2330,46 @@ button, select, input[type="text"], input[type="file"] { font-family: inherit; }
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--accent);
-  margin: 10px 0 6px;
+  margin: 14px 0 2px;
 }
-.idea-stop {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 10px 0;
-  border-top: 1px solid var(--border);
-}
-.idea-stop-kind { font-size: 16px; line-height: 1.4; flex-shrink: 0; }
-.idea-stop-main { flex: 1; min-width: 0; text-align: left; }
-.idea-stop-name { display: block; font-size: 14.5px; font-weight: 600; color: var(--text); }
+.idea-stop { padding: 11px 0 8px; border-top: 1px solid var(--border); }
+.idea-stop-main { display: block; width: 100%; text-align: left; }
+.idea-stop-kind { font-size: 15px; margin-right: 4px; }
+.idea-stop-name { display: block; font-size: 15px; font-weight: 600; color: var(--text); line-height: 1.35; }
 .idea-stop-time { font-weight: 700; color: var(--success); font-size: 12px; }
-.idea-stop-meta { display: block; font-size: 11.5px; color: var(--text-muted); margin-top: 2px; }
-.idea-stop-why { display: block; font-size: 12.5px; line-height: 1.4; color: var(--text-muted); margin-top: 4px; }
+.idea-stop-meta { display: block; font-size: 11.5px; color: var(--text-muted); margin-top: 3px; }
+.idea-stop-why { display: block; font-size: 13px; line-height: 1.45; color: var(--text-muted); margin-top: 5px; }
 /* A stop the measurement says is outside the distance asked for. Flagged
    rather than dropped: the model may know a road we do not, and silently
    removing a stop looks like the AI simply had less to say. */
-.idea-stop-warn { display: block; font-size: 12px; color: var(--warn); margin-top: 5px; }
-.idea-stop.over { background: var(--warn-bg); border-radius: 10px; padding-left: 8px; padding-right: 8px; }
-.idea-stop-actions { display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; }
-.idea-stop-actions .candidate-add { padding: 7px 12px; }
+.idea-stop-warn { display: block; font-size: 12px; color: var(--warn); margin-top: 6px; }
+.idea-stop.over { background: var(--warn-bg); border-radius: 10px; padding-left: 10px; padding-right: 10px; }
+
+/* Actions under the text, not beside it: stacked in a column they were three
+   rows deep and made every stop 145px tall. */
+.idea-stop-actions { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.idea-swap {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  border: none;
+  background: none;
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--accent);
+  /* Sized to its neighbours in the row: a 27px text button next to two 38px
+     ones is both hard to hit and reads as less real than it is. */
+  min-height: 38px;
+  padding: 4px 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.idea-swap:active { opacity: 0.6; }
+.idea-swap-spacer { flex: 1; }
+.idea-stop-actions .search-around { flex-shrink: 0; height: 38px; }
+.idea-stop-actions .candidate-add { flex-shrink: 0; padding: 10px 14px; }
 .idea-stop-actions .candidate-add.saved { background: var(--success); }
 .idea-loading { text-align: center; }
 

@@ -66,15 +66,38 @@ const TRIP = {
   ],
 };
 
+// What a real answer looks like: three routes, three days each, four stops a
+// day. The screen was built and checked against three stops in total, which is
+// how it shipped unable to scroll - every card crushed into a 25px sliver by a
+// flex container that shrinks its children rather than overflowing.
+const bigStop = (name, i, kind) => ({
+  name: `${name} ${i}`, kind, area: `Area ${i}`,
+  why: 'A sentence about why this one is worth the detour, which is usually about this long.',
+  milesFromStart: 20 + i * 7, time: kind === 'eat' ? '12:30' : '',
+  alternatives: [{ name: `Other ${name} ${i}`, area: `Area ${i}`, why: 'The other one.' }],
+});
+const BIG_TRIP = { options: [0, 1, 2].map((o) => ({
+  title: ['Up the A9 through Perthshire', 'West to Loch Lomond and the Trossachs', 'The coast road north'][o],
+  summary: 'A sentence of summary that runs to about this length, because models are not terse.',
+  miles: 120 + o * 30,
+  days: [0, 1, 2].map((d) => ({
+    label: `Day ${d + 1}`,
+    stops: [bigStop('Castle', d * 4 + 1, 'see'), bigStop('Cafe', d * 4 + 2, 'eat'),
+            bigStop('Walk', d * 4 + 3, 'stop'), bigStop('Museum', d * 4 + 4, 'see')],
+  })),
+})) };
+
 let aiPrompts = [];
 await page.route(/generativelanguage\.googleapis\.com/, (route) => {
   if (/\/models\?/.test(route.request().url())) {
     return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
       models: [{ name: 'models/gemini-3.5-flash-lite', supportedGenerationMethods: ['generateContent'] }] }) });
   }
-  try { aiPrompts.push(JSON.parse(route.request().postData() || '{}').contents[0].parts[0].text); } catch (e) { /* not a prompt */ }
+  let prompt = '';
+  try { prompt = JSON.parse(route.request().postData() || '{}').contents[0].parts[0].text; } catch (e) { /* not a prompt */ }
+  aiPrompts.push(prompt);
   return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
-    candidates: [{ content: { parts: [{ text: JSON.stringify(TRIP) }] } }] }) });
+    candidates: [{ content: { parts: [{ text: JSON.stringify(/a big one/.test(prompt) ? BIG_TRIP : TRIP) }] } }] }) });
 });
 
 // Longest key first: "Dunkeld Cathedral, Dunkeld" must not match "Dunkeld".
@@ -335,14 +358,24 @@ check('with what each involves', await page.evaluate(() =>
   /2 days · 3 stops/.test(document.querySelector('.idea-option-meta').textContent)),
   await page.evaluate(() => document.querySelector('.idea-option-meta').textContent));
 
-check('the first is open, with its days named', await page.evaluate(() => {
+// Closed to start with: which route is the first decision, and one opened by
+// default puts the other two below a screen and a half of stops.
+check('they all start closed, so they can be compared', await page.evaluate(() =>
+  document.querySelectorAll('.idea-stop').length === 0 && document.querySelectorAll('.idea-option').length === 2));
+check('each says where it actually goes, without opening it', await page.evaluate(() =>
+  /Dunkeld/.test(document.querySelector('.idea-option-route').textContent)),
+  await page.evaluate(() => (document.querySelector('.idea-option-route') || {}).textContent || ''));
+
+await page.evaluate(() => document.querySelectorAll('[data-idea-option]')[0].click());
+await page.waitForTimeout(500);
+check('opening one shows its days, named', await page.evaluate(() => {
   const labels = Array.from(document.querySelectorAll('.idea-day-label')).map((e) => e.textContent.trim());
   return labels.join(',') === 'Day 1,Day 2';
 }));
 const stops = await page.evaluate(() =>
-  Array.from(document.querySelectorAll('.idea-stop-name')).map((e) => e.textContent.trim()));
+  Array.from(document.querySelectorAll('.idea-stop-name')).map((e) => e.textContent.replace(/\s+/g, ' ').trim()));
 check('and its stops in the order you would drive them',
-  stops[0].startsWith('Dunkeld Cathedral') && /Taybank/.test(stops[1]) && /Blair Castle/.test(stops[2]),
+  /Dunkeld Cathedral/.test(stops[0]) && /Taybank/.test(stops[1]) && /Blair Castle/.test(stops[2]),
   JSON.stringify(stops));
 check('somewhere to eat is marked as such', await page.evaluate(() =>
   Array.from(document.querySelectorAll('.idea-stop')).some((s) =>
@@ -372,6 +405,11 @@ await page.evaluate(() => document.querySelectorAll('[data-idea-option]')[0].cli
 await page.waitForTimeout(500);
 check('a stop with an alternative offers the swap', await page.evaluate(() =>
   !!document.querySelector('[data-idea-swap]')));
+// An icon cannot say what it would swap to, and that is the only thing that
+// would make the button worth pressing.
+check('and the button names the place it would swap to', await page.evaluate(() =>
+  /Birnam Oak/.test(document.querySelector('[data-idea-swap]').textContent)),
+  await page.evaluate(() => document.querySelector('[data-idea-swap]').textContent));
 await page.evaluate(() => document.querySelector('[data-idea-swap]').click());
 await page.waitForTimeout(600);
 const swapped = await page.evaluate(() =>
@@ -472,6 +510,93 @@ await page.waitForTimeout(700);
 check('with no AI key it says where to put one rather than failing quietly',
   await page.evaluate(() => document.getElementById('placeModal').classList.contains('open') &&
     /Gemini/i.test(document.getElementById('placeModal').textContent)));
+
+// ---------- A full-size answer, on a screen that has to hold it ----------
+// The complaint this section exists for: options overlapping, nothing
+// scrollable. Everything above passed while that was true, because three
+// stops fit on any screen.
+
+await page.setViewportSize({ width: 390, height: 600 });
+await seed();
+await page.evaluate(() => document.querySelector('[data-view="itinerary"]').click());
+await page.waitForTimeout(400);
+await page.evaluate(() => document.getElementById('tripIdeaBtn').click());
+await page.waitForSelector('#ideaOverlay.open', { timeout: 4000 });
+await chip('Edinburgh');
+await page.waitForTimeout(200);
+await goToStep('extra');
+await page.fill('[data-idea-text="extra"]', 'make it a big one');
+await page.waitForTimeout(200);
+await next();
+await next();
+await page.waitForSelector('.idea-option', { timeout: 8000 });
+await page.waitForTimeout(600);
+
+const geometry = () => page.evaluate(() => {
+  const body = document.querySelector('#ideaOverlay .search-body');
+  const cards = Array.from(document.querySelectorAll('#ideaOverlay .idea-option, #ideaOverlay .idea-stop'));
+  const boxes = cards.map((e) => ({ tag: e.className.split(' ')[0], ...e.getBoundingClientRect().toJSON() }));
+  let overlaps = 0;
+  for (let i = 0; i < boxes.length; i++) {
+    for (let j = i + 1; j < boxes.length; j++) {
+      const a = boxes[i]; const b = boxes[j];
+      if (a.tag !== b.tag) continue;
+      if (a.top < b.bottom - 1 && b.top < a.bottom - 1) overlaps++;
+    }
+  }
+  return {
+    overlaps,
+    count: boxes.length,
+    shortest: boxes.length ? Math.min(...boxes.map((b) => b.height)) : 0,
+    scrollable: body.scrollHeight > body.clientHeight + 2,
+    room: body.scrollHeight - body.clientHeight,
+  };
+});
+
+const closed = await geometry();
+check('three full routes do not overlap each other', closed.overlaps === 0, JSON.stringify(closed));
+check('and none is crushed to a sliver', closed.shortest > 80, JSON.stringify(closed));
+check('the screen scrolls when there is more than fits', closed.scrollable, JSON.stringify(closed));
+
+const reached = await page.evaluate(() => {
+  const body = document.querySelector('#ideaOverlay .search-body');
+  body.scrollTop = 99999;
+  return { at: Math.round(body.scrollTop), max: Math.round(body.scrollHeight - body.clientHeight) };
+});
+check('and scrolling actually reaches the bottom', reached.max > 0 && reached.at === reached.max, JSON.stringify(reached));
+check('where the last route is', await page.evaluate(() =>
+  /coast road north/.test(document.getElementById('ideaOverlay').textContent)));
+
+// Twelve stops, twelve geocodes, and a redraw after each: the screen used to
+// jump back to the top every time one landed.
+await page.evaluate(() => {
+  const body = document.querySelector('#ideaOverlay .search-body');
+  body.scrollTop = 0;
+  document.querySelectorAll('[data-idea-option]')[2].click();
+});
+await page.waitForTimeout(400);
+const openedAt = await page.evaluate(() => Math.round(document.querySelector('#ideaOverlay .search-body').scrollTop));
+check('opening the third route brings it up to where you are looking', openedAt > 100, String(openedAt));
+
+await page.evaluate(() => { document.querySelector('#ideaOverlay .search-body').scrollTop = 900; });
+await page.waitForTimeout(1600); // long enough for the distance lookups to redraw
+const stillThere = await page.evaluate(() => Math.round(document.querySelector('#ideaOverlay .search-body').scrollTop));
+check('and the mileages landing behind you do not throw you back to the top',
+  stillThere > 500, String(stillThere));
+
+const opened = await geometry();
+check('an opened route with twelve stops still does not overlap', opened.overlaps === 0, JSON.stringify(opened));
+check('every stop is a readable height', opened.shortest > 80, JSON.stringify(opened));
+check('every tap target is big enough to hit', await page.evaluate(() => {
+  const small = Array.from(document.querySelectorAll('#ideaOverlay button'))
+    .filter((b) => b.offsetParent !== null)
+    .map((b) => ({ t: b.className || b.id, h: Math.round(b.getBoundingClientRect().height) }))
+    .filter((b) => b.h < 32);
+  return small.length === 0 || JSON.stringify(small);
+}) === true, await page.evaluate(() => JSON.stringify(Array.from(document.querySelectorAll('#ideaOverlay button'))
+  .filter((b) => b.offsetParent !== null)
+  .map((b) => ({ t: b.className || b.id, h: Math.round(b.getBoundingClientRect().height) }))
+  .filter((b) => b.h < 32))));
 
 await browser.close();
 console.log(failures === 0 ? '\nALL TESTS PASSED' : `\n${failures} FAILED`);

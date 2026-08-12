@@ -6040,13 +6040,16 @@
     const path = `${oi}|${di}|${si}`;
     const meta = [stop.area, miles != null ? `${miles} mi out` : ""].filter(Boolean).join(" · ");
 
+    // The actions sit under the text rather than beside it. Stacked in a
+    // column they were three rows deep, which made every stop 145px tall - a
+    // twelve-stop route was most of two thousand pixels of scrolling.
     return `
       <div class="idea-stop${over ? " over" : ""}">
-        <span class="idea-stop-kind" title="${esc(kind.label)}">${kind.icon}</span>
         <button class="result-tap idea-stop-main" data-idea-preview="${esc(path)}">
-          <span class="idea-stop-name">${esc(stop.name)}${
-            stop.time ? ` <span class="idea-stop-time">${esc(stop.time)}</span>` : ""
-          }</span>
+          <span class="idea-stop-name">
+            <span class="idea-stop-kind" title="${esc(kind.label)}">${kind.icon}</span>
+            ${esc(stop.name)}${stop.time ? ` <span class="idea-stop-time">${esc(stop.time)}</span>` : ""}
+          </span>
           ${meta ? `<span class="idea-stop-meta">${esc(meta)}</span>` : ""}
           ${stop.why ? `<span class="idea-stop-why">${esc(stop.why)}</span>` : ""}
           ${
@@ -6058,19 +6061,38 @@
           }
         </button>
         <div class="idea-stop-actions">
-          <button class="candidate-add${saved ? " saved" : ""}" data-idea-add="${esc(path)}"
-                  aria-label="${saved ? "Saved" : `Save ${esc(stop.name)}`}">${saved ? "✓" : "＋"}</button>
+          ${
+            // Named, not an icon. "🔄" gave no clue what it would swap to, and
+            // the answer - the name of the other place - is the only thing
+            // that would make the button worth pressing.
+            stop.alternatives.length
+              ? `<button class="idea-swap" data-idea-swap="${esc(path)}">⇄ or ${esc(
+                  stop.alternatives[0].name
+                )}</button>`
+              : `<span class="idea-swap-spacer"></span>`
+          }
           <button class="search-around" data-idea-day="${esc(path)}"
                   aria-label="Put ${esc(stop.name)} on a day">📅</button>
-          ${
-            stop.alternatives.length
-              ? `<button class="search-around" data-idea-swap="${esc(path)}"
-                         aria-label="Swap for ${esc(stop.alternatives[0].name)}">🔄</button>`
-              : ""
-          }
+          <button class="candidate-add${saved ? " saved" : ""}" data-idea-add="${esc(path)}"
+                  aria-label="${saved ? "Saved" : `Save ${esc(stop.name)}`}">${saved ? "✓ Saved" : "＋ Save"}</button>
         </div>
       </div>
     `;
+  }
+
+  // What a route actually is, in one line: the places it goes through. Two
+  // collapsed cards you can compare beat one expanded card and two you have to
+  // remember, and this is the line that makes comparing them possible.
+  function ideaRouteLine(option) {
+    const seen = [];
+    option.days.forEach((d) =>
+      d.stops.forEach((s) => {
+        const where = (s.area || s.name || "").trim();
+        if (where && !seen.some((x) => x.toLowerCase() === where.toLowerCase())) seen.push(where);
+      })
+    );
+    if (!seen.length) return "";
+    return seen.length > 5 ? `${seen.slice(0, 5).join(" → ")} → +${seen.length - 5} more` : seen.join(" → ");
   }
 
   function ideaResultsHtml() {
@@ -6098,11 +6120,11 @@
       `;
     }
 
-    // The full question, not the header's shortened version of it: what was
-    // asked is the only thing that explains what came back.
+    // Kept to two lines. What was asked explains what came back and has to be
+    // here, but a full screen of preamble before the first result is a page of
+    // scrolling to reach the thing you came for.
     let html = `
       <div class="idea-asked">
-        <div class="section-label">You asked for</div>
         <p class="idea-asked-line">${ideaSentence()}</p>
         <button class="link-btn" data-idea-edit="1">Change the question</button>
       </div>
@@ -6119,13 +6141,15 @@
         .filter(Boolean)
         .join(" · ");
 
+      const route = ideaRouteLine(option);
       html += `
         <div class="card idea-option${open ? " open" : ""}">
           <button class="idea-option-head" data-idea-option="${oi}" aria-expanded="${open ? "true" : "false"}">
             <span class="idea-option-title">${esc(option.title)}</span>
             <span class="idea-option-meta">${esc(meta)}</span>
             ${option.summary ? `<span class="idea-option-summary">${esc(option.summary)}</span>` : ""}
-            <span class="idea-option-chevron">${open ? "⌃" : "⌄"}</span>
+            ${route ? `<span class="idea-option-route">${esc(route)}</span>` : ""}
+            <span class="idea-option-chevron">${open ? "Hide the stops ⌃" : "See the stops ⌄"}</span>
           </button>
       `;
 
@@ -6158,11 +6182,20 @@
     return html;
   }
 
+  let ideaScreenId = "";
+
   function renderIdea() {
     if (!tripIdea) return;
     const showResults = tripIdea.view === "results";
     const slide = ideaSlide ? ` idea-slide-${ideaSlide}` : "";
     ideaSlide = "";
+    // Redrawing throws the scroll position away, and the distance check redraws
+    // once per lookup - so reading the third route meant being thrown back to
+    // the top a dozen times while the mileages came in. Keep the position when
+    // it is the same screen; start at the top when it is a different one.
+    const previous = ideaOverlay.querySelector(".search-body");
+    const previousScroll = previous ? previous.scrollTop : 0;
+    const screenId = `${tripIdea.view}|${ideaStepIndex()}|${tripIdea.expanded}|${tripIdea.status}`;
     ideaOverlay.innerHTML = `
       <div class="search-head">
         <button class="search-back" data-idea-close="1" aria-label="Close">←</button>
@@ -6173,10 +6206,15 @@
           }</div>
         </div>
       </div>
-      <div class="search-body${showResults ? "" : slide}">${showResults ? ideaResultsHtml() : ideaBriefHtml()}</div>
+      <div class="search-body${showResults ? "" : ` idea-body${slide}`}">${
+        showResults ? ideaResultsHtml() : ideaBriefHtml()
+      }</div>
       ${showResults ? "" : ideaNavHtml()}
     `;
     ideaOverlay.classList.add("open");
+    const body = ideaOverlay.querySelector(".search-body");
+    if (body) body.scrollTop = screenId === ideaScreenId ? previousScroll : 0;
+    ideaScreenId = screenId;
     wireIdea();
   }
 
@@ -6390,7 +6428,10 @@
       const options = normaliseIdeaOptions(extractJson(text));
       if (!options.length) throw new Error("The model didn't send back a trip that could be read.");
       tripIdea.options = options;
-      tripIdea.expanded = 0;
+      // All closed: the first question is which route, and one opened by
+      // default puts the other two below a screen and a half of stops, where
+      // they cannot be compared with it or with each other.
+      tripIdea.expanded = -1;
       tripIdea.status = "done";
       tripIdea.askedAs = ideaSummaryLine();
     } catch (e) {
@@ -6400,7 +6441,9 @@
     }
     saveIdea();
     renderIdea();
-    if (tripIdea.status === "done") measureIdeaOption(tripIdea.expanded);
+    // Measured while you are still reading the summaries, so the first route
+    // you open already knows its real distances.
+    if (tripIdea.status === "done") measureIdeaOption(0);
   }
 
   function ideaPrompt() {
@@ -6579,7 +6622,14 @@
         tripIdea.expanded = tripIdea.expanded === i ? -1 : i;
         saveIdea();
         renderIdea();
-        if (tripIdea.expanded === i) measureIdeaOption(i);
+        if (tripIdea.expanded !== i) return;
+        // Opening the third card left it where it was - below the fold, under
+        // two cards you had finished with. What you just opened goes to the
+        // top, which is where you are looking.
+        const card = ideaOverlay.querySelector(`[data-idea-option="${i}"]`);
+        const body = ideaOverlay.querySelector(".search-body");
+        if (card && body) body.scrollTop = card.offsetTop - body.offsetTop - 8;
+        measureIdeaOption(i);
       });
     });
 
