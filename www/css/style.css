@@ -2376,3 +2376,43 @@ button, select, input[type="text"], input[type="file"] { font-family: inherit; }
 /* "Refine" and "Again" are words, not icons. They inherited the 44px icon
    button from the search bar, which cut them off against the screen edge. */
 .refine-bar button { width: auto; padding: 0 14px; font-size: 13.5px; font-weight: 700; }
+
+/* ---------- Where a search is anchored ---------- */
+/* Always on screen, directly under the field it constrains. The old behaviour
+   was to scope by the region's name invisibly, which meant a wrong area was
+   both the cause of bad results and impossible to notice. */
+.search-anchor {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+  font-family: inherit;
+  text-align: left;
+  padding: 10px 16px;
+  min-height: 44px;
+}
+.search-anchor:active { opacity: 0.7; }
+.search-anchor-pin { flex-shrink: 0; font-size: 13px; }
+.search-anchor-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.search-anchor-text b { color: var(--text); font-weight: 700; }
+.search-anchor-change { flex-shrink: 0; font-size: 12.5px; font-weight: 700; color: var(--accent); }
+.search-outside {
+  background: var(--warn-bg);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-top: 12px;
+  color: var(--warn);
+}
+.search-outside .link-btn { color: var(--warn); font-weight: 700; }

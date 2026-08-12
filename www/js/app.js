@@ -443,20 +443,35 @@
   // Turns a vague ask ("quiet cafe near the castle for a tired toddler") into
   // named candidate places. Only names come from the model - coordinates and
   // address are then resolved against OSM, so nothing positional is invented.
-  async function searchWithGemini(query, key, guidance) {
+  async function searchWithGemini(query, key, guidance, anchor) {
     const s = loadTripSettings();
-    const where = s.destination.trim() ? ` in ${s.destination.trim()}` : "";
+    const where = anchor
+      ? ` within ${anchorMiles(anchor)} miles of ${anchor.name}${
+          s.destination.trim() ? `, ${s.destination.trim()}` : ""
+        }`
+      : s.destination.trim()
+      ? ` in ${s.destination.trim()}`
+      : "";
     const who = aiContextBlock();
     // Whatever you added in your own words, passed through as written. The
     // categories and the query cover the usual asks; this is for the ones they
     // do not - "somewhere we can sit outside with a buggy", "not a chain".
     const extra = (guidance || "").trim() ? `\n\nAlso, specifically: ${guidance.trim()}` : "";
 
+    // The postcode is the whole reason this got accurate. A name and a town
+    // ("The Bakehouse, Newport") is ambiguous in a way the geocoder cannot
+    // resolve; a name and a postcode is not ambiguous at all. Asked for here,
+    // and used as the first lookup key below.
     const prompt =
       `Find up to 5 real, currently-open places matching this request${where}.` +
       `${who}\n\nRequest: ${query}${extra}\n\n` +
+      (anchor
+        ? `Every place must genuinely be within ${anchorMiles(anchor)} miles of ${anchor.name}. ` +
+          `Do not include somewhere further away because it is well known - leave it out instead.\n\n`
+        : "") +
       `Use search to check they exist and are still trading. Reply with ONLY a JSON array, ` +
-      `each item: {"name": exact official name, "area": neighbourhood or street, ` +
+      `each item: {"name": exact official name, "area": town or village it is in, ` +
+      `"postcode": its postcode if you know it, otherwise "", ` +
       `"why": one short sentence on why it fits}. No other text.`;
 
     const { text, sources } = await callGemini(key, prompt, { grounded: true });
@@ -470,7 +485,9 @@
         if (!item || !item.name) return null;
         let geo = null;
         try {
-          geo = await geocodePlace(item.name, item.area || null);
+          // Postcode first when there is one: "The Bakehouse, PH16 5AN" has
+          // exactly one answer, where "The Bakehouse, Newport" has thirty.
+          geo = await geocodePlace(item.name, postcodeIn(item.postcode) || item.area || null, anchor);
         } catch (e) {
           geo = null;
         }
@@ -1082,16 +1099,22 @@
   const AMBIGUOUS_MIN_KM = 25;
   const GEOCODE_LIMIT = 5;
 
-  async function geocodeCandidates(name, cityHint) {
+  async function geocodeCandidates(name, cityHint, anchor) {
     const queries = [];
     if (cityHint) queries.push(`${name}, ${cityHint}`);
     queries.push(scopedQuery(name));
     queries.push(name);
 
-    for (const q of queries) {
+    // Tried bounded first when a search is anchored, then unbounded: a place
+    // genuinely outside the area should still be findable, but it must not win
+    // against one inside it.
+    const box = anchor ? `&bounded=1&viewbox=${encodeURIComponent(anchorViewbox(anchor))}` : "";
+    const attempts = box ? queries.map((q) => ({ q, box })).concat(queries.map((q) => ({ q, box: "" }))) : queries.map((q) => ({ q, box: "" }));
+
+    for (const attempt of attempts) {
       const url =
         `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=${GEOCODE_LIMIT}` +
-        `&addressdetails=1&extratags=1&namedetails=1&q=${encodeURIComponent(q)}`;
+        `&addressdetails=1&extratags=1&namedetails=1&q=${encodeURIComponent(attempt.q)}${attempt.box}`;
       let data;
       try {
         const res = await fetch(url, { headers: { Accept: "application/json" } });
@@ -1101,12 +1124,22 @@
         continue;
       }
       if (data && data.length) {
-        return data.map((r) => {
+        const places = data.map((r) => {
           const place = placeFromNominatim(r);
           place.displayName = r.display_name || "";
           place.label = (r.namedetails && r.namedetails.name) || String(r.display_name || "").split(",")[0];
           return place;
         });
+        // The first answer was taken as the right one, which is how a search
+        // near Pitlochry ended up pinned to a same-named place in Cornwall.
+        // Nearest to where you are looking wins instead.
+        if (anchor) {
+          places.sort(
+            (a, b) =>
+              haversineKm(anchor.lat, anchor.lon, a.lat, a.lon) - haversineKm(anchor.lat, anchor.lon, b.lat, b.lon)
+          );
+        }
+        return places;
       }
     }
     return [];
@@ -1201,8 +1234,8 @@
     }));
   }
 
-  async function geocodePlace(name, cityHint) {
-    const candidates = await geocodeCandidates(name, cityHint);
+  async function geocodePlace(name, cityHint, anchor) {
+    const candidates = await geocodeCandidates(name, cityHint, anchor);
     return candidates.length ? candidates[0] : null;
   }
 
@@ -6751,6 +6784,7 @@
   }
 
   function openSearchOverlay(prefill) {
+    searchAnchor = loadAnchor();
     if (prefill !== undefined) pickSearch = { query: prefill, status: "idle", results: [] };
     renderSearchOverlay();
     const input = document.getElementById("pickSearchInput");
@@ -6769,6 +6803,9 @@
   }
 
   let searchGeneration = 0;
+  // The anchor in force on the search screen. Read from storage when the
+  // screen opens so it can be shown before anything is typed.
+  let searchAnchor = null;
 
   async function runSearch(query, guidance, seed) {
     const q = (query || "").trim();
@@ -6784,18 +6821,23 @@
     const extra = guidance === undefined ? pickSearch.guidance || "" : guidance;
     // A place you picked outright is shown while the rest is still loading:
     // it is already the answer, and nothing that comes back can improve on it.
-    pickSearch = { query: q, status: "loading", results: seed ? [seed] : [], guidance: extra };
+    pickSearch = { query: q, status: "loading", results: seed ? [seed] : [], guidance: extra, anchor: searchAnchor };
     renderSearchOverlay();
     try {
-      const found = await searchPlaces(q, extra);
+      // Resolved per search rather than per keystroke: a postcode typed into
+      // the query is an anchor in its own right and beats the standing one.
+      const anchor = await anchorForQuery(q);
+      if (generation !== searchGeneration) return;
+      searchAnchor = anchor;
+      const found = await searchPlaces(q, extra, anchor);
       if (generation !== searchGeneration) return;
       const results = seed
         ? [seed].concat(found.filter((r) => normalisedName(r.name) !== normalisedName(seed.name)))
         : found;
-      pickSearch = { query: q, status: "done", results, guidance: extra };
+      pickSearch = { query: q, status: "done", results, guidance: extra, anchor, outside: lastSearchOutside };
     } catch (e) {
       if (generation !== searchGeneration) return;
-      pickSearch = { query: q, status: seed ? "done" : "error", results: seed ? [seed] : [], guidance: extra };
+      pickSearch = { query: q, status: seed ? "done" : "error", results: seed ? [seed] : [], guidance: extra, anchor: searchAnchor };
     }
     renderSearchOverlay();
   }
@@ -6952,6 +6994,16 @@
         `;
       });
       body += `</div>`;
+      if (pickSearch.outside) {
+        body += `
+          <p class="settings-hint search-outside">
+            ${esc(String(pickSearch.outside))} result${pickSearch.outside === 1 ? " was" : "s were"} too far from
+            ${esc((pickSearch.anchor && pickSearch.anchor.name) || "here")} to be what you meant, so
+            ${pickSearch.outside === 1 ? "it is" : "they are"} not shown.
+            <button class="link-btn" data-anchor-wider="1">Look further out</button>
+          </p>
+        `;
+      }
       body += `<p class="settings-hint search-foot">＋ saves it, 🧭 looks around it, or tap the place to read about it first.${
         results.some((r) => r.isArea) ? " A 🏘️ result is a town or area: saving it gives it its own section." : ""
       }</p>`;
@@ -6985,6 +7037,15 @@
           }
         </form>
       </div>
+      <button class="search-anchor" data-anchor-open="1">
+        <span class="search-anchor-pin">📍</span>
+        <span class="search-anchor-text">${
+          searchAnchor
+            ? `Searching within <b>${esc(String(anchorMiles(searchAnchor)))} miles</b> of <b>${esc(searchAnchor.name)}</b>`
+            : `Searching <b>anywhere</b>`
+        }</span>
+        <span class="search-anchor-change">Change</span>
+      </button>
       <div class="suggest-list" id="pickSuggestList" role="listbox" hidden></div>
       <div class="search-body">${body}</div>
     `;
@@ -7198,12 +7259,157 @@
     }
   }
 
+  // Changing where a search looks. Everything that can name a place is offered
+  // in the order you are likely to have one: the areas you have saved, where
+  // you are standing, and a box that takes a town or a postcode.
+  function openAnchorSheet() {
+    const current = searchAnchor;
+    const miles = anchorMiles(current);
+    const areas = loadPicks().filter((p) => p.major && p.lat != null);
+
+    placeModal.innerHTML = `
+      <div class="modal-backdrop" data-close="1">
+        <div class="modal-sheet" role="dialog" aria-label="Where to search">
+          <div class="modal-handle"></div>
+          <button class="modal-close" data-close="1" aria-label="Close">✕</button>
+          <div class="modal-body">
+            <h2 class="modal-title">Where should I look?</h2>
+            <p class="settings-hint">Results outside this are almost always the wrong place with the right name.</p>
+
+            <label class="settings-label">How far out</label>
+            <div class="move-row">
+              ${ANCHOR_MILES.map(
+                (m) =>
+                  `<button class="move-chip${m === miles && current ? " active" : ""}" data-anchor-miles="${m}">${m} mi</button>`
+              ).join("")}
+            </div>
+
+            ${
+              areas.length
+                ? `<label class="settings-label">Somewhere you've saved</label>
+                   <div class="move-row">
+                     ${areas
+                       .map(
+                         (p) =>
+                           `<button class="move-chip${
+                             current && current.name === p.name ? " active" : ""
+                           }" data-anchor-pick="${esc(p.id)}">${esc(p.name)}</button>`
+                       )
+                       .join("")}
+                   </div>`
+                : ""
+            }
+
+            <label class="settings-label">Or a town or postcode</label>
+            <form class="search-bar" id="anchorForm">
+              <input type="text" id="anchorInput" placeholder="e.g. Pitlochry, or PH16"
+                     autocomplete="off" value="${esc(current && !current.fromPick ? current.name : "")}" />
+              <button type="submit" aria-label="Use this">Set</button>
+            </form>
+            <p class="settings-hint" id="anchorStatus"></p>
+
+            <div class="settings-btn-row" style="margin-top:12px;">
+              <button class="modal-btn" id="anchorHere">📍 Where I am now</button>
+              <button class="modal-btn" id="anchorAnywhere">🌍 Anywhere</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+    placeModal.classList.add("open");
+
+    const say = (text) => {
+      const el = document.getElementById("anchorStatus");
+      if (el) el.textContent = text;
+    };
+    const apply = (anchor) => {
+      searchAnchor = anchor;
+      saveAnchor(anchor);
+      closePlaceModal();
+      renderSearchOverlay();
+      // Changing where to look is only ever done because the last answer was
+      // wrong, so the search runs again rather than leaving it on screen.
+      if (pickSearch.query && pickSearch.status !== "idle") runSearch(pickSearch.query);
+    };
+
+    placeModal.querySelectorAll("[data-close]").forEach((el) =>
+      el.addEventListener("click", (e) => {
+        if (e.target === el) closePlaceModal();
+      })
+    );
+    placeModal.querySelectorAll("[data-anchor-miles]").forEach((btn) =>
+      btn.addEventListener("click", () => {
+        const next = Number(btn.getAttribute("data-anchor-miles"));
+        // Widening with nothing to widen around: fall back to whatever the
+        // board can offer rather than doing nothing visible.
+        const base = current || derivedAnchor();
+        if (!base) return say("Pick somewhere to search around first.");
+        apply(Object.assign({}, base, { miles: next }));
+      })
+    );
+    placeModal.querySelectorAll("[data-anchor-pick]").forEach((btn) =>
+      btn.addEventListener("click", () => {
+        const p = loadPicks().find((x) => x.id === btn.getAttribute("data-anchor-pick"));
+        if (p) apply({ name: p.name, lat: p.lat, lon: p.lon, miles, fromPick: true });
+      })
+    );
+
+    const form = document.getElementById("anchorForm");
+    if (form) {
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const text = document.getElementById("anchorInput").value.trim();
+        if (!text) return;
+        say("Looking that up…");
+        const found = await anchorFromText(text, miles);
+        if (!found) return say(`Couldn't find "${text}". Try a town, or a postcode like PH16.`);
+        apply(found);
+      });
+    }
+
+    const here = document.getElementById("anchorHere");
+    if (here) {
+      here.addEventListener("click", async () => {
+        say("Finding you…");
+        try {
+          const pos = await currentPosition();
+          const place = await reverseGeocode(pos.lat, pos.lon).catch(() => null);
+          apply({
+            name: (place && (place.name || place.address)) || "where you are",
+            lat: pos.lat,
+            lon: pos.lon,
+            miles,
+          });
+        } catch (err) {
+          say("Couldn't get your location.");
+        }
+      });
+    }
+    const anywhere = document.getElementById("anchorAnywhere");
+    if (anywhere) anywhere.addEventListener("click", () => apply(null));
+  }
+
   function wireSearchOverlay() {
     searchOverlay.querySelectorAll("[data-search-close]").forEach((b) =>
       b.addEventListener("click", dismissSearchOverlay)
     );
     searchOverlay.querySelectorAll("[data-open-idea-search]").forEach((b) =>
       b.addEventListener("click", () => openTripIdea())
+    );
+    searchOverlay.querySelectorAll("[data-anchor-open]").forEach((b) =>
+      b.addEventListener("click", () => openAnchorSheet())
+    );
+    searchOverlay.querySelectorAll("[data-anchor-wider]").forEach((b) =>
+      b.addEventListener("click", () => {
+        // One tap to the next size up, rather than a trip through the sheet to
+        // do the only thing the message was about.
+        const base = searchAnchor || derivedAnchor();
+        if (!base) return;
+        const next = ANCHOR_MILES.find((m) => m > anchorMiles(base)) || anchorMiles(base) * 2;
+        searchAnchor = Object.assign({}, base, { miles: next });
+        saveAnchor(searchAnchor);
+        runSearch(pickSearch.query);
+      })
     );
 
     const form = document.getElementById("pickSearchForm");
@@ -7366,6 +7572,153 @@
   // Google is used because OSM's community data simply doesn't have many
   // smaller businesses; OSM stays as the no-setup default and the fallback
   // for when a Google call fails, so search always works either way.
+  // ---------- Where a search is anchored ----------
+  // Search results were arriving from anywhere on earth, and the reason was
+  // that no part of the chain ever carried a coordinate. Every backend was
+  // handed a string - "cafe, Scotland" - and asked to do its best:
+  //
+  //   Nominatim   free text, no viewbox, no bounds. "Newport" is a town in
+  //               Wales, one in Fife, one on the Isle of Wight and about
+  //               thirty more.
+  //   Google      textQuery only, no location bias, so a global best match
+  //               beats a local one every time.
+  //   Gemini      told "in Scotland", a country of 30,000 square miles, and
+  //               then each name it returned was geocoded by name alone.
+  //
+  // Nothing checked afterwards that a result was anywhere near where you
+  // meant. So: every search is anchored to a real place with real
+  // coordinates and a radius, that anchor goes to each backend in the form
+  // that backend can actually enforce, and anything that still comes back
+  // from the wrong end of the country is dropped and counted rather than
+  // listed. The anchor is shown on screen and is one tap to change, because
+  // an invisible constraint that is wrong is worse than no constraint.
+  const ANCHOR_PART = "search-anchor";
+  const ANCHOR_MILES = [5, 15, 25, 50, 100];
+  const DEFAULT_ANCHOR_MILES = 25;
+  // How far past the radius a result may sit before it is treated as a wrong
+  // answer rather than a near miss: the radius is crow-flies, roads are not,
+  // and an anchor typed as a town is a point standing in for a place with
+  // width.
+  const ANCHOR_GRACE = 1.5;
+
+  // A full UK postcode, or just the outward half - "PH16" is what people
+  // remember and is already enough to pin a search to a few square miles.
+  const POSTCODE_FULL = /\b([A-Z]{1,2}\d[A-Z\d]?)\s*(\d[A-Z]{2})\b/i;
+  const POSTCODE_OUT = /\b([A-Z]{1,2}\d[A-Z\d]?)\b/i;
+
+  function postcodeIn(text) {
+    const s = String(text || "").trim();
+    if (!s) return null;
+    const full = s.match(POSTCODE_FULL);
+    if (full) return `${full[1].toUpperCase()} ${full[2].toUpperCase()}`;
+    // Guarded hard, or every "A9", "M8" and "B1" in a sentence becomes a
+    // postcode: the outward code has to be the whole of what was typed.
+    const out = s.match(POSTCODE_OUT);
+    if (out && out[0].length === s.length && /\d/.test(s)) return out[1].toUpperCase();
+    return null;
+  }
+
+  function toKm(miles) {
+    return miles / MILES_PER_KM;
+  }
+
+  function loadAnchor() {
+    const stored = readJson(boardKey(activeBoard().id, ANCHOR_PART), null);
+    if (stored === "anywhere") return null;
+    if (stored && typeof stored === "object" && stored.lat != null) return stored;
+    return derivedAnchor();
+  }
+
+  function saveAnchor(anchor) {
+    localStorage.setItem(boardKey(activeBoard().id, ANCHOR_PART), JSON.stringify(anchor || "anywhere"));
+  }
+
+  // A first guess from what is already saved, so the very first search is
+  // bounded too. Shown on screen like any other anchor, and cleared in one
+  // tap - a guess you can see and change is a different thing from a guess
+  // made behind your back.
+  function derivedAnchor() {
+    const picks = loadPicks().filter((p) => p.lat != null);
+    if (!picks.length) return null;
+
+    const majors = picks.filter((p) => p.major);
+    if (majors.length === 1) {
+      return { name: majors[0].name, lat: majors[0].lat, lon: majors[0].lon, miles: DEFAULT_ANCHOR_MILES };
+    }
+
+    const lat = picks.reduce((n, p) => n + p.lat, 0) / picks.length;
+    const lon = picks.reduce((n, p) => n + p.lon, 0) / picks.length;
+    // Wide enough to hold everything already saved, plus room to find
+    // something new next to the furthest of them.
+    const furthest = Math.max(...picks.map((p) => toMiles(haversineKm(lat, lon, p.lat, p.lon))));
+    const miles = Math.min(150, Math.max(DEFAULT_ANCHOR_MILES, Math.ceil(furthest) + 15));
+    const name = nearestMajorPlace(lat, lon) || suggestedFolderFor(lat, lon) || activeBoard().destination || "your places";
+    return { name, lat, lon, miles };
+  }
+
+  function anchorMiles(anchor) {
+    const m = anchor && Number(anchor.miles);
+    return Number.isFinite(m) && m > 0 ? m : DEFAULT_ANCHOR_MILES;
+  }
+
+  // The box each backend gets, in the units each one wants.
+  function anchorBox(anchor) {
+    const km = toKm(anchorMiles(anchor));
+    const dLat = km / 111;
+    const dLon = km / (111 * Math.max(0.2, Math.cos((anchor.lat * Math.PI) / 180)));
+    return {
+      west: anchor.lon - dLon,
+      east: anchor.lon + dLon,
+      south: anchor.lat - dLat,
+      north: anchor.lat + dLat,
+    };
+  }
+
+  function anchorViewbox(anchor) {
+    const b = anchorBox(anchor);
+    return `${b.west},${b.north},${b.east},${b.south}`;
+  }
+
+  function withinAnchor(anchor, lat, lon, grace) {
+    if (!anchor || lat == null || lon == null) return true;
+    return toMiles(haversineKm(anchor.lat, anchor.lon, lat, lon)) <= anchorMiles(anchor) * (grace || 1);
+  }
+
+  function describeAnchor(anchor) {
+    if (!anchor) return "Anywhere";
+    return `${anchor.name} · ${anchorMiles(anchor)} miles`;
+  }
+
+  // Turning what someone typed into an anchor: a postcode if it is one - the
+  // sharpest thing anyone can give us - otherwise a place name.
+  async function anchorFromText(text, miles) {
+    const raw = String(text || "").trim();
+    if (!raw) return null;
+    const postcode = postcodeIn(raw);
+    const geo = await geocodePlace(postcode || raw, null).catch(() => null);
+    if (!geo) return null;
+    return {
+      name: postcode || raw,
+      lat: geo.lat,
+      lon: geo.lon,
+      miles: miles || DEFAULT_ANCHOR_MILES,
+      postcode: postcode || null,
+    };
+  }
+
+  // The anchor a particular search runs against. A postcode in the query wins
+  // outright: typing one is the clearest possible statement of where you mean,
+  // and it would be perverse to search somewhere else.
+  async function anchorForQuery(query) {
+    const postcode = postcodeIn(query);
+    if (postcode) {
+      const stored = loadAnchor();
+      const found = await anchorFromText(postcode, stored ? anchorMiles(stored) : DEFAULT_ANCHOR_MILES);
+      if (found) return found;
+    }
+    return loadAnchor();
+  }
+
   let lastSearchError = "";
 
   // Searching for a town never found the town. Every backend answers with
@@ -7377,13 +7730,35 @@
   // The place itself is now looked up alongside whatever else answers, and if
   // OpenStreetMap says the name is a town, city, village or island it goes to
   // the top of the results as an area you can save in one tap.
-  async function searchPlaces(query, guidance) {
+  let lastSearchOutside = 0;
+
+  async function searchPlaces(query, guidance, anchor) {
     lastSearchError = "";
+    lastSearchOutside = 0;
     // Started first and awaited last, so it costs nothing in wall-clock time
     // against a search that takes seconds.
-    const areaPromise = lookupPlacesThemselves(query).catch(() => []);
-    const results = await searchPlaceBackends(query, guidance);
+    const areaPromise = lookupPlacesThemselves(query, anchor).catch(() => []);
+    const found = await searchPlaceBackends(query, guidance, anchor);
     const areas = await areaPromise;
+
+    // The last line of defence. Each backend has now been told where to look
+    // in the form it can actually enforce, but a grounded model can still name
+    // somewhere it likes the sound of, and OSM can still hand back the wrong
+    // branch of a chain. A cafe two hundred miles outside the area asked for is
+    // not a near miss, it is a wrong answer - so it is dropped, and counted, so
+    // the screen can say what happened rather than quietly showing less.
+    //
+    // Towns are deliberately exempt. The anchor exists to find *things* near
+    // you; a place you have typed the name of is not that. Searching "Newport"
+    // while anchored to Pitlochry should still offer the Newports, or the
+    // screen would be empty with a footnote - and the bounded-first lookup has
+    // already put the local one on top when there is one.
+    const results = found.filter((r) => {
+      if (withinAnchor(anchor, r.lat, r.lon, ANCHOR_GRACE)) return true;
+      lastSearchOutside++;
+      return false;
+    });
+
     if (!areas.length) return results;
     // The backends may have named the town too - keep ours, since ours is the
     // one that knows it is an area.
@@ -7402,15 +7777,22 @@
   // hundreds of miles apart are three results with their counties written on
   // them - which answers "which one did you mean" by showing you, rather than
   // by picking one and hoping.
-  async function lookupPlacesThemselves(query) {
+  async function lookupPlacesThemselves(query, anchor) {
     const q = (query || "").trim();
     if (!q) return [];
-    const url =
+    const base =
       `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&addressdetails=1` +
-      `&extratags=1&namedetails=1&q=${encodeURIComponent(scopedQuery(q))}`;
-    const res = await fetch(url, { headers: { Accept: "application/json" } });
-    if (!res.ok) return [];
-    const data = await res.json();
+      `&extratags=1&namedetails=1&q=${encodeURIComponent(anchor ? q : scopedQuery(q))}`;
+    // Bounded first, unbounded second: searching for a town by name has to
+    // keep working for a town you are nowhere near, but the one down the road
+    // must win when both exist.
+    let data = [];
+    for (const url of anchor ? [`${base}&bounded=1&viewbox=${encodeURIComponent(anchorViewbox(anchor))}`, base] : [base]) {
+      const res = await fetch(url, { headers: { Accept: "application/json" } });
+      if (!res.ok) return [];
+      data = await res.json();
+      if (Array.isArray(data) && data.some((r) => looksLikeMajorPlace({ type: r.type }))) break;
+    }
     const hits = (Array.isArray(data) ? data : []).filter((r) => looksLikeMajorPlace({ type: r.type }));
 
     const out = [];
@@ -7435,7 +7817,7 @@
     return out.slice(0, 3);
   }
 
-  async function searchPlaceBackends(query, guidance) {
+  async function searchPlaceBackends(query, guidance, anchor) {
     const s = loadTripSettings();
     const geminiKey = s.geminiKey.trim();
     const googleKey = s.googleKey.trim();
@@ -7446,7 +7828,7 @@
     // real data rather than anything the model produced.
     if (geminiKey) {
       try {
-        const results = await searchWithGemini(query, geminiKey, guidance);
+        const results = await searchWithGemini(query, geminiKey, guidance, anchor);
         if (results.length) return results;
       } catch (e) {
         console.warn("Gemini search failed, falling back:", e);
@@ -7456,7 +7838,7 @@
 
     if (googleKey) {
       try {
-        const results = await searchGooglePlaces(query, googleKey);
+        const results = await searchGooglePlaces(query, googleKey, anchor);
         if (results.length) return results;
       } catch (e) {
         console.warn("Google Places search failed, falling back:", e);
@@ -7466,7 +7848,7 @@
 
     // Final backup: works with no key at all, so search never simply stops.
     try {
-      return await searchNominatim(query);
+      return await searchNominatim(query, anchor);
     } catch (e) {
       if (!lastSearchError) lastSearchError = e && e.message ? e.message : String(e);
       return [];
@@ -7476,7 +7858,7 @@
   // Places API (New) text search. Only the fields named below are requested -
   // billing is per field-mask tier, so asking for less keeps it in the
   // cheapest bracket rather than being charged for data we don't display.
-  async function searchGooglePlaces(query, key) {
+  async function searchGooglePlaces(query, key, anchor) {
     const res = await fetch("https://places.googleapis.com/v1/places:searchText", {
       method: "POST",
       headers: {
@@ -7496,7 +7878,23 @@
           "places.editorialSummary",
         ].join(","),
       },
-      body: JSON.stringify({ textQuery: scopedQuery(query), maxResultCount: 5 }),
+      // locationRestriction, not locationBias: a bias is a hint Google is free
+      // to ignore when it likes a distant match better, which is exactly the
+      // failure being fixed. Text search takes a rectangle for the hard form.
+      body: JSON.stringify(
+        anchor
+          ? {
+              textQuery: query,
+              maxResultCount: 5,
+              locationRestriction: {
+                rectangle: {
+                  low: { latitude: anchorBox(anchor).south, longitude: anchorBox(anchor).west },
+                  high: { latitude: anchorBox(anchor).north, longitude: anchorBox(anchor).east },
+                },
+              },
+            }
+          : { textQuery: scopedQuery(query), maxResultCount: 5 }
+      ),
     });
 
     if (!res.ok) {
@@ -7529,12 +7927,19 @@
     }));
   }
 
-  async function searchNominatim(query) {
+  async function searchNominatim(query, anchor) {
     // extratags/namedetails have to be requested explicitly - without them
     // the name and website below silently read undefined every time.
-    const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&addressdetails=1&extratags=1&namedetails=1&q=${encodeURIComponent(
-      scopedQuery(query)
-    )}`;
+    //
+    // bounded=1 with a viewbox is a hard restriction rather than a preference,
+    // which is the point: without it "Newport" returns the one in Wales as
+    // readily as the one twenty miles up the road. Appending the region's name
+    // instead, as this used to, is just more words in a text search - it
+    // restricts nothing.
+    const base =
+      `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&addressdetails=1` +
+      `&extratags=1&namedetails=1&q=${encodeURIComponent(anchor ? query : scopedQuery(query))}`;
+    const url = anchor ? `${base}&bounded=1&viewbox=${encodeURIComponent(anchorViewbox(anchor))}` : base;
     const res = await fetch(url, { headers: { Accept: "application/json" } });
     if (!res.ok) throw new Error("nominatim error");
     const data = await res.json();
