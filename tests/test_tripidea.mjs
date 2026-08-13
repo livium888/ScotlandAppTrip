@@ -413,14 +413,70 @@ check('a stop with an alternative offers the swap', await page.evaluate(() =>
 check('and the button names the place it would swap to', await page.evaluate(() =>
   /Birnam Oak/.test(document.querySelector('[data-idea-swap]').textContent)),
   await page.evaluate(() => document.querySelector('[data-idea-swap]').textContent));
+
+// ---------- The alternatives, side by side ----------
+// A name is not enough to choose on. Swapping to read and swapping back is a
+// poor way to compare two places, so they are a carousel instead: one at a
+// time, in full, and nothing changes until you say which.
+
 await page.evaluate(() => document.querySelector('[data-idea-swap]').click());
-await page.waitForTimeout(600);
+await page.waitForSelector('.chooser-sheet', { timeout: 4000 });
+await page.waitForTimeout(1200);
+const chooserText = () => page.evaluate(() => document.getElementById('placeModal').textContent);
+const chooserTitle = () => page.evaluate(() =>
+  (document.querySelector('.chooser-sheet .modal-title') || {}).textContent || '');
+
+check('tapping it opens the alternatives rather than swapping blind',
+  /Dunkeld Cathedral/.test(await chooserTitle()), await chooserTitle());
+check('the one in the trip says so', /in the trip now/.test(await chooserText()));
+check('and it cannot be chosen again', await page.evaluate(() =>
+  document.querySelector('[data-choice-use]').disabled === true));
+check('with a dot for each option', await page.evaluate(() =>
+  document.querySelectorAll('.chooser-dot').length === 2));
+
+const beforeSwap = await page.evaluate(() =>
+  document.querySelector('.idea-stop-name').textContent.trim());
+
+await page.evaluate(() => document.querySelector('[data-choice-move="1"]').click());
+await page.waitForTimeout(1400);
+check('moving on shows the alternative in full', /Birnam Oak/.test(await chooserTitle()), await chooserTitle());
+check('with why it was suggested', /on foot from the bridge/.test(await chooserText()));
+check('and how far out it really is, looked up for it',
+  /\d+ miles from Edinburgh/.test(await chooserText()), (await chooserText()).slice(0, 300));
+check('and a map of it', await page.evaluate(() => !!document.getElementById('chooserMap')));
+check('nothing has been swapped just by looking', await page.evaluate((was) =>
+  document.querySelector('.idea-stop-name').textContent.trim() === was, beforeSwap));
+
+// A swipe does the same as the arrow, which is the point of a carousel.
+await page.evaluate(() => document.querySelector('[data-choice-move="-1"]').click());
+await page.waitForTimeout(400);
+await page.evaluate(() => {
+  const el = document.querySelector('.chooser-sheet');
+  const touch = (x) => new Touch({ identifier: 3, target: el, clientX: x, clientY: 300 });
+  el.dispatchEvent(new TouchEvent('touchstart', { bubbles: true, changedTouches: [touch(300)] }));
+  el.dispatchEvent(new TouchEvent('touchend', { bubbles: true, changedTouches: [touch(140)] }));
+});
+await page.waitForTimeout(900);
+check('swiping moves between them too', /Birnam Oak/.test(await chooserTitle()), await chooserTitle());
+
+await page.evaluate(() => document.querySelector('[data-choice-use]').click());
+await page.waitForTimeout(900);
 const swapped = await page.evaluate(() =>
   Array.from(document.querySelectorAll('.idea-stop-name')).map((e) => e.textContent.trim()));
-check('swapping puts the alternative in its place', /Birnam Oak/.test(swapped[0] || ''), JSON.stringify(swapped));
+check('choosing one puts it in the trip', /Birnam Oak/.test(swapped[0] || ''), JSON.stringify(swapped));
+check('and the sheet closes', await page.evaluate(() =>
+  !document.getElementById('placeModal').classList.contains('open')));
+
+// The one replaced is still there to go back to.
 await page.evaluate(() => document.querySelector('[data-idea-swap]').click());
-await page.waitForTimeout(600);
-check('and swapping again brings the first one back', await page.evaluate(() =>
+await page.waitForSelector('.chooser-sheet', { timeout: 4000 });
+await page.waitForTimeout(800);
+await page.evaluate(() => document.querySelector('[data-choice-move="1"]').click());
+await page.waitForTimeout(1000);
+check('the one you replaced is still an option', /Dunkeld Cathedral/.test(await chooserTitle()), await chooserTitle());
+await page.evaluate(() => document.querySelector('[data-choice-use]').click());
+await page.waitForTimeout(900);
+check('so choosing it brings the first one back', await page.evaluate(() =>
   /Dunkeld Cathedral/.test(document.querySelector('.idea-stop-name').textContent)));
 
 // ---------- A single stop, without taking the whole route ----------

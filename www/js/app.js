@@ -6685,9 +6685,11 @@
             // the answer - the name of the other place - is the only thing
             // that would make the button worth pressing.
             stop.alternatives.length
-              ? `<button class="idea-swap" data-idea-swap="${esc(path)}">⇄ or ${esc(
-                  stop.alternatives[0].name
-                )}</button>`
+              ? `<button class="idea-swap" data-idea-swap="${esc(path)}">⇄ ${
+                  stop.alternatives.length > 1
+                    ? `${esc(String(stop.alternatives.length))} alternatives`
+                    : `or ${esc(stop.alternatives[0].name)}`
+                }</button>`
               : `<span class="idea-swap-spacer"></span>`
           }
           <button class="search-around" data-idea-day="${esc(path)}"
@@ -7145,6 +7147,296 @@
     );
   }
 
+  // ---------- Looking at the alternatives before picking one ----------
+  // The swap used to be a straight exchange: tap, and the stop became the other
+  // place. It named the alternative, which was better than an icon, but a name
+  // is not enough to choose on - you would swap, read, and swap back.
+  //
+  // So the alternatives are a carousel instead. One at a time, in full: what it
+  // is, why it was suggested, where it is, how far out, its hours and its map.
+  // Swipe between them, and nothing changes until you say which one.
+  let stopChoice = null;
+
+  function stopChoiceAnchor() {
+    if (!tripIdea || !ideaStartGeo) return null;
+    return {
+      name: tripIdea.brief.from,
+      lat: ideaStartGeo.lat,
+      lon: ideaStartGeo.lon,
+      miles: tripIdea.brief.miles || 150,
+    };
+  }
+
+  function optionFromStop(stop) {
+    return {
+      name: stop.name,
+      area: stop.area || "",
+      why: stop.why || "",
+      lat: stop.lat,
+      lon: stop.lon,
+      address: stop.address || "",
+      crowMiles: stop.crowMiles,
+      description: "",
+      website: "",
+      openingHours: "",
+      enriched: false,
+      enriching: false,
+      current: true,
+    };
+  }
+
+  function optionFromAlternative(alt, stop) {
+    return {
+      name: alt.name,
+      area: alt.area || stop.area || "",
+      why: alt.why || "",
+      lat: null,
+      lon: null,
+      address: "",
+      crowMiles: null,
+      description: "",
+      website: "",
+      openingHours: "",
+      enriched: false,
+      enriching: false,
+      current: false,
+    };
+  }
+
+  function openStopChooser(path) {
+    const at = ideaStopAt(path);
+    if (!at || !at.stop.alternatives.length) return;
+    stopChoice = {
+      path,
+      index: 0,
+      options: [optionFromStop(at.stop)].concat(
+        at.stop.alternatives.map((a) => optionFromAlternative(a, at.stop))
+      ),
+    };
+    renderStopChooser();
+    enrichStopOption(0);
+  }
+
+  // Filled in on the one you are looking at, not all of them at once: the point
+  // of a carousel is that you only ever need the card in front of you.
+  async function enrichStopOption(index) {
+    const option = stopChoice && stopChoice.options[index];
+    if (!option || option.enriched || option.enriching) return;
+    option.enriching = true;
+    renderStopChooser();
+
+    const anchor = stopChoiceAnchor();
+    const [wiki, geo] = await Promise.all([
+      wikiEnrich(option.name).catch(() => null),
+      option.lat == null ? geocodePlace(option.name, option.area || null, anchor).catch(() => null) : null,
+    ]);
+    if (!stopChoice || stopChoice.options[index] !== option) return;
+
+    if (wiki) {
+      option.description = option.description || wiki.description || "";
+      option.website = option.website || wiki.website || "";
+    }
+    if (geo) {
+      option.lat = geo.lat;
+      option.lon = geo.lon;
+      option.address = option.address || geo.address || "";
+      option.openingHours = option.openingHours || geo.openingHours || "";
+      option.website = option.website || geo.website || "";
+    }
+    if (anchor && option.lat != null && option.crowMiles == null) {
+      option.crowMiles = Math.round(toMiles(haversineKm(anchor.lat, anchor.lon, option.lat, option.lon)));
+    }
+    option.enriched = true;
+    option.enriching = false;
+    if (stopChoice.index === index) renderStopChooser();
+  }
+
+  function renderStopChooser() {
+    if (!stopChoice) return;
+    const option = stopChoice.options[stopChoice.index];
+    if (!option) return;
+    const total = stopChoice.options.length;
+    const radius = tripIdea ? tripIdea.brief.miles : null;
+    const over = radius && option.crowMiles != null && option.crowMiles > radius;
+
+    const facts = [
+      option.address ? `📍 ${esc(option.address)}` : option.area ? `📍 ${esc(option.area)}` : "",
+      option.crowMiles != null ? `📏 ${esc(String(option.crowMiles))} miles from ${esc(tripIdea.brief.from)}` : "",
+      option.openingHours ? `🕒 ${esc(option.openingHours)}` : "",
+    ].filter(Boolean);
+
+    placeModal.innerHTML = `
+      <div class="modal-backdrop" data-close="1">
+        <div class="modal-sheet chooser-sheet" role="dialog" aria-label="Choose a stop">
+          <div class="modal-handle"></div>
+          <button class="modal-close" data-close="1" aria-label="Close">✕</button>
+          <div class="modal-body">
+            <div class="chooser-head">
+              <button class="chooser-arrow" data-choice-move="-1" ${stopChoice.index === 0 ? "disabled" : ""}
+                      aria-label="Previous">‹</button>
+              <div class="chooser-dots">
+                ${stopChoice.options
+                  .map(
+                    (o, i) =>
+                      `<button class="chooser-dot${i === stopChoice.index ? " now" : ""}" data-choice-at="${i}"
+                               aria-label="${esc(o.name)}"></button>`
+                  )
+                  .join("")}
+              </div>
+              <button class="chooser-arrow" data-choice-move="1" ${
+                stopChoice.index === total - 1 ? "disabled" : ""
+              } aria-label="Next">›</button>
+            </div>
+            <p class="chooser-position">${esc(String(stopChoice.index + 1))} of ${esc(String(total))}${
+              option.current ? " · in the trip now" : ""
+            }</p>
+
+            <h2 class="modal-title">${esc(option.name)}</h2>
+            ${option.area ? `<div class="modal-subtitle">${esc(option.area)}</div>` : ""}
+            ${option.why ? `<p class="place-notes" style="margin-top:10px;">${esc(option.why)}</p>` : ""}
+            ${option.description ? `<p class="place-notes">${esc(option.description)}</p>` : ""}
+            ${facts.map((f) => `<div class="place-fact">${f}</div>`).join("")}
+            ${
+              over
+                ? `<div class="place-fact idea-stop-warn">⚠ past the ${esc(String(radius))} miles you asked for</div>`
+                : ""
+            }
+            ${option.enriching ? `<div class="place-fact preview-loading">Looking up details…</div>` : ""}
+            ${option.lat != null ? `<div class="detail-map" id="chooserMap"></div>` : ""}
+
+            <div class="settings-btn-row" style="margin-top:14px;">
+              ${
+                safeUrl(option.website)
+                  ? `<button class="modal-btn" data-open-maps="${esc(safeUrl(option.website))}">🌐 Website</button>`
+                  : ""
+              }
+              <button class="modal-btn" data-open-maps="${esc(
+                mapsUrlFor(pickMapsQuery(option), option) || ""
+              )}">📍 Google Maps</button>
+            </div>
+
+            <button class="modal-btn modal-btn-primary" data-choice-use="1" style="width:100%;margin-top:10px;"
+                    ${option.current ? "disabled" : ""}>
+              ${option.current ? "Already the one in the trip" : "Use this one instead"}
+            </button>
+            <p class="settings-hint" style="text-align:center;">Swipe to compare. Nothing changes until you choose.</p>
+          </div>
+        </div>
+      </div>
+    `;
+    placeModal.classList.add("open");
+    wireStopChooser();
+
+    if (option.lat != null && document.getElementById("chooserMap")) {
+      const map = L.map("chooserMap", { scrollWheelZoom: false, attributionControl: false });
+      addTileLayer(map);
+      map.setView([option.lat, option.lon], 14);
+      L.marker([option.lat, option.lon]).addTo(map);
+      setTimeout(() => {
+        if (map._container && map._container.isConnected) map.invalidateSize();
+      }, 60);
+    }
+  }
+
+  function moveStopChoice(delta) {
+    if (!stopChoice) return;
+    const next = Math.max(0, Math.min(stopChoice.options.length - 1, stopChoice.index + delta));
+    if (next === stopChoice.index) return;
+    stopChoice.index = next;
+    renderStopChooser();
+    enrichStopOption(next);
+  }
+
+  function useStopChoice() {
+    const at = stopChoice && ideaStopAt(stopChoice.path);
+    if (!at) return;
+    const chosen = stopChoice.options[stopChoice.index];
+    if (!chosen || chosen.current) return;
+    const stop = at.stop;
+
+    // The one being replaced keeps its place among the alternatives, so this
+    // is reversible in exactly the way swapping was.
+    const previous = { name: stop.name, area: stop.area, why: stop.why };
+    stop.alternatives = stop.alternatives.filter(
+      (a) => normalisedName(a.name) !== normalisedName(chosen.name)
+    );
+    stop.alternatives.push(previous);
+    stop.name = chosen.name;
+    stop.area = chosen.area || stop.area;
+    stop.why = chosen.why || "";
+    // Everything positional belonged to the place being replaced; what the
+    // chooser looked up for this one is kept, so it does not have to be found
+    // twice.
+    stop.lat = chosen.lat;
+    stop.lon = chosen.lon;
+    stop.address = chosen.address || "";
+    stop.crowMiles = chosen.crowMiles != null ? chosen.crowMiles : null;
+    stop.claimedMiles = null;
+
+    stopChoice = null;
+    closePlaceModal();
+    saveIdea();
+    renderIdea();
+    toast(`Swapped in ${stop.name}`);
+  }
+
+  function wireStopChooser() {
+    placeModal.querySelectorAll("[data-close]").forEach((el) =>
+      el.addEventListener("click", (e) => {
+        if (e.target === el) {
+          stopChoice = null;
+          closePlaceModal();
+        }
+      })
+    );
+    placeModal.querySelectorAll("[data-open-maps]").forEach((btn) =>
+      btn.addEventListener("click", () => openExternal(btn.getAttribute("data-open-maps")))
+    );
+    placeModal.querySelectorAll("[data-choice-move]").forEach((btn) =>
+      btn.addEventListener("click", () => moveStopChoice(Number(btn.getAttribute("data-choice-move"))))
+    );
+    placeModal.querySelectorAll("[data-choice-at]").forEach((btn) =>
+      btn.addEventListener("click", () => {
+        const at = Number(btn.getAttribute("data-choice-at"));
+        if (at === stopChoice.index) return;
+        stopChoice.index = at;
+        renderStopChooser();
+        enrichStopOption(at);
+      })
+    );
+    placeModal.querySelectorAll("[data-choice-use]").forEach((btn) =>
+      btn.addEventListener("click", () => useStopChoice())
+    );
+
+    const sheet = placeModal.querySelector(".chooser-sheet");
+    if (!sheet) return;
+    let startX = null;
+    let startY = null;
+    sheet.addEventListener(
+      "touchstart",
+      (e) => {
+        const t = e.changedTouches[0];
+        startX = t.clientX;
+        startY = t.clientY;
+      },
+      { passive: true }
+    );
+    sheet.addEventListener(
+      "touchend",
+      (e) => {
+        if (startX == null) return;
+        const t = e.changedTouches[0];
+        const dx = t.clientX - startX;
+        const dy = t.clientY - startY;
+        startX = null;
+        // Comfortably sideways, or it is a scroll down the card.
+        if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+        moveStopChoice(dx < 0 ? 1 : -1);
+      },
+      { passive: true }
+    );
+  }
+
   function wireIdea() {
     ideaOverlay.querySelectorAll("[data-idea-close]").forEach((b) =>
       b.addEventListener("click", () => closeIdea())
@@ -7304,30 +7596,11 @@
       });
     });
 
-    // Swapping rotates rather than replaces: the stop you had goes to the back
-    // of its own alternatives, so tapping again cycles and tapping enough
-    // times brings back the one you started with. Nothing is lost.
+    // Opens the alternatives to look at rather than swapping on the spot: a
+    // name is not enough to choose on, and swapping to read and swapping back
+    // is a poor way to compare two places.
     ideaOverlay.querySelectorAll("[data-idea-swap]").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const at = ideaStopAt(btn.getAttribute("data-idea-swap"));
-        if (!at || !at.stop.alternatives.length) return;
-        const stop = at.stop;
-        const next = stop.alternatives.shift();
-        stop.alternatives.push({ name: stop.name, area: stop.area, why: stop.why });
-        stop.name = next.name;
-        stop.area = next.area || stop.area;
-        stop.why = next.why || "";
-        // Everything positional belonged to the old place.
-        stop.lat = null;
-        stop.lon = null;
-        stop.address = "";
-        stop.crowMiles = null;
-        stop.claimedMiles = null;
-        saveIdea();
-        renderIdea();
-        at.option.measured = false;
-        measureIdeaOption(at.oi);
-      });
+      btn.addEventListener("click", () => openStopChooser(btn.getAttribute("data-idea-swap")));
     });
 
     ideaOverlay.querySelectorAll("[data-idea-preview]").forEach((btn) => {

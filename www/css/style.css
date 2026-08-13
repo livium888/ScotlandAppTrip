@@ -2507,3 +2507,50 @@ button, select, input[type="text"], input[type="file"] { font-family: inherit; }
 .planner-trip-title { margin: 6px 0 4px; font-size: 16px; color: var(--text); }
 .planner-trip-places { font-size: 12.5px; color: var(--text-muted); margin: 8px 0 12px; line-height: 1.5; }
 .planner-trip .modal-btn { width: 100%; }
+
+/* ---------- Comparing a stop with its alternatives ---------- */
+.chooser-head { display: flex; align-items: center; gap: 12px; margin: 2px 0 6px; }
+.chooser-arrow {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 22px;
+  line-height: 1;
+  font-family: inherit;
+}
+.chooser-arrow:disabled { opacity: 0.35; }
+.chooser-arrow:active:not(:disabled) { background: var(--surface-2); }
+.chooser-dots { flex: 1; display: flex; justify-content: center; gap: 8px; }
+.chooser-dot {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  background: none;
+  position: relative;
+}
+.chooser-dot::after {
+  content: "";
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--border);
+}
+.chooser-dot.now::after { background: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
+.chooser-position {
+  margin: 0 0 10px;
+  text-align: center;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.chooser-sheet .modal-btn:disabled { opacity: 0.5; }
