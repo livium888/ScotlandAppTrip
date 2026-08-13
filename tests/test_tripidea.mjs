@@ -791,6 +791,38 @@ check('a refusal is reported with what it actually said', await page.evaluate(()
 check('and offers a way on rather than a dead end', await page.evaluate(() =>
   !!document.getElementById('ideaRetry') && !!document.querySelector('[data-idea-edit]')));
 
+// ---------- A request that never comes back ----------
+// Reported as the trip suggestions screen being dead. The loading state had
+// nothing on it to press, and no request in the app had a timeout, so a phone
+// that wandered off signal mid-request sat there for good.
+
+await page.unroute(/generativelanguage\.googleapis\.com/);
+await page.route(/generativelanguage\.googleapis\.com/, async (route) => {
+  if (/\/models\?/.test(route.request().url())) {
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+      models: [{ name: 'models/gemini-3.5-flash-lite', supportedGenerationMethods: ['generateContent'] }] }) });
+  }
+  await new Promise(() => {}); // never answers
+});
+await seed();
+await page.evaluate(() => document.querySelector('[data-view="itinerary"]').click());
+await page.waitForTimeout(400);
+await page.evaluate(() => document.getElementById('tripIdeaBtn').click());
+await page.waitForSelector('#ideaOverlay.open', { timeout: 4000 });
+await chip('Edinburgh');
+await page.waitForTimeout(200);
+await goToStep('review');
+await next();
+await page.waitForTimeout(800);
+
+check('while it waits, there is still something to press', await page.evaluate(() =>
+  !!document.querySelector('[data-idea-cancel]')));
+await page.evaluate(() => document.querySelector('[data-idea-cancel]').click());
+await page.waitForTimeout(400);
+check('and pressing it gets you off the waiting screen',
+  (await stepKey()) === 'review', await stepKey());
+check('with the question intact', /Edinburgh/.test(await sentence()), await sentence());
+
 await browser.close();
 console.log(failures === 0 ? '\nALL TESTS PASSED' : `\n${failures} FAILED`);
 process.exit(failures ? 1 : 0);

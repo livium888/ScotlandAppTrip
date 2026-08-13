@@ -234,6 +234,9 @@
   }
 
   // ---------- Gemini (optional, free tier) ----------
+  // Long enough for a grounded answer on a slow connection, short enough that
+  // a request which is never coming back says so rather than hanging.
+  const AI_TIMEOUT_MS = 45000;
   // Used for the things a database lookup is bad at: judgement, and turning a
   // vague ask into candidate places. Google Search grounding is switched on so
   // answers come from real search results with citations attached, rather than
@@ -418,11 +421,30 @@
     if (json) body.generationConfig.responseMimeType = "application/json";
     else if (grounded) body.tools = [{ google_search: {} }];
 
-    const res = await fetch(`${GEMINI_BASE}/${path}:generateContent?key=${encodeURIComponent(key)}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
+    // Nothing in this app had a timeout, and a request that never answers is
+    // the worst failure it can have: the screen sits on "Working out some
+    // routes…", which has nothing on it to press, and stays that way. A phone
+    // that has wandered off signal mid-request does exactly this.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), AI_TIMEOUT_MS);
+    let res;
+    try {
+      res = await fetch(`${GEMINI_BASE}/${path}:generateContent?key=${encodeURIComponent(key)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+    } catch (e) {
+      if (e && e.name === "AbortError") {
+        throw new Error(
+          `The AI didn't answer within ${Math.round(AI_TIMEOUT_MS / 1000)} seconds. That is usually signal rather than anything you did - worth trying again.`
+        );
+      }
+      throw e;
+    } finally {
+      clearTimeout(timer);
+    }
     const rawText = await res.text();
     let data = null;
     try {
@@ -3411,7 +3433,12 @@
     const reviewing = planner.view === "review" && planner.result;
     let body = "";
     if (planner.status === "loading") {
-      body = `<div class="card idea-loading"><p class="pick-status">Working out what fits…</p></div>`;
+      body = `
+        <div class="card idea-loading">
+          <p class="pick-status">Working out what fits…</p>
+          <button class="modal-btn" data-plan-cancel="1" style="margin-top:14px;">Stop waiting</button>
+        </div>
+      `;
     } else if (planner.status === "error") {
       body = `
         <div class="card">
@@ -3453,11 +3480,18 @@
       }
     `;
     planOverlay.classList.add("open");
-    wirePlanner();
+    guarded("Plan my days", wirePlanner);
   }
 
   function wirePlanner() {
     planOverlay.querySelectorAll("[data-plan-close]").forEach((b) => b.addEventListener("click", closePlanner));
+    planOverlay.querySelectorAll("[data-plan-cancel]").forEach((b) =>
+      b.addEventListener("click", () => {
+        planner.status = "idle";
+        planner.view = "select";
+        renderPlanner();
+      })
+    );
     planOverlay.querySelectorAll("[data-plan-back]").forEach((b) =>
       b.addEventListener("click", () => {
         planner.view = "select";
@@ -6724,6 +6758,7 @@
         <div class="card idea-loading">
           <p class="pick-status">Working out some routes…</p>
           <p class="settings-hint">${esc(ideaSummaryLine())}</p>
+          <button class="modal-btn" data-idea-cancel="1" style="margin-top:14px;">Stop waiting</button>
         </div>
       `;
     }
@@ -6805,6 +6840,20 @@
 
   let ideaScreenId = "";
 
+  // A throw while drawing or wiring an overlay leaves the screen exactly as it
+  // was with none of its buttons connected - which from the outside is "nothing
+  // is clickable", with nothing on screen to say why. Views already had this
+  // guard; the overlays did not.
+  function guarded(name, fn) {
+    try {
+      fn();
+    } catch (e) {
+      console.error(`${name} failed:`, e);
+      toast(`${name} hit a problem: ${(e && e.message) || e}`);
+      throw e;
+    }
+  }
+
   function renderIdea() {
     if (!tripIdea) return;
     const showResults = tripIdea.view === "results";
@@ -6836,7 +6885,7 @@
     const body = ideaOverlay.querySelector(".search-body");
     if (body) body.scrollTop = screenId === ideaScreenId ? previousScroll : 0;
     ideaScreenId = screenId;
-    wireIdea();
+    guarded("Trip suggestions", wireIdea);
   }
 
   function openTripIdea() {
@@ -7552,6 +7601,17 @@
 
     // Back to the question lands on the review screen, not step one: you came
     // to change one thing, and everything is reachable from there.
+    // Never a screen with no way off it, whatever the network is doing.
+    ideaOverlay.querySelectorAll("[data-idea-cancel]").forEach((b) =>
+      b.addEventListener("click", () => {
+        ideaGeneration++; // whatever is in flight can no longer write
+        tripIdea.status = tripIdea.options.length ? "done" : "idle";
+        tripIdea.view = tripIdea.options.length ? "results" : "brief";
+        tripIdea.step = IDEA_STEPS.length - 1;
+        renderIdea();
+      })
+    );
+
     ideaOverlay.querySelectorAll("[data-idea-edit]").forEach((b) =>
       b.addEventListener("click", () => {
         tripIdea.view = "brief";
@@ -10772,6 +10832,20 @@
   });
 
   armBackButton();
+
+  // Anything that escapes everything else. Without this, a failure inside an
+  // event handler is invisible: the button was pressed, nothing happened, and
+  // there is no console on a phone to find out why.
+  window.addEventListener("error", (e) => {
+    if (!e || !e.message) return;
+    toast(`Something went wrong: ${String(e.message).slice(0, 120)}`);
+  });
+  window.addEventListener("unhandledrejection", (e) => {
+    const reason = e && e.reason;
+    const message = (reason && reason.message) || String(reason || "");
+    if (!message || /AbortError/.test(message)) return;
+    toast(`Something went wrong: ${message.slice(0, 120)}`);
+  });
 
   // ---------- Receiving a share from Google Maps ----------
   // Delivered by the native ShareReceiver plugin (MainActivity.java /
