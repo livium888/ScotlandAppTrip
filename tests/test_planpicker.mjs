@@ -242,6 +242,34 @@ check('a day with 200 miles of driving in it is flagged, whatever the model call
 check('and it says how much driving that is',
   /driving between stops/.test(await bodyText()), await bodyText());
 
+// ---------- The answer wrapped in an array ----------
+// Reported from the real model: a perfectly good plan inside [ { "days": … } ].
+// Failing on that is a bug in the reader, not the reply.
+
+await seed({ days: [{ id: 'd1', label: 'Day 1 · Wed 19 Aug' }], items: {} });
+reply = () => [{
+  days: [{ day: 1, stops: [{ name: 'Edinburgh Castle', time: '09:00', why: 'Before the queues.' }] }],
+  leftOut: [{ name: 'Blair Castle', reason: 'Ninety minutes north of the rest.' }],
+  notes: 'One day, one city.',
+  separateTrips: [],
+}];
+await openPicker();
+await page.evaluate(() => document.querySelector('[data-plan-run]').click());
+await page.waitForSelector('.planner-day', { timeout: 8000 });
+check('a plan wrapped in an array is still a plan',
+  /Edinburgh Castle/.test(await bodyText()), (await bodyText()).slice(0, 200));
+check('with everything else it said intact',
+  /Ninety minutes north/.test(await bodyText()) && /One day, one city/.test(await bodyText()));
+
+// A flat list of assignments is not a wrapper and must not be unwrapped.
+await seed({ days: [{ id: 'd1', label: 'Day 1 · Wed 19 Aug' }], items: {} });
+reply = () => [{ day: 1, name: 'Edinburgh Castle', time: '09:00' }];
+await openPicker();
+await page.evaluate(() => document.querySelector('[data-plan-run]').click());
+await page.waitForSelector('.planner-day', { timeout: 8000 });
+check('a bare list of assignments is read as one', /Edinburgh Castle/.test(await bodyText()),
+  (await bodyText()).slice(0, 200));
+
 // ---------- No days to plan into ----------
 
 await seed({ days: [], items: {} });

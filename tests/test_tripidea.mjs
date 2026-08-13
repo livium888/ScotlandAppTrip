@@ -682,6 +682,33 @@ await page.waitForTimeout(600);
 check('including a stop written as a bare name', await page.evaluate(() =>
   /Taybank/.test(document.getElementById('ideaOverlay').textContent)));
 
+// 2b. The same answer wrapped in an array - [ { "options": [...] } ] - which is
+//     how the day planner's reader was caught out.
+await page.unroute(/generativelanguage\.googleapis\.com/);
+await page.route(/generativelanguage\.googleapis\.com/, (route) => {
+  if (/\/models\?/.test(route.request().url())) {
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+      models: [{ name: 'models/gemini-3.5-flash-lite', supportedGenerationMethods: ['generateContent'] }] }) });
+  }
+  return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+    candidates: [{ content: { parts: [{ text: JSON.stringify([TRIP]) }] } }] }) });
+});
+await seed();
+await page.evaluate(() => document.querySelector('[data-view="itinerary"]').click());
+await page.waitForTimeout(400);
+await page.evaluate(() => document.getElementById('tripIdeaBtn').click());
+await page.waitForSelector('#ideaOverlay.open', { timeout: 4000 });
+await chip('Edinburgh');
+await page.waitForTimeout(200);
+await goToStep('review');
+await next();
+await page.waitForSelector('.idea-option', { timeout: 10000 });
+check('routes wrapped in an array are still routes', await page.evaluate(() =>
+  /Up the A9/.test(document.getElementById('ideaOverlay').textContent)),
+  await page.evaluate(() => document.getElementById('ideaOverlay').textContent.slice(0, 160)));
+check('and both of them survive the unwrapping', await page.evaluate(() =>
+  document.querySelectorAll('.idea-option').length === 2));
+
 // 3. When it really cannot be read, say what came back rather than nothing.
 await page.unroute(/generativelanguage\.googleapis\.com/);
 await page.route(/generativelanguage\.googleapis\.com/, (route) => {

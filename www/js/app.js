@@ -3543,9 +3543,27 @@
 
   // Same lesson as the trip planner: read what models actually send, not only
   // the shape that was asked for.
+  // Models wrap the whole answer in an array often enough - [ { "days": ... } ]
+  // - that failing on it is a bug in the reader, not the reply. The wrapper is
+  // only unwrapped when what is inside actually looks like a plan, so a flat
+  // list of assignments is still read as one.
+  const PLAN_KEYS = ["days", "itinerary", "leftOut", "left_out", "separateTrips", "separate_trips", "notes"];
+
+  function unwrapPlannerPayload(raw) {
+    let value = raw;
+    for (let depth = 0; depth < 3; depth++) {
+      if (!Array.isArray(value) || value.length !== 1) break;
+      const inner = value[0];
+      if (!inner || typeof inner !== "object" || Array.isArray(inner)) break;
+      if (!PLAN_KEYS.some((k) => inner[k] !== undefined)) break;
+      value = inner;
+    }
+    return Array.isArray(value) ? { days: value } : value;
+  }
+
   function normalisePlannerResult(raw, picks, days) {
-    if (!raw || typeof raw !== "object") return null;
-    if (Array.isArray(raw)) raw = { days: raw };
+    raw = unwrapPlannerPayload(raw);
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
     const byName = {};
     picks.forEach((p) => (byName[String(p.name).toLowerCase().trim()] = p));
     const find = (name) => byName[String(name || "").toLowerCase().trim()] || null;
@@ -6135,10 +6153,15 @@
     // on its own, or the same thing under whatever key seemed natural - and
     // every one of those used to come out as "no trip", which is
     // indistinguishable from the request having failed.
+    const named = ["options", "trips", "itineraries", "routes", "suggestions", "plans"];
     const listFrom = (v) => {
+      // The same wrapper: [ { "options": [...] } ]. Unwrapped only when the
+      // single element is a container rather than an option in its own right.
+      if (Array.isArray(v) && v.length === 1 && v[0] && typeof v[0] === "object" && !Array.isArray(v[0])) {
+        if (named.some((k) => Array.isArray(v[0][k]))) v = v[0];
+      }
       if (Array.isArray(v)) return v;
       if (!v || typeof v !== "object") return [];
-      const named = ["options", "trips", "itineraries", "routes", "suggestions", "plans"];
       for (const key of named) if (Array.isArray(v[key])) return v[key];
       // Nothing recognised by name: the only array of objects in there is
       // overwhelmingly likely to be it.
