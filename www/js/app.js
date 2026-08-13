@@ -6885,7 +6885,6 @@
     const body = ideaOverlay.querySelector(".search-body");
     if (body) body.scrollTop = screenId === ideaScreenId ? previousScroll : 0;
     ideaScreenId = screenId;
-    guarded("Trip suggestions", wireIdea);
   }
 
   function openTripIdea() {
@@ -7034,10 +7033,19 @@
     if (!option || option.measured) return;
     option.measured = true;
     const start = await ideaStartPoint();
-    const stops = option.days.reduce((all, d) => all.concat(d.stops), []).slice(0, IDEA_MEASURE_MAX);
+    const radius = tripIdea.brief.miles;
+    const stops = [];
+    option.days.forEach((day, di) =>
+      day.stops.forEach((stop, si) => {
+        stop.path = `${index}|${di}|${si}`;
+        stops.push(stop);
+      })
+    );
+    stops.length = Math.min(stops.length, IDEA_MEASURE_MAX);
 
     for (const stop of stops) {
       if (generation !== ideaGeneration || !ideaOverlay.classList.contains("open")) return;
+      if (stop.lat != null && stop.crowMiles != null) continue;
       if (stop.lat == null) {
         let geo = null;
         try {
@@ -7058,12 +7066,51 @@
       if (start && stop.lat != null && stop.crowMiles == null) {
         stop.crowMiles = Math.round(toMiles(haversineKm(start.lat, start.lon, stop.lat, stop.lon)));
       }
-      // Never while something is being typed into: a redraw mid-sentence
-      // throws the caret away, and the refine box lives on this screen.
-      const active = document.activeElement;
-      if (!(active && ideaOverlay.contains(active) && active.tagName === "INPUT")) renderIdea();
+      // Deliberately NOT a redraw. Rebuilding the screen after every lookup
+      // destroys every button on it, and a tap that begins on a button which
+      // is replaced before the click lands is simply lost. With a lookup a
+      // second and a dozen stops, that is ten seconds in which the screen
+      // looks finished and answers nothing - which is exactly what "nothing
+      // is clickable" was.
+      refreshStopMeasurement(stop, radius);
     }
     saveIdea();
+  }
+
+  // Updates what the measurement changes - the distance line, and the flag if
+  // it turned out to be too far - by writing text into the row that is already
+  // there. Nothing is replaced, so nothing being pressed can vanish.
+  function refreshStopMeasurement(stop, radius) {
+    if (!stop.path) return;
+    const main = ideaOverlay.querySelector(`[data-idea-preview="${stop.path}"]`);
+    if (!main) return;
+    const row = main.closest(".idea-stop");
+    const miles = stop.crowMiles != null ? stop.crowMiles : stop.claimedMiles;
+    const meta = [stop.area, miles != null ? `${miles} mi out` : ""].filter(Boolean).join(" · ");
+
+    let metaEl = main.querySelector(".idea-stop-meta");
+    if (!metaEl && meta) {
+      metaEl = document.createElement("span");
+      metaEl.className = "idea-stop-meta";
+      main.insertBefore(metaEl, main.querySelector(".idea-stop-why"));
+    }
+    if (metaEl) metaEl.textContent = meta;
+
+    const over = !!(radius && stop.crowMiles != null && stop.crowMiles > radius);
+    if (row) row.classList.toggle("over", over);
+    let warn = main.querySelector(".idea-stop-warn");
+    if (over && !warn) {
+      warn = document.createElement("span");
+      warn.className = "idea-stop-warn";
+      main.appendChild(warn);
+    }
+    if (warn) {
+      if (over) {
+        warn.textContent = `⚠ ${stop.crowMiles} miles from ${tripIdea.brief.from.trim()} in a straight line — past your ${radius}`;
+      } else {
+        warn.remove();
+      }
+    }
   }
 
   async function runTripIdea() {
@@ -7486,212 +7533,203 @@
     );
   }
 
-  function wireIdea() {
-    ideaOverlay.querySelectorAll("[data-idea-close]").forEach((b) =>
-      b.addEventListener("click", () => closeIdea())
-    );
+  // Every control on this screen is reached by one listener on the overlay
+  // rather than by attaching one to each button after every render.
+  //
+  // The old way had a failure that is invisible and total: wireIdea ran after
+  // each render and attached fifteen sets of listeners in order, so anything
+  // that threw part-way through left the screen drawn, looking finished, with
+  // every control after that point connected to nothing. No error, no clue, and
+  // "absolutely nothing is clickable" from the outside.
+  //
+  // Delegation removes the possibility rather than the symptom. There is
+  // nothing to re-attach, so a redraw cannot leave a stale listener behind, a
+  // button added later works without being wired, and a handler that throws
+  // takes only its own tap with it.
+  function ideaTarget(e, name) {
+    const el = e.target.closest ? e.target.closest(`[data-idea-${name}]`) : null;
+    return el && ideaOverlay.contains(el) ? el : null;
+  }
 
-    ideaOverlay.querySelectorAll("[data-idea-key]").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const key = btn.getAttribute("data-idea-key");
-        const raw = btn.getAttribute("data-idea-value");
-        const value = key === "miles" ? (raw ? Number(raw) : null) : raw;
-        // Tapping the chip that is already on clears it: the same control both
-        // ways, as everywhere else in the app.
-        tripIdea.brief[key] = tripIdea.brief[key] === value ? (key === "miles" ? null : "") : value;
-        saveIdea();
-        renderIdea();
-      });
-    });
+  function onIdeaClick(e) {
+    if (!tripIdea) return;
+    const hit = (name) => ideaTarget(e, name);
+    let el;
 
-    ideaOverlay.querySelectorAll("[data-idea-interest]").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const key = btn.getAttribute("data-idea-interest");
-        const list = tripIdea.brief.interests;
-        const at = list.indexOf(key);
-        if (at < 0) list.push(key);
-        else list.splice(at, 1);
-        saveIdea();
-        renderIdea();
-      });
-    });
+    if (hit("close")) return closeIdea();
 
-    ideaOverlay.querySelectorAll("[data-idea-text]").forEach((input) => {
-      const key = input.getAttribute("data-idea-text");
-      input.addEventListener("input", () => {
-        tripIdea.brief[key] = input.value;
-        refreshIdeaLive();
-      });
-      input.addEventListener("blur", () => {
-        tripIdea.brief[key] = input.value;
-        saveIdea();
-      });
-      // On a phone the keyboard's own "go" is right there and the Next button
-      // is behind it, so it has to mean the same thing.
-      input.addEventListener("keydown", (e) => {
-        if (e.key !== "Enter") return;
-        e.preventDefault();
-        input.blur();
-        ideaGo(1);
-      });
-    });
-
-    ideaOverlay.querySelectorAll("[data-idea-move]").forEach((btn) =>
-      btn.addEventListener("click", () => ideaGo(Number(btn.getAttribute("data-idea-move"))))
-    );
-    ideaOverlay.querySelectorAll("[data-idea-step]").forEach((btn) =>
-      btn.addEventListener("click", () => ideaJump(Number(btn.getAttribute("data-idea-step"))))
-    );
-    const nextBtn = document.getElementById("ideaNext");
-    if (nextBtn) nextBtn.addEventListener("click", () => ideaGo(1));
-
-    // A carousel you cannot swipe is a slideshow. The buttons stay because a
-    // swipe is undiscoverable on its own, and because one hand on a pushchair
-    // is the normal case here.
-    const swipeArea = ideaOverlay.querySelector(".search-body");
-    if (swipeArea && tripIdea.view === "brief") {
-      let startX = null;
-      let startY = null;
-      swipeArea.addEventListener(
-        "touchstart",
-        (e) => {
-          const t = e.changedTouches[0];
-          startX = t.clientX;
-          startY = t.clientY;
-        },
-        { passive: true }
-      );
-      swipeArea.addEventListener(
-        "touchend",
-        (e) => {
-          if (startX == null) return;
-          const t = e.changedTouches[0];
-          const dx = t.clientX - startX;
-          const dy = t.clientY - startY;
-          startX = null;
-          // Comfortably horizontal, or it is a scroll that drifted.
-          if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
-          ideaGo(dx < 0 ? 1 : -1);
-        },
-        { passive: true }
-      );
+    if ((el = hit("key"))) {
+      const key = el.getAttribute("data-idea-key");
+      const raw = el.getAttribute("data-idea-value");
+      const value = key === "miles" ? (raw ? Number(raw) : null) : raw;
+      // Tapping the chip that is already on clears it: the same control both
+      // ways, as everywhere else in the app.
+      tripIdea.brief[key] = tripIdea.brief[key] === value ? (key === "miles" ? null : "") : value;
+      saveIdea();
+      return renderIdea();
     }
 
-    const gps = ideaOverlay.querySelector("[data-idea-gps]");
-    if (gps) {
-      gps.addEventListener("click", async () => {
-        gps.textContent = "Finding you…";
-        try {
-          const pos = await currentPosition();
-          const place = await reverseGeocode(pos.lat, pos.lon);
-          tripIdea.brief.from = place || `${pos.lat.toFixed(3)}, ${pos.lon.toFixed(3)}`;
-          ideaStartGeo = { query: tripIdea.brief.from, lat: pos.lat, lon: pos.lon };
-          saveIdea();
-        } catch (e) {
-          toast("Couldn't get your location");
-        }
-        renderIdea();
-      });
+    if ((el = hit("interest"))) {
+      const key = el.getAttribute("data-idea-interest");
+      const list = tripIdea.brief.interests;
+      const at = list.indexOf(key);
+      if (at < 0) list.push(key);
+      else list.splice(at, 1);
+      saveIdea();
+      return renderIdea();
     }
 
-    const run = document.getElementById("ideaRun");
-    if (run) run.addEventListener("click", () => runTripIdea());
-    const retry = document.getElementById("ideaRetry");
-    if (retry) retry.addEventListener("click", () => runTripIdea());
+    if ((el = hit("move"))) return ideaGo(Number(el.getAttribute("data-idea-move")));
+    if ((el = hit("step"))) return ideaJump(Number(el.getAttribute("data-idea-step")));
+    if (e.target.closest("#ideaNext")) return ideaGo(1);
+    if (e.target.closest("#ideaRun") || e.target.closest("#ideaRetry")) return runTripIdea();
+
+    if (hit("gps")) return useMyLocationAsStart(e.target.closest("[data-idea-gps]"));
+
+    if (hit("cancel")) {
+      ideaGeneration++; // whatever is in flight can no longer write
+      tripIdea.status = tripIdea.options.length ? "done" : "idle";
+      tripIdea.view = tripIdea.options.length ? "results" : "brief";
+      tripIdea.step = IDEA_STEPS.length - 1;
+      return renderIdea();
+    }
 
     // Back to the question lands on the review screen, not step one: you came
     // to change one thing, and everything is reachable from there.
-    // Never a screen with no way off it, whatever the network is doing.
-    ideaOverlay.querySelectorAll("[data-idea-cancel]").forEach((b) =>
-      b.addEventListener("click", () => {
-        ideaGeneration++; // whatever is in flight can no longer write
-        tripIdea.status = tripIdea.options.length ? "done" : "idle";
-        tripIdea.view = tripIdea.options.length ? "results" : "brief";
-        tripIdea.step = IDEA_STEPS.length - 1;
-        renderIdea();
-      })
-    );
+    if (hit("edit")) {
+      tripIdea.view = "brief";
+      tripIdea.step = IDEA_STEPS.length - 1;
+      return renderIdea();
+    }
 
-    ideaOverlay.querySelectorAll("[data-idea-edit]").forEach((b) =>
-      b.addEventListener("click", () => {
-        tripIdea.view = "brief";
-        tripIdea.step = IDEA_STEPS.length - 1;
-        renderIdea();
-      })
-    );
+    if ((el = hit("option"))) {
+      const i = Number(el.getAttribute("data-idea-option"));
+      tripIdea.expanded = tripIdea.expanded === i ? -1 : i;
+      saveIdea();
+      renderIdea();
+      if (tripIdea.expanded !== i) return;
+      // Opening the third card left it where it was - below the fold, under
+      // two cards you had finished with. What you just opened goes to the top,
+      // which is where you are looking.
+      const card = ideaOverlay.querySelector(`[data-idea-option="${i}"]`);
+      const body = ideaOverlay.querySelector(".search-body");
+      if (card && body) body.scrollTop = card.offsetTop - body.offsetTop - 8;
+      return measureIdeaOption(i);
+    }
 
-    ideaOverlay.querySelectorAll("[data-idea-option]").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const i = Number(btn.getAttribute("data-idea-option"));
-        tripIdea.expanded = tripIdea.expanded === i ? -1 : i;
-        saveIdea();
-        renderIdea();
-        if (tripIdea.expanded !== i) return;
-        // Opening the third card left it where it was - below the fold, under
-        // two cards you had finished with. What you just opened goes to the
-        // top, which is where you are looking.
-        const card = ideaOverlay.querySelector(`[data-idea-option="${i}"]`);
-        const body = ideaOverlay.querySelector(".search-body");
-        if (card && body) body.scrollTop = card.offsetTop - body.offsetTop - 8;
-        measureIdeaOption(i);
-      });
-    });
+    if ((el = hit("add"))) {
+      const at = ideaStopAt(el.getAttribute("data-idea-add"));
+      if (!at) return;
+      ideaSaveStop(at.stop);
+      renderIdea();
+      return toast(`Saved ${at.stop.name}`);
+    }
 
-    ideaOverlay.querySelectorAll("[data-idea-add]").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const at = ideaStopAt(btn.getAttribute("data-idea-add"));
-        if (!at) return;
-        ideaSaveStop(at.stop);
-        renderIdea();
-        toast(`Saved ${at.stop.name}`);
-      });
-    });
-
-    ideaOverlay.querySelectorAll("[data-idea-day]").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const at = ideaStopAt(btn.getAttribute("data-idea-day"));
-        if (!at) return;
-        const id = ideaSaveStop(at.stop);
-        openDaySheet(id, { onDone: () => renderIdea() });
-      });
-    });
+    if ((el = hit("day"))) {
+      const at = ideaStopAt(el.getAttribute("data-idea-day"));
+      if (!at) return;
+      return openDaySheet(ideaSaveStop(at.stop), { onDone: () => renderIdea() });
+    }
 
     // Opens the alternatives to look at rather than swapping on the spot: a
     // name is not enough to choose on, and swapping to read and swapping back
     // is a poor way to compare two places.
-    ideaOverlay.querySelectorAll("[data-idea-swap]").forEach((btn) => {
-      btn.addEventListener("click", () => openStopChooser(btn.getAttribute("data-idea-swap")));
-    });
+    if ((el = hit("swap"))) return openStopChooser(el.getAttribute("data-idea-swap"));
 
-    ideaOverlay.querySelectorAll("[data-idea-preview]").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const at = ideaStopAt(btn.getAttribute("data-idea-preview"));
-        if (!at) return;
-        // The whole day is handed over, so the preview's own next/previous
-        // moves along the route rather than dead-ending on one stop.
-        const list = at.day.stops.map(ideaCandidate);
-        openCandidatePreview(at.si, list);
-      });
-    });
-
-    ideaOverlay.querySelectorAll("[data-idea-use]").forEach((btn) =>
-      btn.addEventListener("click", () => useIdeaOption(Number(btn.getAttribute("data-idea-use"))))
-    );
-    ideaOverlay.querySelectorAll("[data-idea-saveall]").forEach((btn) =>
-      btn.addEventListener("click", () => saveIdeaOptionPlaces(Number(btn.getAttribute("data-idea-saveall"))))
-    );
-
-    const refine = document.getElementById("ideaRefineForm");
-    if (refine) {
-      refine.addEventListener("submit", (e) => {
-        e.preventDefault();
-        const field = document.getElementById("ideaRefineInput");
-        tripIdea.brief.extra = field ? field.value.trim() : "";
-        if (field) field.blur();
-        runTripIdea();
-      });
+    if ((el = hit("preview"))) {
+      const at = ideaStopAt(el.getAttribute("data-idea-preview"));
+      if (!at) return;
+      // The whole day is handed over, so the preview's own next/previous moves
+      // along the route rather than dead-ending on one stop.
+      return openCandidatePreview(at.si, at.day.stops.map(ideaCandidate));
     }
+
+    if ((el = hit("use"))) return useIdeaOption(Number(el.getAttribute("data-idea-use")));
+    if ((el = hit("saveall"))) return saveIdeaOptionPlaces(Number(el.getAttribute("data-idea-saveall")));
   }
+
+  async function useMyLocationAsStart(button) {
+    if (button) button.textContent = "Finding you…";
+    try {
+      const pos = await currentPosition();
+      const place = await reverseGeocode(pos.lat, pos.lon);
+      tripIdea.brief.from = place || `${pos.lat.toFixed(3)}, ${pos.lon.toFixed(3)}`;
+      ideaStartGeo = { query: tripIdea.brief.from, lat: pos.lat, lon: pos.lon };
+      saveIdea();
+    } catch (e) {
+      toast("Couldn't get your location");
+    }
+    renderIdea();
+  }
+
+  // Typed input, the same way: input and focusout both bubble, so one listener
+  // each covers every field the screen will ever have.
+  function onIdeaInput(e) {
+    if (!tripIdea) return;
+    const field = ideaTarget(e, "text");
+    if (!field) return;
+    tripIdea.brief[field.getAttribute("data-idea-text")] = field.value;
+    refreshIdeaLive();
+  }
+
+  function onIdeaFocusOut(e) {
+    if (!tripIdea) return;
+    const field = ideaTarget(e, "text");
+    if (!field) return;
+    tripIdea.brief[field.getAttribute("data-idea-text")] = field.value;
+    saveIdea();
+  }
+
+  function onIdeaKeyDown(e) {
+    if (!tripIdea || e.key !== "Enter") return;
+    const field = ideaTarget(e, "text");
+    if (!field) return;
+    // On a phone the keyboard's own "go" is right there and the Next button is
+    // behind it, so it has to mean the same thing.
+    e.preventDefault();
+    field.blur();
+    ideaGo(1);
+  }
+
+  function onIdeaSubmit(e) {
+    if (!tripIdea || !e.target || e.target.id !== "ideaRefineForm") return;
+    e.preventDefault();
+    const field = document.getElementById("ideaRefineInput");
+    tripIdea.brief.extra = field ? field.value.trim() : "";
+    if (field) field.blur();
+    runTripIdea();
+  }
+
+  // A carousel you cannot swipe is a slideshow. The buttons stay because a
+  // swipe is undiscoverable on its own, and because one hand on a pushchair is
+  // the normal case here.
+  let ideaTouchX = null;
+  let ideaTouchY = null;
+
+  function onIdeaTouchStart(e) {
+    const t = e.changedTouches[0];
+    ideaTouchX = t.clientX;
+    ideaTouchY = t.clientY;
+  }
+
+  function onIdeaTouchEnd(e) {
+    if (ideaTouchX == null || !tripIdea || tripIdea.view !== "brief") return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - ideaTouchX;
+    const dy = t.clientY - ideaTouchY;
+    ideaTouchX = null;
+    // Comfortably horizontal, or it is a scroll that drifted.
+    if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+    ideaGo(dx < 0 ? 1 : -1);
+  }
+
+  ideaOverlay.addEventListener("click", onIdeaClick);
+  ideaOverlay.addEventListener("input", onIdeaInput);
+  ideaOverlay.addEventListener("focusout", onIdeaFocusOut);
+  ideaOverlay.addEventListener("keydown", onIdeaKeyDown);
+  ideaOverlay.addEventListener("submit", onIdeaSubmit);
+  ideaOverlay.addEventListener("touchstart", onIdeaTouchStart, { passive: true });
+  ideaOverlay.addEventListener("touchend", onIdeaTouchEnd, { passive: true });
 
   // ---------- Picks: search-and-confirm with a real map ----------
 
