@@ -495,12 +495,71 @@
     const raw = fenced ? fenced[1] : text;
     const start = raw.search(/[[{]/);
     if (start < 0) return null;
-    const lastArr = raw.lastIndexOf("]");
-    const lastObj = raw.lastIndexOf("}");
-    const end = Math.max(lastArr, lastObj);
-    if (end <= start) return null;
+    const end = Math.max(raw.lastIndexOf("]"), raw.lastIndexOf("}"));
+    // No closing bracket at all is the commonest truncation of the lot, and
+    // returning null here meant the repair below never got a look at it.
+    if (end <= start) return repairJson(raw.slice(start));
     try {
       return JSON.parse(raw.slice(start, end + 1));
+    } catch (e) {
+      // An answer cut off by the output limit is not a broken answer, it is a
+      // complete one with the end missing - and everything before the cut is
+      // perfectly good. Closing what is still open recovers all of it except
+      // the last item.
+      return repairJson(raw.slice(start));
+    }
+  }
+
+  // Truncated JSON, closed off at the last point where a value had finished.
+  function repairJson(raw) {
+    let inString = false;
+    let escaped = false;
+    let safe = -1;
+    for (let i = 0; i < raw.length; i++) {
+      const c = raw[i];
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (c === "\\") {
+        if (inString) escaped = true;
+        continue;
+      }
+      if (c === '"') {
+        inString = !inString;
+        if (!inString) safe = i; // a string just finished
+        continue;
+      }
+      if (inString) continue;
+      if (c === "}" || c === "]") safe = i;
+      else if (c >= "0" && c <= "9") safe = i; // a bare number can end here too
+    }
+    if (safe < 0) return null;
+
+    let head = raw.slice(0, safe + 1);
+    // A key with no value yet ("time": ) is not something to close around.
+    head = head.replace(/,\s*"[^"]*"\s*:?\s*$/, "");
+    const closers = [];
+    inString = false;
+    escaped = false;
+    for (let i = 0; i < head.length; i++) {
+      const c = head[i];
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (c === "\\") {
+        if (inString) escaped = true;
+        continue;
+      }
+      if (c === '"') inString = !inString;
+      else if (inString) continue;
+      else if (c === "{") closers.push("}");
+      else if (c === "[") closers.push("]");
+      else if (c === "}" || c === "]") closers.pop();
+    }
+    try {
+      return JSON.parse(head + closers.reverse().join(""));
     } catch (e) {
       return null;
     }
@@ -3598,9 +3657,58 @@
   function normalisePlannerResult(raw, picks, days) {
     raw = unwrapPlannerPayload(raw);
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+    // The model is asked for exact names and mostly gives them, but it also
+    // drops a "The", writes "Edinburgh Castle" for "Edinburgh Castle & Museum",
+    // or adds the town. Matching on the exact string meant one paraphrase threw
+    // away the entire plan and the screen said it could not be read - which is
+    // both wrong and impossible to act on.
+    const flatten = (s) =>
+      String(s || "")
+        .toLowerCase()
+        .replace(/&/g, " and ")
+        .replace(/[^a-z0-9 ]+/g, " ")
+        .replace(/^\s*the\s+/, "")
+        .replace(/\s+/g, " ")
+        .trim();
+    const words = (s) => flatten(s).split(" ").filter((w) => w.length > 3);
+
     const byName = {};
-    picks.forEach((p) => (byName[String(p.name).toLowerCase().trim()] = p));
-    const find = (name) => byName[String(name || "").toLowerCase().trim()] || null;
+    picks.forEach((p) => (byName[flatten(p.name)] = p));
+
+    const unmatched = [];
+    const find = (name) => {
+      const key = flatten(name);
+      if (!key) return null;
+      if (byName[key]) return byName[key];
+
+      // One name inside the other: "Blair Castle" for "Blair Castle and
+      // Gardens", or the town appended.
+      const contained = picks.find((p) => {
+        const other = flatten(p.name);
+        return other.includes(key) || key.includes(other);
+      });
+      if (contained) return contained;
+
+      // Otherwise the substantial words have to agree - every one of the
+      // shorter name's, and at least two of them. One word in common is not a
+      // match: "Edinburgh Zoo" and "Edinburgh Castle" share "edinburgh" and
+      // are not the same place, and scheduling one for the other would be
+      // worse than admitting the name is unknown.
+      const mine = words(name);
+      if (mine.length > 1) {
+        const overlap = picks.find((p) => {
+          const theirs = words(p.name);
+          if (theirs.length < 2) return false;
+          const shorter = mine.length <= theirs.length ? mine : theirs;
+          const longer = shorter === mine ? theirs : mine;
+          return shorter.every((w) => longer.includes(w));
+        });
+        if (overlap) return overlap;
+      }
+
+      if (name) unmatched.push(String(name));
+      return null;
+    };
 
     // A flat list of assignments - [{day: 1, name: "...", time: "..."}] - is
     // the other shape models reach for, and it is a perfectly clear one.
@@ -3680,7 +3788,11 @@
       if (!accounted.has(p.id)) leftOut.push({ name: p.name, reason: "Not placed, and no reason given." });
     });
 
-    if (!outDays.length && !trips.length) return null;
+    if (!outDays.length && !trips.length) {
+      // Nothing matched is a different failure from nothing sent, and the
+      // difference is the only thing worth telling anyone.
+      return unmatched.length ? { unmatched: unmatched.slice(0, 6) } : null;
+    }
     return { days: outDays, leftOut, trips, notes: String(raw.notes || raw.summary || "").slice(0, 400) };
   }
 
@@ -3701,10 +3813,15 @@
     try {
       // No grounding: this is arranging places we already know about, so
       // search would only slow it down and risk a prose answer.
-      const { text } = await callGemini(key, plannerPrompt(picks, days), { json: true, maxTokens: 4096 });
+      const { text } = await callGemini(key, plannerPrompt(picks, days), { json: true, maxTokens: 8192 });
       if (!planner) return;
       planner.raw = text;
       const result = normalisePlannerResult(extractJson(text), picks, days);
+      if (result && result.unmatched) {
+        throw new Error(
+          `It planned places that aren't in your list - ${result.unmatched.join(", ")} - so nothing could be scheduled. Try again, or plan fewer at once.`
+        );
+      }
       if (!result) {
         throw new Error(
           `The model answered, but not with a plan that could be read.${

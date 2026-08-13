@@ -270,6 +270,95 @@ await page.waitForSelector('.planner-day', { timeout: 8000 });
 check('a bare list of assignments is read as one', /Edinburgh Castle/.test(await bodyText()),
   (await bodyText()).slice(0, 200));
 
+// ---------- An answer cut off by the output limit ----------
+// Reported from the real model: a plan that stops mid-word, because the reply
+// ran past its token cap. Everything before the cut is perfectly good, and
+// giving up on all of it is a bug in the reader.
+
+await seed({ days: [{ id: 'd1', label: 'Day 1 · Wed 19 Aug' }], items: {} });
+reply = () => 'TRUNCATED';
+await page.unroute(/generativelanguage\.googleapis\.com/);
+await page.route(/generativelanguage\.googleapis\.com/, (route) => {
+  if (/\/models\?/.test(route.request().url())) {
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+      models: [{ name: 'models/gemini-3.5-flash-lite', supportedGenerationMethods: ['generateContent'] }] }) });
+  }
+  const body = JSON.parse(route.request().postData() || '{}');
+  prompts.push({ text: body.contents[0].parts[0].text, maxTokens: (body.generationConfig || {}).maxOutputTokens || 0 });
+  // Exactly the shape that was on screen: cut off mid-key.
+  const text = '{ "days": [ { "day": 1, "stops": [ { "name": "Edinburgh Castle", "time": "09:30", "w';
+  return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+    candidates: [{ content: { parts: [{ text }] } }] }) });
+});
+prompts = [];
+await openPicker();
+await page.evaluate(() => document.querySelector('[data-plan-run]').click());
+await page.waitForSelector('.planner-day', { timeout: 8000 });
+check('a plan cut off mid-word keeps everything before the cut',
+  /Edinburgh Castle/.test(await bodyText()), (await bodyText()).slice(0, 200));
+check('and the time it had already given',
+  /09:30/.test(await bodyText()), (await bodyText()).slice(0, 200));
+check('the request asks for as much room as the trip planner does',
+  (prompts[0] || {}).maxTokens >= 8192, JSON.stringify(prompts[0] && prompts[0].maxTokens));
+
+// ---------- Names as the model writes them ----------
+// It is asked for exact names and mostly gives them. It also drops a "The",
+// adds the town, or lengthens the name - and matching on the exact string
+// meant one paraphrase threw the whole plan away.
+
+await seed({ days: [{ id: 'd1', label: 'Day 1 · Wed 19 Aug' }], items: {} });
+await page.unroute(/generativelanguage\.googleapis\.com/);
+await page.route(/generativelanguage\.googleapis\.com/, (route) => {
+  if (/\/models\?/.test(route.request().url())) {
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+      models: [{ name: 'models/gemini-3.5-flash-lite', supportedGenerationMethods: ['generateContent'] }] }) });
+  }
+  return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+    candidates: [{ content: { parts: [{ text: JSON.stringify({
+      days: [{ day: 1, stops: [
+        { name: 'Edinburgh Castle, Castlehill', time: '10:00', why: 'The town appended.' },
+        { name: 'Camera Obscura and World of Illusions', time: '13:00', why: 'The full name.' },
+        { name: 'Dynamic Earth', time: '15:00', why: 'Exact.' },
+      ] }],
+      leftOut: [{ name: 'The Taybank', reason: 'Too far.' }],
+      notes: '',
+      separateTrips: [],
+    }) }] } }] }) });
+});
+await openPicker();
+await page.evaluate(() => document.querySelector('[data-plan-run]').click());
+await page.waitForSelector('.planner-day', { timeout: 8000 });
+const planned = await page.evaluate(() =>
+  Array.from(document.querySelectorAll('.planner-stop-name')).map((e) => e.textContent.trim()));
+check('a name with the town appended still finds the place',
+  planned.includes('Edinburgh Castle'), JSON.stringify(planned));
+check('and a longer version of the name does too',
+  planned.includes('Camera Obscura'), JSON.stringify(planned));
+check('all three are planned rather than none', planned.length === 3, JSON.stringify(planned));
+
+// A name that is genuinely not one of yours is still refused - "Edinburgh
+// Castle" must not quietly become "Edinburgh Zoo".
+await seed({ days: [{ id: 'd1', label: 'Day 1 · Wed 19 Aug' }], items: {} });
+await page.unroute(/generativelanguage\.googleapis\.com/);
+await page.route(/generativelanguage\.googleapis\.com/, (route) => {
+  if (/\/models\?/.test(route.request().url())) {
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+      models: [{ name: 'models/gemini-3.5-flash-lite', supportedGenerationMethods: ['generateContent'] }] }) });
+  }
+  return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+    candidates: [{ content: { parts: [{ text: JSON.stringify({
+      days: [{ day: 1, stops: [{ name: 'Edinburgh Zoo', time: '10:00', why: 'Never saved.' }] }],
+      leftOut: [], notes: '', separateTrips: [],
+    }) }] } }] }) });
+});
+await openPicker();
+await page.evaluate(() => document.querySelector('[data-plan-run]').click());
+await page.waitForTimeout(2500);
+check('a place you never saved is not scheduled by a near-enough name',
+  /aren't in your list/.test(await bodyText()), (await bodyText()).slice(0, 220));
+check('and it says which one it made up',
+  /Edinburgh Zoo/.test(await bodyText()), (await bodyText()).slice(0, 220));
+
 // ---------- No days to plan into ----------
 
 await seed({ days: [], items: {} });
