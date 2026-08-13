@@ -134,7 +134,18 @@ await page.evaluate(() => document.querySelector('[data-plan-mode="mine"]').clic
 await page.waitForTimeout(200);
 check('Plan my days button present', await page.evaluate(() => !!document.getElementById('autoPlanBtn')));
 
+// The button now opens the chooser: what to plan is a question, and the answer
+// is reviewed before anything is written.
 await page.evaluate(() => document.getElementById('autoPlanBtn').click());
+await page.waitForSelector('#planOverlay.open', { timeout: 4000 });
+await page.evaluate(() => document.querySelector('[data-plan-run]').click());
+await page.waitForSelector('.planner-day', { timeout: 8000 });
+
+const beforeApply = await page.evaluate(() => JSON.parse(localStorage.getItem('board:'+JSON.parse(localStorage.getItem('boards-v1')).activeId+':plan') || '{"days":[],"items":{}}'));
+check('nothing is scheduled until the plan is accepted',
+  Object.values(beforeApply.items || {}).flat().length === 0, JSON.stringify(beforeApply.items));
+
+await page.evaluate(() => document.querySelector('[data-plan-apply]').click());
 await page.waitForTimeout(1200);
 
 const plan = await page.evaluate(() => JSON.parse(localStorage.getItem('board:'+JSON.parse(localStorage.getItem('boards-v1')).activeId+':plan')));
@@ -142,9 +153,6 @@ const all = Object.values(plan.items).flat();
 check('real pick was scheduled', all.length === 1, JSON.stringify(plan.items));
 check('hallucinated place was NOT scheduled', all.every((it) => it.pickId === picks[0].id), JSON.stringify(all));
 check('time captured from plan', all[0] && all[0].time === '10:00', JSON.stringify(all[0]));
-
-const planText = await page.evaluate(() => document.getElementById('view').textContent);
-check('plan note shown to user', /edit anything/i.test(planText), planText.slice(0, 200));
 
 // --- No gemini key => no gemini calls ---
 geminiCalls = [];

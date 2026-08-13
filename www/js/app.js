@@ -3174,75 +3174,555 @@
   // Asks Gemini to spread the saved picks across the trip's days. Only ever
   // arranges places the user already chose - it doesn't invent new ones - so
   // the worst case is an ordering the user then edits, not a fabricated place.
-  async function autoPlanDays() {
-    const s = loadTripSettings();
-    const key = s.geminiKey.trim();
-    if (!key) {
+
+  // ---------- Plan my days: choose what to plan, then say what will not work ----------
+  // The old version took every saved place, sent the lot, and wrote whatever
+  // came back straight into the itinerary. Three things wrong with that:
+  //
+  //   - There was no way to say "just the Perthshire ones this time". Planning
+  //     is usually done a region at a time; the app made it all or nothing.
+  //   - It never said what it could not do. A place four hours away simply did
+  //     not appear, which looks identical to the model forgetting it.
+  //   - It overwrote the plan on arrival, so an afternoon of arranging days by
+  //     hand was gone before you had read the result.
+  //
+  // Now: choose the places, or a whole area at once; the answer is reviewed
+  // before it is applied; what was left out is listed with the reason; and when
+  // more has been chosen than the days can hold, the surplus comes back as
+  // separate trips rather than being crammed in or silently dropped.
+  const planOverlay = document.getElementById("planOverlay");
+
+  // What counts as a day nobody would actually enjoy. The road factor and the
+  // driving speed are the app's own, shared with the leg times shown on each
+  // day, so the warning and the numbers beside it cannot disagree.
+  const LONG_DAY_MINUTES = 180;
+  const BUSY_DAY_STOPS = 5;
+
+  let planner = null;
+
+  function blankPlanner() {
+    return { selected: {}, status: "idle", view: "select", result: null, error: "", raw: "" };
+  }
+
+  function plannerPicks() {
+    return loadPicks().filter((p) => !p.major);
+  }
+
+  function plannerAreas() {
+    const groups = {};
+    plannerPicks().forEach((p) => {
+      const area = p.city || "Unsorted";
+      if (!groups[area]) groups[area] = [];
+      groups[area].push(p);
+    });
+    return groups;
+  }
+
+  function selectedPicks() {
+    return plannerPicks().filter((p) => planner.selected[p.id]);
+  }
+
+  function openPlanner() {
+    if (!loadTripSettings().geminiKey.trim()) {
       openSettings();
+      toast("Add a Gemini key and this can plan your days");
+      return;
+    }
+    planner = blankPlanner();
+    // Everything already on a day is what you were working on, so it starts
+    // selected; a first run with nothing scheduled starts with everything.
+    const plan = loadPlan();
+    const scheduled = new Set();
+    Object.keys(plan.items || {}).forEach((dayId) =>
+      (plan.items[dayId] || []).forEach((it) => scheduled.add(it.pickId))
+    );
+    plannerPicks().forEach((p) => {
+      planner.selected[p.id] = scheduled.size ? scheduled.has(p.id) : true;
+    });
+    renderPlanner();
+  }
+
+  function closePlanner() {
+    planOverlay.classList.remove("open");
+    planOverlay.innerHTML = "";
+    planner = null;
+    if (view.dataset.activeTab) showView(view.dataset.activeTab);
+  }
+
+  function plannerSelectHtml() {
+    const groups = plannerAreas();
+    const areas = Object.keys(groups);
+    const chosen = selectedPicks().length;
+    const days = loadPlan().days.length;
+
+    let html = `
+      <p class="settings-hint planner-lead">
+        Choose what to plan. A whole area at once, or place by place - anything you leave out
+        stays exactly where it is.
+      </p>
+      <div class="planner-count">
+        <b>${esc(String(chosen))}</b> place${chosen === 1 ? "" : "s"} ·
+        <b>${esc(String(days))}</b> day${days === 1 ? "" : "s"}
+        ${
+          days && chosen > days * BUSY_DAY_STOPS
+            ? `<span class="planner-count-warn">— more than these days can hold. I'll say what to leave for another trip.</span>`
+            : ""
+        }
+      </div>
+      <div class="planner-bulk">
+        <button class="search-chip" data-plan-all="1">Select all</button>
+        <button class="search-chip" data-plan-none="1">Clear</button>
+      </div>
+    `;
+
+    areas.forEach((area) => {
+      const list = groups[area];
+      const on = list.filter((p) => planner.selected[p.id]).length;
+      html += `
+        <section class="planner-area">
+          <button class="planner-area-head${on === list.length ? " on" : on ? " part" : ""}" data-plan-area="${esc(area)}">
+            <span class="planner-area-tick">${on === list.length ? "✓" : on ? "–" : ""}</span>
+            <span class="planner-area-name">${esc(area)}</span>
+            <span class="planner-area-count">${esc(String(on))}/${esc(String(list.length))}</span>
+          </button>
+          <div class="planner-places">
+            ${list
+              .map(
+                (p) => `
+                  <button class="planner-place${planner.selected[p.id] ? " on" : ""}" data-plan-pick="${esc(p.id)}">
+                    <span class="planner-place-tick">${planner.selected[p.id] ? "✓" : ""}</span>
+                    <span class="planner-place-main">
+                      <span class="planner-place-name">${esc(p.name)}</span>
+                      ${p.category ? `<span class="planner-place-meta">${esc(p.category)}</span>` : ""}
+                    </span>
+                  </button>
+                `
+              )
+              .join("")}
+          </div>
+        </section>
+      `;
+    });
+
+    return html;
+  }
+
+  // Our own arithmetic, not the model's opinion. Distances between the stops
+  // it put on each day, so "this day is too much" is a measurement.
+  function dayFeasibility(stops) {
+    const points = stops.map((s) => s.pick).filter((p) => p && p.lat != null);
+    let km = 0;
+    for (let i = 1; i < points.length; i++) {
+      km += haversineKm(points[i - 1].lat, points[i - 1].lon, points[i].lat, points[i].lon);
+    }
+    const road = km * ROAD_FACTOR;
+    const miles = Math.round(toMiles(road));
+    const minutes = Math.round((road / DRIVE_KMH) * 60);
+    const problems = [];
+    if (minutes > LONG_DAY_MINUTES) {
+      problems.push(`about ${formatDuration(minutes)} of driving between stops`);
+    }
+    if (stops.length > BUSY_DAY_STOPS) {
+      problems.push(`${stops.length} stops is a lot for one day`);
+    }
+    return { miles, minutes, problems };
+  }
+
+  function plannerReviewHtml() {
+    const result = planner.result;
+    if (!result) return "";
+    const plan = loadPlan();
+
+    let html = "";
+    if (result.notes) html += `<div class="card planner-notes"><p class="pick-status">${esc(result.notes)}</p></div>`;
+
+    result.days.forEach((day, i) => {
+      const label = (plan.days[day.index] && plan.days[day.index].label) || `Day ${day.index + 1}`;
+      const check = dayFeasibility(day.stops);
+      html += `
+        <div class="card planner-day">
+          <div class="planner-day-head">
+            <span class="planner-day-name">${esc(label)}</span>
+            <span class="planner-day-meta">${esc(String(day.stops.length))} stop${
+              day.stops.length === 1 ? "" : "s"
+            }${check.miles ? ` · about ${esc(String(check.miles))} mile${check.miles === 1 ? "" : "s"}` : ""}</span>
+          </div>
+          ${day.stops
+            .map(
+              (s) => `
+                <div class="planner-stop">
+                  <span class="planner-stop-time">${esc(s.time || "")}</span>
+                  <span class="planner-stop-main">
+                    <span class="planner-stop-name">${esc(s.pick ? s.pick.name : s.name)}</span>
+                    ${s.why ? `<span class="planner-stop-why">${esc(s.why)}</span>` : ""}
+                  </span>
+                </div>
+              `
+            )
+            .join("")}
+          ${
+            check.problems.length
+              ? `<p class="planner-warn">⚠ ${esc(check.problems.join(", and "))}. Worth moving something.</p>`
+              : ""
+          }
+        </div>
+      `;
+    });
+
+    if (result.leftOut.length) {
+      html += `
+        <div class="card planner-left">
+          <div class="section-label">Left out, and why</div>
+          ${result.leftOut
+            .map(
+              (x) => `
+                <div class="planner-left-row">
+                  <span class="planner-left-name">${esc(x.name)}</span>
+                  <span class="planner-left-why">${esc(x.reason)}</span>
+                </div>
+              `
+            )
+            .join("")}
+        </div>
+      `;
+    }
+
+    // More than the days could hold, offered as trips of their own rather than
+    // squeezed in or quietly dropped.
+    result.trips.forEach((trip, i) => {
+      html += `
+        <div class="card planner-trip">
+          <div class="section-label">A trip of its own</div>
+          <h3 class="planner-trip-title">${esc(trip.title)}</h3>
+          ${trip.why ? `<p class="pick-status">${esc(trip.why)}</p>` : ""}
+          <p class="planner-trip-places">${esc(trip.places.map((p) => p.name).join(" · "))}</p>
+          <button class="modal-btn" data-plan-trip="${i}">
+            Add ${esc(String(trip.days))} more day${trip.days === 1 ? "" : "s"} and plan it
+          </button>
+        </div>
+      `;
+    });
+
+    return html;
+  }
+
+  function renderPlanner() {
+    if (!planner) return;
+    const reviewing = planner.view === "review" && planner.result;
+    let body = "";
+    if (planner.status === "loading") {
+      body = `<div class="card idea-loading"><p class="pick-status">Working out what fits…</p></div>`;
+    } else if (planner.status === "error") {
+      body = `
+        <div class="card">
+          <h2 class="modal-title">That didn't work</h2>
+          <p class="pick-status">${esc(planner.error)}</p>
+          <div class="settings-btn-row">
+            <button class="modal-btn modal-btn-primary" data-plan-run="1">Try again</button>
+            <button class="modal-btn" data-plan-back="1">Change what's included</button>
+          </div>
+        </div>
+      `;
+    } else {
+      body = reviewing ? plannerReviewHtml() : plannerSelectHtml();
+    }
+
+    planOverlay.innerHTML = `
+      <div class="search-head">
+        <button class="search-back" data-plan-close="1" aria-label="Close">←</button>
+        <div class="idea-head-text">
+          <div class="idea-head-title">${reviewing ? "How this looks" : "Plan my days"}</div>
+          <div class="idea-head-sub">${
+            reviewing ? "Nothing has changed yet" : `${esc(String(selectedPicks().length))} selected`
+          }</div>
+        </div>
+      </div>
+      <div class="search-body">${body}</div>
+      ${
+        planner.status === "loading" || planner.status === "error"
+          ? ""
+          : reviewing
+          ? `<div class="idea-nav">
+               <button class="modal-btn idea-back" data-plan-back="1">Change</button>
+               <button class="modal-btn modal-btn-primary idea-forward" data-plan-apply="1">Use this plan</button>
+             </div>`
+          : `<div class="idea-nav">
+               <button class="modal-btn modal-btn-primary idea-forward" data-plan-run="1"
+                       ${selectedPicks().length ? "" : "disabled"}>Plan these</button>
+             </div>`
+      }
+    `;
+    planOverlay.classList.add("open");
+    wirePlanner();
+  }
+
+  function wirePlanner() {
+    planOverlay.querySelectorAll("[data-plan-close]").forEach((b) => b.addEventListener("click", closePlanner));
+    planOverlay.querySelectorAll("[data-plan-back]").forEach((b) =>
+      b.addEventListener("click", () => {
+        planner.view = "select";
+        planner.status = "idle";
+        renderPlanner();
+      })
+    );
+    planOverlay.querySelectorAll("[data-plan-pick]").forEach((b) =>
+      b.addEventListener("click", () => {
+        const id = b.getAttribute("data-plan-pick");
+        planner.selected[id] = !planner.selected[id];
+        renderPlanner();
+      })
+    );
+    planOverlay.querySelectorAll("[data-plan-area]").forEach((b) =>
+      b.addEventListener("click", () => {
+        const area = b.getAttribute("data-plan-area");
+        const list = plannerAreas()[area] || [];
+        // Half-selected means "select the rest", which is what a tap on a
+        // partly-ticked group is asking for.
+        const turnOn = list.some((p) => !planner.selected[p.id]);
+        list.forEach((p) => (planner.selected[p.id] = turnOn));
+        renderPlanner();
+      })
+    );
+    planOverlay.querySelectorAll("[data-plan-all]").forEach((b) =>
+      b.addEventListener("click", () => {
+        plannerPicks().forEach((p) => (planner.selected[p.id] = true));
+        renderPlanner();
+      })
+    );
+    planOverlay.querySelectorAll("[data-plan-none]").forEach((b) =>
+      b.addEventListener("click", () => {
+        planner.selected = {};
+        renderPlanner();
+      })
+    );
+    planOverlay.querySelectorAll("[data-plan-run]").forEach((b) =>
+      b.addEventListener("click", () => runPlanner())
+    );
+    planOverlay.querySelectorAll("[data-plan-apply]").forEach((b) =>
+      b.addEventListener("click", () => applyPlannerResult())
+    );
+    planOverlay.querySelectorAll("[data-plan-trip]").forEach((b) =>
+      b.addEventListener("click", () => addPlannerTrip(Number(b.getAttribute("data-plan-trip"))))
+    );
+  }
+
+  function plannerPrompt(picks, days) {
+    const settings = loadTripSettings();
+    const who = aiContextBlock();
+    const dayList = days.map((d, i) => `${i + 1}. ${d.label}`).join("\n");
+    const placeList = picks
+      .map(
+        (p) =>
+          `- ${p.name}${p.city ? ` (${p.city})` : ""}${p.category ? ` [${p.category}]` : ""}` +
+          `${p.lat != null ? ` at ${p.lat.toFixed(4)},${p.lon.toFixed(4)}` : " (position unknown)"}` +
+          `${p.openingHours ? ` hours: ${p.openingHours}` : ""}`
+      )
+      .join("\n");
+
+    return (
+      `Arrange these saved places into the days below.${who}\n\n` +
+      `Days:\n${dayList}\n\nPlaces:\n${placeList}\n\n` +
+      `Rules:\n` +
+      `- Use ONLY the places listed, by their exact names.\n` +
+      `- Group places that are close together on the same day; the coordinates are given.\n` +
+      `- Put demanding things earlier; leave a day lighter rather than cramming it.\n` +
+      `- Not every place has to be used. Say plainly what you left out and why -\n` +
+      `  too far from the rest, too long a drive, needs a day of its own, closed that day.\n` +
+      `- Be honest about how realistic the result is, including anything you did fit\n` +
+      `  that will be tight.\n` +
+      `- If there is more here than these days can hold, do not squeeze it in. Put the\n` +
+      `  surplus into one or more separate trips, each one somewhere that works as its\n` +
+      `  own outing, and say how many days each would need.\n\n` +
+      `Reply with ONLY JSON:\n` +
+      `{"days":[{"day":1,"stops":[{"name":"exact name","time":"10:00" or "","why":"one short reason it sits here"}]}],` +
+      `"leftOut":[{"name":"exact name","reason":"why it does not fit"}],` +
+      `"notes":"one or two sentences on how realistic this is",` +
+      `"separateTrips":[{"title":"short name","why":"one sentence","days":2,"places":["exact name"]}]}`
+    );
+  }
+
+  // Same lesson as the trip planner: read what models actually send, not only
+  // the shape that was asked for.
+  function normalisePlannerResult(raw, picks, days) {
+    if (!raw || typeof raw !== "object") return null;
+    if (Array.isArray(raw)) raw = { days: raw };
+    const byName = {};
+    picks.forEach((p) => (byName[String(p.name).toLowerCase().trim()] = p));
+    const find = (name) => byName[String(name || "").toLowerCase().trim()] || null;
+
+    // A flat list of assignments - [{day: 1, name: "...", time: "..."}] - is
+    // the other shape models reach for, and it is a perfectly clear one.
+    let rawDays = Array.isArray(raw.days) ? raw.days : Array.isArray(raw.itinerary) ? raw.itinerary : [];
+    if (!rawDays.length && Array.isArray(raw.assignments)) rawDays = raw.assignments;
+    if (rawDays.length && rawDays.every((d) => d && d.name && !d.stops && !d.places)) {
+      const grouped = {};
+      rawDays.forEach((entry) => {
+        const at = Number(entry.day) || 1;
+        if (!grouped[at]) grouped[at] = { day: at, stops: [] };
+        grouped[at].stops.push(entry);
+      });
+      rawDays = Object.keys(grouped)
+        .sort((a, b) => Number(a) - Number(b))
+        .map((k) => grouped[k]);
+    }
+    const used = new Set();
+    const outDays = [];
+    rawDays.forEach((d, i) => {
+      const index = Number(d && (d.day || d.index)) - 1;
+      const at = Number.isFinite(index) && index >= 0 && index < days.length ? index : i;
+      if (at >= days.length) return;
+      const stopsRaw = Array.isArray(d && d.stops) ? d.stops : Array.isArray(d && d.places) ? d.places : [];
+      const stops = stopsRaw
+        .map((s) => (typeof s === "string" ? { name: s } : s))
+        .map((s) => {
+          const pick = find(s && s.name);
+          // A name that is not one of ours is a hallucination, and it is
+          // dropped rather than shown as a stop that cannot be opened.
+          if (!pick || used.has(pick.id)) return null;
+          used.add(pick.id);
+          return { pick, name: pick.name, time: String((s && s.time) || "").slice(0, 8), why: String((s && s.why) || "").slice(0, 160) };
+        })
+        .filter(Boolean);
+      if (stops.length) outDays.push({ index: at, stops });
+    });
+
+    const leftOutRaw = Array.isArray(raw.leftOut) ? raw.leftOut : Array.isArray(raw.left_out) ? raw.left_out : [];
+    const leftOut = leftOutRaw
+      .map((x) => (typeof x === "string" ? { name: x } : x))
+      .map((x) => {
+        const pick = find(x && x.name);
+        return pick ? { name: pick.name, reason: String((x && (x.reason || x.why)) || "Doesn't fit these days.").slice(0, 200) } : null;
+      })
+      .filter(Boolean);
+
+    const tripsRaw = Array.isArray(raw.separateTrips)
+      ? raw.separateTrips
+      : Array.isArray(raw.separate_trips)
+      ? raw.separate_trips
+      : Array.isArray(raw.trips)
+      ? raw.trips
+      : [];
+    const trips = tripsRaw
+      .map((t) => {
+        if (!t || typeof t !== "object") return null;
+        const places = (Array.isArray(t.places) ? t.places : [])
+          .map((n) => find(typeof n === "string" ? n : n && n.name))
+          .filter(Boolean);
+        if (!places.length) return null;
+        const wanted = Number(t.days);
+        return {
+          title: String(t.title || t.name || "Another trip").slice(0, 80),
+          why: String(t.why || t.summary || "").slice(0, 240),
+          days: Number.isFinite(wanted) && wanted > 0 ? Math.min(7, Math.round(wanted)) : Math.ceil(places.length / 3),
+          places,
+        };
+      })
+      .filter(Boolean);
+
+    // Anything neither placed, nor explained, nor moved to another trip would
+    // otherwise vanish without a word.
+    const accounted = new Set(used);
+    leftOut.forEach((x) => accounted.add((find(x.name) || {}).id));
+    trips.forEach((t) => t.places.forEach((p) => accounted.add(p.id)));
+    picks.forEach((p) => {
+      if (!accounted.has(p.id)) leftOut.push({ name: p.name, reason: "Not placed, and no reason given." });
+    });
+
+    if (!outDays.length && !trips.length) return null;
+    return { days: outDays, leftOut, trips, notes: String(raw.notes || raw.summary || "").slice(0, 400) };
+  }
+
+  async function runPlanner() {
+    const key = loadTripSettings().geminiKey.trim();
+    if (!key) return openSettings();
+    const picks = selectedPicks();
+    const days = loadPlan().days;
+    if (!picks.length) return;
+    if (!days.length) {
+      toast("Add a day first — the Itinerary tab, or from any place");
       return;
     }
 
-    const plan = loadPlan();
-    const picks = loadPicks();
-    if (!picks.length || !plan.days.length) return;
-
-    planBusy = true;
-    renderItinerary();
-
+    planner.status = "loading";
+    planner.view = "review";
+    renderPlanner();
     try {
-      const placeList = picks
-        .map((p) => `- ${p.name}${p.address ? ` (${p.address})` : ""}${p.category ? ` [${p.category}]` : ""}`)
-        .join("\n");
-      const dayList = plan.days.map((d, i) => `${i + 1}. ${d.label}`).join("\n");
-      const who = aiContextBlock();
-
-      const prompt =
-        `Arrange these saved places into a day-by-day itinerary.${who}\n\n` +
-        `Days:\n${dayList}\n\nPlaces:\n${placeList}\n\n` +
-        `Rules: use ONLY the places listed; group places that are close together on the ` +
-        `same day to reduce travelling; put demanding activities earlier in the day; ` +
-        `leave a day lighter rather than cramming it; not every place has to be used.\n\n` +
-        `Reply with ONLY a JSON array, one entry per scheduled place: ` +
-        `{"day": day number from the list, "name": exact place name, "time": short label like "10:00" or "AM"}. ` +
-        `No other text.`;
-
-      const { text } = await callGemini(key, prompt);
-      const parsed = extractJson(text);
-      if (!Array.isArray(parsed)) throw new Error("gemini returned no usable plan");
-
-      // Match names back to real picks; anything unrecognised is dropped
-      // rather than trusted, so a hallucinated name can't enter the plan.
-      const byName = {};
-      picks.forEach((p) => (byName[p.name.toLowerCase()] = p));
-
-      const items = {};
-      parsed.forEach((entry) => {
-        if (!entry || !entry.name) return;
-        const pick = byName[String(entry.name).toLowerCase().trim()];
-        const dayIdx = Number(entry.day) - 1;
-        const day = plan.days[dayIdx];
-        if (!pick || !day) return;
-        if (!items[day.id]) items[day.id] = [];
-        if (items[day.id].some((it) => it.pickId === pick.id)) return;
-        items[day.id].push({ pickId: pick.id, time: String(entry.time || "").slice(0, 8) });
-      });
-
-      plan.items = items;
-      savePlan(plan);
-      planNote = "Suggested plan — edit anything that doesn't suit.";
+      // No grounding: this is arranging places we already know about, so
+      // search would only slow it down and risk a prose answer.
+      const { text } = await callGemini(key, plannerPrompt(picks, days), { json: true, maxTokens: 4096 });
+      if (!planner) return;
+      planner.raw = text;
+      const result = normalisePlannerResult(extractJson(text), picks, days);
+      if (!result) {
+        throw new Error(
+          `The model answered, but not with a plan that could be read.${
+            text ? ` It said: "${text.trim().slice(0, 140)}…"` : ""
+          }`
+        );
+      }
+      planner.result = result;
+      planner.status = "done";
     } catch (e) {
-      console.warn("auto-plan failed:", e);
-      // Show what Google actually said - a generic "try again" gives the user
-      // nothing to act on, and there is no console to read on a phone.
-      planNote = `Couldn't build a plan.\n\n${e && e.message ? e.message : e}`;
-    } finally {
-      planBusy = false;
-      renderItinerary();
+      if (!planner) return;
+      planner.status = "error";
+      planner.error = (e && e.message) || String(e);
     }
+    renderPlanner();
   }
 
-  let planBusy = false;
-  let planNote = "";
+  // Only now does anything change, and only the days that were planned: a day
+  // full of places you did not include this time is left exactly as it was.
+  function applyPlannerResult() {
+    const result = planner && planner.result;
+    if (!result) return;
+    const plan = loadPlan();
+    const chosen = new Set(selectedPicks().map((p) => p.id));
+
+    result.days.forEach((day) => {
+      const dayId = plan.days[day.index] && plan.days[day.index].id;
+      if (!dayId) return;
+      const untouched = (plan.items[dayId] || []).filter((it) => !chosen.has(it.pickId));
+      plan.items[dayId] = untouched.concat(day.stops.map((s) => ({ pickId: s.pick.id, time: s.time || "" })));
+    });
+    // A place that was selected and did not make the plan comes off the days
+    // it was on, or the itinerary would show it twice over.
+    const placed = new Set();
+    result.days.forEach((d) => d.stops.forEach((s) => placed.add(s.pick.id)));
+    plan.days.forEach((d) => {
+      plan.items[d.id] = (plan.items[d.id] || []).filter((it) => !chosen.has(it.pickId) || placed.has(it.pickId));
+    });
+
+    savePlan(plan);
+    const count = result.days.reduce((n, d) => n + d.stops.length, 0);
+    closePlanner();
+    showView("itinerary");
+    toast(`${count} place${count === 1 ? "" : "s"} across ${result.days.length} day${result.days.length === 1 ? "" : "s"}`);
+  }
+
+  // A proposed separate trip, made real: the days it needs are added after the
+  // ones you have, and its places go on them in the order given.
+  function addPlannerTrip(index) {
+    const trip = planner && planner.result && planner.result.trips[index];
+    if (!trip) return;
+    const plan = loadPlan();
+    const dated = datedDays(plan.days).filter((x) => x.when).sort((a, b) => a.when - b.when);
+    const last = dated.length ? dated[dated.length - 1].when : new Date();
+    const dayIds = [];
+    for (let i = 1; i <= trip.days; i++) {
+      dayIds.push(ensureDayFor(new Date(last.getFullYear(), last.getMonth(), last.getDate() + i)));
+    }
+    const fresh = loadPlan();
+    trip.places.forEach((p, i) => {
+      const dayId = dayIds[Math.floor((i * dayIds.length) / trip.places.length)] || dayIds[0];
+      if (!fresh.items[dayId]) fresh.items[dayId] = [];
+      if (!fresh.items[dayId].some((it) => it.pickId === p.id)) fresh.items[dayId].push({ pickId: p.id, time: "" });
+    });
+    savePlan(fresh);
+    closePlanner();
+    showView("itinerary");
+    toast(`${trip.title} — ${trip.days} day${trip.days === 1 ? "" : "s"} added`);
+  }
+
 
   // Reads the day-of-week out of a day label like "Day 3 · Fri 21 Aug".
   const DAY_NAMES = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
@@ -3374,10 +3854,9 @@
       <div class="card plan-ai-card">
         ${
           picks.length
-            ? `<button class="plan-ai-btn" id="autoPlanBtn" ${planBusy ? "disabled" : ""}>
-                 ${planBusy ? "Planning your days…" : "✨ Plan my days for me"}
-               </button>
-               ${planNote ? `<p class="pick-status">${esc(planNote)}</p>` : ""}`
+            ? `<button class="plan-ai-btn" id="autoPlanBtn">✨ Plan my days for me</button>
+               <p class="settings-hint" style="text-align:center;">Choose which places - or a whole area - and see what fits before anything changes.</p>
+`
             : `<p class="pick-status">Nothing saved yet — so there is nothing to arrange into days.</p>`
         }
         <button class="plan-ai-btn plan-idea-btn" id="tripIdeaBtn">🧭 Suggest a trip</button>
@@ -3508,7 +3987,7 @@
 
   function wireMyPlan() {
     const autoBtn = document.getElementById("autoPlanBtn");
-    if (autoBtn) autoBtn.addEventListener("click", autoPlanDays);
+    if (autoBtn) autoBtn.addEventListener("click", openPlanner);
     const ideaBtn = document.getElementById("tripIdeaBtn");
     if (ideaBtn) ideaBtn.addEventListener("click", openTripIdea);
 
@@ -9890,6 +10369,10 @@
   // first: close what's open, then walk back through the tabs you came
   // through, and only ask about leaving when there is genuinely nothing left.
   function handleBackIntent() {
+    if (planOverlay.classList.contains("open")) {
+      closePlanner();
+      return true;
+    }
     // Ahead of the search overlay because the trip planner can be opened from
     // it: back undoes the last thing that opened, not the first.
     if (ideaOverlay.classList.contains("open")) {

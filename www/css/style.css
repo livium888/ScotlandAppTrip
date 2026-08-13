@@ -2416,3 +2416,94 @@ button, select, input[type="text"], input[type="file"] { font-family: inherit; }
   color: var(--warn);
 }
 .search-outside .link-btn { color: var(--warn); font-weight: 700; }
+
+/* ---------- Plan my days ---------- */
+.planner-lead { margin: 10px 0 12px; }
+.planner-count {
+  font-size: 13.5px;
+  color: var(--text-muted);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px 12px;
+  line-height: 1.5;
+}
+.planner-count b { color: var(--text); }
+.planner-count-warn { display: block; color: var(--warn); margin-top: 4px; }
+.planner-bulk { display: flex; gap: 8px; margin: 12px 0 4px; }
+
+.planner-area { margin-top: 14px; }
+.planner-area-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  font-family: inherit;
+  padding: 12px 14px;
+  min-height: 48px;
+  text-align: left;
+}
+.planner-area-head.on { border-color: var(--accent); background: var(--accent-soft); }
+.planner-area-head.part { border-color: var(--accent); }
+.planner-area-tick { width: 16px; color: var(--accent); font-weight: 700; }
+.planner-area-name { flex: 1; min-width: 0; font-size: 15px; font-weight: 700; color: var(--text); }
+.planner-area-count { font-size: 12px; color: var(--text-muted); font-weight: 600; }
+
+.planner-places { padding: 4px 0 0 10px; }
+.planner-place {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: none;
+  font-family: inherit;
+  padding: 11px 4px;
+  min-height: 46px;
+  text-align: left;
+}
+.planner-place-tick {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  border: 1.5px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 17px;
+  text-align: center;
+  color: var(--on-accent);
+}
+.planner-place.on .planner-place-tick { background: var(--accent); border-color: var(--accent); }
+.planner-place-main { flex: 1; min-width: 0; }
+.planner-place-name { display: block; font-size: 14.5px; color: var(--text); }
+.planner-place-meta { display: block; font-size: 11.5px; color: var(--text-muted); margin-top: 2px; }
+
+.planner-notes { background: var(--accent-soft); border-color: transparent; }
+.planner-day-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 8px; }
+.planner-day-name { font-size: 15px; font-weight: 700; color: var(--text); }
+.planner-day-meta { font-size: 11.5px; color: var(--text-muted); flex-shrink: 0; }
+.planner-stop { display: flex; gap: 10px; padding: 8px 0; border-top: 1px solid var(--border); }
+.planner-stop-time { width: 46px; flex-shrink: 0; font-size: 12px; font-weight: 700; color: var(--success); }
+.planner-stop-main { flex: 1; min-width: 0; }
+.planner-stop-name { display: block; font-size: 14.5px; color: var(--text); }
+.planner-stop-why { display: block; font-size: 12.5px; color: var(--text-muted); margin-top: 2px; line-height: 1.4; }
+/* Our own arithmetic, not the model's opinion of its own plan. */
+.planner-warn {
+  margin: 10px 0 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--warn);
+  background: var(--warn-bg);
+  border-radius: 10px;
+  padding: 8px 10px;
+}
+.planner-left-row { padding: 9px 0; border-top: 1px solid var(--border); }
+.planner-left-name { display: block; font-size: 14px; font-weight: 600; color: var(--text); }
+.planner-left-why { display: block; font-size: 12.5px; color: var(--text-muted); margin-top: 2px; line-height: 1.45; }
+.planner-trip-title { margin: 6px 0 4px; font-size: 16px; color: var(--text); }
+.planner-trip-places { font-size: 12.5px; color: var(--text-muted); margin: 8px 0 12px; line-height: 1.5; }
+.planner-trip .modal-btn { width: 100%; }
