@@ -29,17 +29,31 @@
     return CITY_COLORS[city] || CITY_COLORS.Travel;
   }
 
-  function mapsUrlFor(mapsQuery) {
-    return mapsQuery
-      ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(mapsQuery)}`
-      : null;
+  // Opening the exact place, not the road outside it.
+  //
+  // This was handing Google the full postal address OpenStreetMap gives back -
+  // "B8079, Blair Atholl, Perth and Kinross, PH18 5TL" - because that is what
+  // was stored when the place was saved. Google resolves an address to an
+  // address: you get a point on a street, with no name, no hours and no
+  // reviews, a few hundred metres from the castle you asked for.
+  //
+  // A name search resolves to the listing instead. Where the coordinates are
+  // known, the search is centred on them - Google's own /@lat,lon,zoom form -
+  // so it finds that Tesco rather than a Tesco, and lands on the building
+  // rather than near it.
+  function mapsUrlFor(query, point) {
+    const q = String(query || "").trim();
+    const at = point && point.lat != null && point.lon != null ? point : null;
+    if (!q) return at ? `https://www.google.com/maps/search/?api=1&query=${at.lat},${at.lon}` : null;
+    if (at) return `https://www.google.com/maps/search/${encodeURIComponent(q)}/@${at.lat},${at.lon},17z`;
+    return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}`;
   }
 
   // A place shared from Google Maps carries Google's own id for it, which we
   // turn into a "?cid=" link. That addresses the exact place, so prefer it
   // over a name search - the search can and does land on the wrong "Manchester".
   function pickGoogleUrl(p) {
-    return p.googleUrl || mapsUrlFor(pickMapsQuery(p));
+    return p.googleUrl || mapsUrlFor(pickMapsQuery(p), p);
   }
 
   // Opens a link in an in-app Chrome Custom Tab when running natively. A
@@ -86,10 +100,32 @@
   // hours, or photos attached. Searching by name (+ city for disambiguation)
   // resolves to the actual place listing instead, so always prefer that.
   function pickMapsQuery(p) {
-    // Deliberately never falls back to p.city (the folder) - that's pure
-    // organisation, not geography, and baking it into the search text can
-    // send Maps looking in the wrong place entirely.
-    return p.mapsQuery || scopedQuery(p.name);
+    // With coordinates, the name on its own is the best query there is: the
+    // search is centred on the exact spot, so there is nothing left to
+    // disambiguate, and any locality added here could only pull it away.
+    if (p.lat != null && p.lon != null) return p.name;
+    // Without them, the name needs a place to sit in - the town, never the
+    // street address, which is what made Maps show the street. Deliberately
+    // never p.city either: that is the folder, pure organisation rather than
+    // geography, and baking it into the search text can send Maps looking in
+    // the wrong place entirely.
+    const where = p.area || townFromAddress(p.address) || null;
+    const named = [p.name, where].filter(Boolean).join(", ");
+    return named || p.mapsQuery || scopedQuery(p.name);
+  }
+
+  // The town out of an address line, for places saved before the town was
+  // stored alongside them. The line is built as "house road, area, town,
+  // postcode", so the last part that is not a postcode is the town.
+  function townFromAddress(address) {
+    // The postcode is stripped out of each part rather than the part being
+    // dropped: Google writes "12 Rose St, Manchester M1 1AA", so throwing away
+    // everything containing a postcode throws away the town with it.
+    const parts = String(address || "")
+      .split(",")
+      .map((s) => s.replace(POSTCODE_FULL, "").replace(/\s+/g, " ").trim())
+      .filter((s) => s && !postcodeIn(s) && !/^united kingdom$/i.test(s));
+    return parts.length > 1 ? parts[parts.length - 1] : null;
   }
 
   function findPlace(name) {
@@ -1265,6 +1301,10 @@
     return {
       lat: parseFloat(r.lat),
       lon: parseFloat(r.lon),
+      // Kept on its own as well as inside the address line: it is what a Maps
+      // search needs next to the name, and picking it back out of the joined
+      // string afterwards is guesswork.
+      town: addr.city || addr.town || addr.village || addr.hamlet || addr.suburb || null,
       website: tags.website || tags["contact:website"] || tags.url || null,
       phone: tags.phone || tags["contact:phone"] || null,
       openingHours: tags.opening_hours || null,
@@ -1342,6 +1382,7 @@
     if (geo) {
       fresh.lat = geo.lat;
       fresh.lon = geo.lon;
+      if (!fresh.area && geo.town) fresh.area = geo.town;
       // Nobody is watching this happen, so the doubt is recorded rather than
       // raised - and never resolved by filing the place somewhere on the
       // strength of coordinates that might belong to a different town.
@@ -1368,7 +1409,7 @@
   function openPlaceModal(name) {
     const p = findPlace(name);
     if (!p) return;
-    const mapsUrl = mapsUrlFor(p.mapsQuery);
+    const mapsUrl = pickGoogleUrl(p);
     const subtitle = [p.category || p.meal, p.area].filter(Boolean).join(" · ");
 
     placeModal.innerHTML = `
@@ -2455,7 +2496,7 @@
       lines.push(it.detail);
       const p = it.place ? findPlace(it.place) : null;
       if (p && p.website) lines.push(`🌐 ${p.website}`);
-      if (p && p.mapsQuery) lines.push(`📍 ${mapsUrlFor(p.mapsQuery)}`);
+      if (p) lines.push(`📍 ${pickGoogleUrl(p)}`);
       lines.push("");
     });
     return lines.join("\n").trim();
@@ -6960,6 +7001,7 @@
       if (geo) {
         r.lat = geo.lat;
         r.lon = geo.lon;
+        r.area = r.area || geo.town || "";
         r.displayName = geo.address || r.area || "";
         r.address = geo.address || "";
         r.type = r.type || geo.category;
@@ -7273,7 +7315,7 @@
     const already = loadPicks().some(
       (p) => p.id === pickId(r.guideSource || "custom", r.name)
     );
-    const mapsUrl = r.googleUrl || mapsUrlFor(r.displayName || r.name);
+    const mapsUrl = r.googleUrl || mapsUrlFor(pickMapsQuery(r), r);
     const facts = [
       r.address || r.displayName ? `📍 ${esc(r.address || r.displayName)}` : "",
       r.openingHours ? `🕒 ${esc(r.openingHours)}` : "",
@@ -8972,7 +9014,10 @@
     // Maps query is built from real geographic data (Nominatim's full
     // address, when we have it) - never from the folder, which is just the
     // user's own organisation and may have nothing to do with geography.
-    const mapsQuery = candidate.displayName || scopedQuery(candidate.name);
+    // Not the address. Storing the address here is what sent every "open in
+    // Maps" to a street rather than the place standing on it.
+    const area = candidate.area || candidate.town || townFromAddress(candidate.address) || "";
+    const mapsQuery = [candidate.name, area].filter(Boolean).join(", ");
     const pick = {
       id,
       source: "custom",
@@ -8992,6 +9037,7 @@
       rating: candidate.rating != null ? candidate.rating : null,
       ratingCount: candidate.ratingCount != null ? candidate.ratingCount : null,
       mapsQuery,
+      area,
       lat: candidate.lat,
       lon: candidate.lon,
       enrichStatus: "loading",
@@ -9030,6 +9076,7 @@
     if (geo) {
       target.lat = geo.lat;
       target.lon = geo.lon;
+      if (!target.area && geo.town) target.area = geo.town;
       if (!target.website && geo.website) target.website = geo.website;
       if (!target.address && geo.address) target.address = geo.address;
       if (!target.phone && geo.phone) target.phone = geo.phone;

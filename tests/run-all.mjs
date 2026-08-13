@@ -50,6 +50,7 @@ const SUITES = [
   "test_tripidea.mjs",
   "test_anchor.mjs",
   "test_searchflow.mjs",
+  "test_mapslink.mjs",
 ];
 
 const MIME = {
