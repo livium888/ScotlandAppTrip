@@ -2146,7 +2146,7 @@
           // Re-render from the restored data rather than leaving the old
           // state on screen.
           topbarTitle.textContent = loadTripSettings().title;
-          showView(view.dataset.activeTab || "overview");
+          showView(view.dataset.activeTab || "picks");
         }
       };
       reader.onerror = () => showBackupResult({ ok: false, message: "Couldn't read that file." });
@@ -2231,7 +2231,7 @@
         preferences: document.getElementById("setPreferences").value.trim(),
       });
       closePlaceModal();
-      showView(view.dataset.activeTab || "overview");
+      showView(view.dataset.activeTab || "picks");
     });
   }
 
@@ -2704,133 +2704,6 @@
   // bundled Scotland trip and nothing else, so it was wrong on every other
   // board; it now summarises the board's own places, days and costs, with
   // the Scotland briefing kept only on the board it belongs to.
-  function renderOverview() {
-    const board = activeBoard();
-    const picks = loadPicks();
-    const plan = loadPlan();
-    const scheduledIds = new Set();
-    Object.values(plan.items || {}).forEach((list) =>
-      (list || []).forEach((it) => scheduledIds.add(it.pickId))
-    );
-    const scheduled = picks.filter((p) => scheduledIds.has(p.id)).length;
-    const booked = picks.filter((p) => p.booked).length;
-    const eats = picksOfKind("eat").length;
-    const costTotal =
-      picks.reduce((a, p) => a + pickCost(p), 0) +
-      loadBudgetExtras().reduce((a, r) => a + (Number(r.amount) || 0), 0);
-
-    const subtitle = board.hasGuide
-      ? TRIP.subtitle
-      : [board.destination, board.dated ? "trip" : "saved places"].filter(Boolean).join(" · ");
-
-    let html = `
-      <div class="hero">
-        <h1>${esc(board.name)}</h1>
-        <p>${esc(subtitle)}</p>
-        <div class="hero-stats">
-          <div class="hero-stat"><b>${picks.length}</b><span>saved</span></div>
-          <div class="hero-stat"><b>${plan.days.length}</b><span>day${plan.days.length === 1 ? "" : "s"}</span></div>
-          <div class="hero-stat"><b>${scheduled}</b><span>scheduled</span></div>
-        </div>
-        <button class="hero-share" id="shareTrip">↗ Share this plan</button>
-      </div>
-    `;
-
-    // Where things stand, and the one action that moves it forward. An empty
-    // board gets told what to do rather than shown three zeroes.
-    if (!picks.length) {
-      html += `
-        <div class="card empty-state">
-          <div class="empty-icon">📍</div>
-          <h2>Nothing saved yet</h2>
-          <ul class="empty-list">
-            <li><b>Share from Google Maps</b> — tap Share on a place, pick this app</li>
-            <li><b>Search in Picks</b> — by name, or describe what you want</li>
-          </ul>
-          <button class="modal-btn modal-btn-primary" data-goto="picks" style="margin-top:12px;width:100%;">Add a place</button>
-        </div>
-      `;
-    } else {
-      html += `<div class="section-label">Where it stands</div>`;
-      html += `<div class="card overview-grid">
-        <button class="overview-stat" data-goto="places"><b>${picks.length - eats}</b><span>places to go</span></button>
-        <button class="overview-stat" data-goto="eats"><b>${eats}</b><span>places to eat</span></button>
-        <button class="overview-stat" data-goto="itinerary"><b>${picks.length - scheduled}</b><span>unscheduled</span></button>
-        <button class="overview-stat" data-goto="picks"><b>${booked}</b><span>booked</span></button>
-      </div>`;
-
-      if (plan.days.length) {
-        html += `<div class="section-label">Days</div><div class="card">`;
-        plan.days.forEach((d) => {
-          const count = (plan.items[d.id] || []).length;
-          const redrawOverview = () => {
-            if (view.dataset.activeTab === "overview") renderOverview();
-          };
-          const f = forecastForDay(d.label, dayWeatherAnchor(d.id, redrawOverview), redrawOverview);
-          const look = f && f.day ? weatherLook(f.day.code == null ? 3 : f.day.code) : null;
-          html += `
-            <button class="overview-day" data-goto="itinerary">
-              <span class="overview-day-label">${esc(d.label)}</span>
-              <span class="overview-day-right">
-                ${
-                  look
-                    ? `<span class="overview-day-weather">${look.icon} ${f.day.max != null ? f.day.max + "°" : ""}${
-                        f.day.rainChance != null && f.day.rainChance >= 50 ? ` 💧${f.day.rainChance}%` : ""
-                      }</span>`
-                    : ""
-                }
-                <span class="overview-day-count">${count ? `${count} stop${count === 1 ? "" : "s"}` : "empty"}</span>
-              </span>
-            </button>
-          `;
-        });
-        html += `</div>`;
-      } else {
-        html += `
-          <div class="card">
-            <p class="pick-status">No days yet. Add them in the Itinerary tab, then drop your saved places onto them.</p>
-            <button class="modal-btn modal-btn-primary" data-goto="itinerary" style="margin-top:12px;width:100%;">Build the itinerary</button>
-          </div>
-        `;
-      }
-
-      html += `
-        <div class="section-label">Budget</div>
-        <button class="card overview-budget" data-goto="budget">
-          <span>${costTotal > 0 ? "Costed so far" : "Nothing costed yet"}</span>
-          <span class="budget-range">${money(costTotal)}</span>
-        </button>
-      `;
-    }
-
-    if (board.hasGuide) {
-      html += `
-        <div class="section-label">About this trip</div>
-        <div class="card">
-          <p>${esc(TRIP.traveler)}. Peak Fringe/festival week in Edinburgh (7–31 Aug), so this plan
-          mixes gentle festival mornings with day trips to Stirling and Glasgow — especially over
-          the 22–23 Aug weekend, when Edinburgh's Old Town is at its most crowded.</p>
-        </div>
-      `;
-    }
-
-    view.innerHTML = html;
-
-    view.querySelectorAll("[data-goto]").forEach((el) =>
-      el.addEventListener("click", () => showView(el.getAttribute("data-goto")))
-    );
-
-    const shareBtn = document.getElementById("shareTrip");
-    if (shareBtn) {
-      shareBtn.addEventListener("click", () => {
-        shareText(board.name, formatBoardShareText());
-      });
-    }
-  }
-
-  // Shares what the user actually planned. Falls back to the bundled
-  // itinerary on the Scotland board when they haven't planned anything of
-  // their own yet, since that's the thing worth sending at that point.
   function formatBoardShareText() {
     const board = activeBoard();
     const plan = loadPlan();
@@ -2867,6 +2740,182 @@
     return lines.join("\n").trim();
   }
 
+
+  // ---------- For kids ----------
+  // The Trip tab counted things - places saved, days planned, how many were
+  // scheduled - which is information you already have on the screens where it
+  // matters. It went where the tab that replaced it is now needed: with a
+  // small child, the question is never "how many places have I saved", it is
+  // "where can they run about" or "what do we do now it is raining", and the
+  // answer was scattered through a list of forty places with the castles.
+  //
+  // A place is marked for kids and appears here. Some mark themselves - a
+  // playground is not ambiguous - and the rest is a tap on the place's own
+  // sheet, because a four-year-old's opinion of a cathedral is not something
+  // the app can work out.
+  const KID_CATEGORIES = [
+    "playground", "park", "zoo", "aquarium", "farm", "soft play", "softplay",
+    "swimming", "pool", "beach", "museum", "adventure", "theme park", "garden",
+  ];
+
+  // What the app can tell on its own. Anything else is a decision, and a
+  // decision it would get wrong: a castle can be the best day of the week or
+  // an hour of being carried, and only you know which.
+  function looksLikeKidPlace(pick) {
+    const hay = `${pick.category || ""} ${pick.type || ""} ${pick.description || ""}`.toLowerCase();
+    return KID_CATEGORIES.some((word) => hay.includes(word));
+  }
+
+  function isForKids(pick) {
+    if (pick.forKids === true) return true;
+    if (pick.forKids === false) return false; // said no explicitly
+    return looksLikeKidPlace(pick);
+  }
+
+  function setForKids(id, on) {
+    updatePick(id, { forKids: !!on });
+  }
+
+  // Ways to find more, phrased as the thing you actually want rather than as a
+  // category. Each one runs the ordinary search, so everything the search
+  // screen does - the area it is anchored to, saving, putting on a day -
+  // works from here without being built twice.
+  const KID_SEARCHES = [
+    { icon: "🛝", label: "Playground", query: "playground with something for a young child" },
+    { icon: "🧸", label: "Soft play", query: "indoor soft play or play barn for young children" },
+    { icon: "🌧️", label: "If it rains", query: "indoors and good with a young child on a wet day" },
+    { icon: "🐑", label: "Animals", query: "farm, animal park or aquarium a young child would like" },
+    { icon: "🏊", label: "Swimming", query: "swimming pool with a shallow or toddler pool" },
+    { icon: "🍦", label: "Ice cream", query: "ice cream worth stopping for" },
+    { icon: "🍽️", label: "Eat with kids", query: "somewhere to eat that genuinely welcomes young children" },
+    { icon: "🚻", label: "Baby change", query: "toilets with baby changing facilities" },
+  ];
+
+  function renderKids() {
+    const picks = loadPicks().filter((p) => !p.major);
+    const mine = picks.filter(isForKids);
+    const plan = loadPlan();
+    const onDays = {};
+    Object.keys(plan.items || {}).forEach((dayId) =>
+      (plan.items[dayId] || []).forEach((it) => {
+        onDays[it.pickId] = onDays[it.pickId] || [];
+        const day = plan.days.find((d) => d.id === dayId);
+        if (day) onDays[it.pickId].push(shortDayLabel(day.label));
+      })
+    );
+
+    let html = `
+      <div class="kids-head">
+        <h1 class="kids-title">For the kids</h1>
+        <p class="kids-sub">${
+          mine.length
+            ? `${mine.length} place${mine.length === 1 ? "" : "s"} they'll actually enjoy`
+            : "Nothing marked yet — anything you mark shows up here"
+        }</p>
+      </div>
+
+      <div class="section-label">Find something</div>
+      <div class="kids-finds">
+        ${KID_SEARCHES.map(
+          (k) =>
+            `<button class="kids-find" data-kid-search="${esc(k.query)}">
+               <span class="kids-find-icon">${k.icon}</span>
+               <span class="kids-find-label">${esc(k.label)}</span>
+             </button>`
+        ).join("")}
+      </div>
+    `;
+
+    if (!mine.length) {
+      html += `
+        <div class="card empty-state">
+          <div class="empty-icon">🧸</div>
+          <h2>Nothing marked for the kids yet</h2>
+          <ul class="empty-list">
+            <li><b>Tap a search above</b> — anything you save from it lands here</li>
+            <li><b>Or open a saved place</b> and tap <b>One for the kids</b></li>
+          </ul>
+          <p class="settings-hint">Playgrounds, farms and pools mark themselves.</p>
+        </div>
+      `;
+      view.innerHTML = html;
+      wireKids();
+      return;
+    }
+
+    // Nearest first when there is somewhere to measure from, because with a
+    // tired child the question is which of these is closest.
+    const origin = sortOrigin();
+    const sorted = origin
+      ? mine
+          .slice()
+          .sort(
+            (a, b) =>
+              (a.lat == null ? Infinity : haversineKm(origin.lat, origin.lon, a.lat, a.lon)) -
+              (b.lat == null ? Infinity : haversineKm(origin.lat, origin.lon, b.lat, b.lon))
+          )
+      : mine;
+
+    html += `<div class="section-label">Marked for the kids</div>`;
+    sorted.forEach((p) => {
+      const away =
+        origin && p.lat != null ? formatDistance(haversineKm(origin.lat, origin.lon, p.lat, p.lon)) : "";
+      const days = onDays[p.id] || [];
+      html += `
+        <div class="kids-row">
+          <button class="kids-row-main" data-open-pick="${esc(p.id)}">
+            <span class="kids-row-name">${esc(p.name)}</span>
+            <span class="kids-row-meta">${esc(
+              [p.city, p.category, away].filter(Boolean).join(" · ")
+            )}</span>
+            ${
+              days.length
+                ? `<span class="kids-row-days">${days.map((d) => `<span class="row-badge day">${esc(d)}</span>`).join("")}</span>`
+                : ""
+            }
+          </button>
+          <div class="kids-row-actions">
+            <button class="search-around" data-kid-day="${esc(p.id)}" aria-label="Put ${esc(p.name)} on a day">📅</button>
+            <button class="search-around" data-kid-off="${esc(p.id)}" aria-label="Not one for the kids">✕</button>
+          </div>
+        </div>
+      `;
+    });
+
+    view.innerHTML = html;
+    wireKids();
+  }
+
+  function wireKids() {
+    // These are one tap, not a head start on typing: the whole point is that
+    // you press "If it rains" and get somewhere to go, so the search runs.
+    view.querySelectorAll("[data-kid-search]").forEach((btn) =>
+      btn.addEventListener("click", () => {
+        openSearchOverlay(btn.getAttribute("data-kid-search"));
+        runSearch(btn.getAttribute("data-kid-search"));
+      })
+    );
+    view.querySelectorAll("[data-open-pick]").forEach((btn) =>
+      btn.addEventListener("click", () => openPickDetail(btn.getAttribute("data-open-pick")))
+    );
+    view.querySelectorAll("[data-kid-day]").forEach((btn) =>
+      btn.addEventListener("click", () => openDaySheet(btn.getAttribute("data-kid-day"), { onDone: renderKids }))
+    );
+    view.querySelectorAll("[data-kid-off]").forEach((btn) =>
+      btn.addEventListener("click", () => {
+        const id = btn.getAttribute("data-kid-off");
+        const pick = loadPicks().find((p) => p.id === id);
+        setForKids(id, false);
+        renderKids();
+        if (pick) {
+          toastWithAction(`${pick.name} taken off the kids list`, "Undo", () => {
+            setForKids(id, true);
+            renderKids();
+          });
+        }
+      })
+    );
+  }
 
   // ---------- Personal itinerary planner ----------
   // The bundled DAYS are a suggested plan and stay read-only; this is the
@@ -4019,6 +4068,10 @@
     // With places saved, the question is how to arrange them. With nothing
     // saved - which is where every trip starts - there is nothing to arrange,
     // and the honest answer is to go and find some, together.
+    if (plan.days.length) {
+      html += `<button class="hero-share" id="shareTrip" style="color:var(--navy);border-color:var(--line);background:var(--card);margin-bottom:14px;">↗ Share this plan</button>`;
+    }
+
     html += `
       <div class="card plan-ai-card">
         ${
@@ -4155,6 +4208,8 @@
   }
 
   function wireMyPlan() {
+    const share = document.getElementById("shareTrip");
+    if (share) share.addEventListener("click", () => shareText(activeBoard().name, formatBoardShareText()));
     const autoBtn = document.getElementById("autoPlanBtn");
     if (autoBtn) autoBtn.addEventListener("click", openPlanner);
     const ideaBtn = document.getElementById("tripIdeaBtn");
@@ -6010,6 +6065,10 @@
               </button>
               <button class="modal-btn" data-explore-from="${esc(p.id)}">🧭 What's nearby</button>
             </div>
+            <button class="modal-btn booked-toggle${isForKids(p) ? " on" : ""}" data-toggle-kids="${esc(p.id)}"
+                    style="width:100%;margin-top:8px;">
+              ${isForKids(p) ? "🧸 One for the kids" : "🧸 One for the kids?"}
+            </button>
 
             <label class="settings-label">Folder</label>
             <div class="move-row">
@@ -6187,6 +6246,17 @@
         closePlaceModal();
         explore.open = true;
         setExploreCentreFromPick(id);
+      });
+    });
+
+    placeModal.querySelectorAll("[data-toggle-kids]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const id = btn.getAttribute("data-toggle-kids");
+        const pick = loadPicks().find((x) => x.id === id);
+        const now = !isForKids(pick);
+        setForKids(id, now);
+        openPickDetail(id);
+        toast(now ? "Added to the kids list" : "Taken off the kids list");
       });
     });
 
@@ -7869,13 +7939,43 @@
   const searchOverlay = document.getElementById("searchOverlay");
   let searchKindFilter = "all"; // all | place | eat
   const RECENT_KEY = "recent-searches-v1";
+  // The chips exist because a blank search box is a hard question. The obvious
+  // asks - lunch, coffee, playground - are the ones people type anyway; these
+  // are the ones that are worth asking and never occur to anyone, phrased the
+  // way you would say them to a local rather than to a search engine.
   const SEARCH_SUGGESTIONS = [
     "Somewhere for lunch",
+    "Comfort food",
+    "Where locals actually eat",
+    "Worth the detour",
+    "Somewhere quiet",
+    "Best view around here",
     "Rainy day with a 4-year-old",
+    "Free things to do",
+    "Open late",
+    "Older than everything around it",
     "Good coffee",
     "Playground nearby",
-    "Free things to do",
   ];
+
+  // Deliberately not one of the chips above: it is a different kind of ask,
+  // and half the point is not knowing what you will get.
+  const SURPRISES = [
+    "Somewhere with a story nobody tells",
+    "The thing locals take visitors to first",
+    "Somewhere that smells of the place",
+    "An ordinary place people are oddly loyal to",
+    "Worth a detour for one specific thing",
+    "Somewhere that has not changed in fifty years",
+    "The view people stop the car for",
+    "Somewhere you would never find on your own",
+    "A small museum about one strange subject",
+    "Where to be at sunset",
+  ];
+
+  function aSurprise() {
+    return SURPRISES[Math.floor(Math.random() * SURPRISES.length)];
+  }
 
   function loadRecentSearches() {
     const list = readJson(RECENT_KEY, []);
@@ -8033,6 +8133,7 @@
         body += `</div>`;
       }
       body += `<div class="section-label">Try</div><div class="search-chips">`;
+      body += `<button class="search-chip search-chip-surprise" data-surprise="1">🎲 Surprise me</button>`;
       body += SEARCH_SUGGESTIONS.map(
         (r) => `<button class="search-chip" data-recent="${esc(r)}">${esc(r)}</button>`
       ).join("");
@@ -8598,6 +8699,14 @@
     );
     searchOverlay.querySelectorAll("[data-open-idea-search]").forEach((b) =>
       b.addEventListener("click", () => openTripIdea())
+    );
+    searchOverlay.querySelectorAll("[data-surprise]").forEach((b) =>
+      b.addEventListener("click", () => {
+        const ask = aSurprise();
+        const input = document.getElementById("pickSearchInput");
+        if (input) input.value = ask;
+        runSearch(ask);
+      })
     );
     searchOverlay.querySelectorAll("[data-anchor-open]").forEach((b) =>
       b.addEventListener("click", () => openAnchorSheet())
@@ -10627,7 +10736,44 @@
     return { day: plan.days[0], date: dated[0].date, isToday: false };
   }
 
+  // Today was drawn once, when you opened the tab, and never again. Leave the
+  // app open - or backgrounded, which on a phone is the same thing - and it is
+  // still yesterday's day, with "NEXT" pointing at a stop you did at ten in the
+  // morning. The screen is about now, so it has to notice when now moves.
+  //
+  // A signature rather than a timer that redraws: rebuilding a screen under
+  // someone's thumb is its own bug, so it only redraws when the day, the
+  // chosen day, or which stop is next has actually changed.
+  let todayShown = "";
+
+  function todaySignature() {
+    const current = currentPlanDay();
+    if (!current) return "none";
+    const plan = loadPlan();
+    const ordered = itemsInDayOrder(planItems(plan, current.day.id));
+    const now = new Date();
+    return [now.toDateString(), current.day.id, nextItemIndex(ordered, current.isToday, now)].join("|");
+  }
+
+  function checkTheClock() {
+    const signature = todaySignature();
+    if (signature === todayShown) return;
+    todayShown = signature;
+    // A day appearing for the first time makes Today worth showing at all.
+    applyBoardTabs();
+    if (view.dataset.activeTab === "today") renderToday();
+  }
+
+  setInterval(checkTheClock, 30000);
+  // Coming back to the app after a night is the case that matters most, and
+  // no timer fires while the WebView is asleep.
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) checkTheClock();
+  });
+  window.addEventListener("focus", checkTheClock);
+
   function renderToday() {
+    todayShown = todaySignature();
     const current = currentPlanDay();
     const picks = loadPicks();
     const byId = {};
@@ -10781,14 +10927,7 @@
   // makes an app feel like it isn't listening.
   const VIEWS = {
     today: { render: renderToday, sub: () => "What's on now" },
-    overview: {
-      render: renderOverview,
-      sub: () => {
-        const b = activeBoard();
-        if (b.hasGuide) return TRIP.dates;
-        return b.destination || (b.dated ? "Your trip" : "Your saved places");
-      },
-    },
+    kids: { render: renderKids, sub: () => "Things they'll actually enjoy" },
     itinerary: { render: renderItinerary, sub: () => "Your day-by-day plan" },
     // places/eats are no longer destinations of their own, but anything still
     // asking for them - the hardware-back history, a "＋ Add a place" button
@@ -10810,7 +10949,7 @@
       today: loadPlan().days.length > 0,
       itinerary: true,
       picks: true,
-      overview: true,
+      kids: true,
       // Reachable as views, but no longer tabs - there are no buttons for
       // these to hide or show.
       places: true,
@@ -10826,7 +10965,7 @@
 
   function firstVisibleTab() {
     const visible = applyBoardTabs();
-    return ["today", "picks", "itinerary", "overview"].find((n) => visible[n]) || "picks";
+    return ["today", "picks", "itinerary", "kids"].find((n) => visible[n]) || "picks";
   }
 
   // Where back should return to. Capped because this is a breadcrumb, not an

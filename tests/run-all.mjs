@@ -52,6 +52,7 @@ const SUITES = [
   "test_searchflow.mjs",
   "test_mapslink.mjs",
   "test_planpicker.mjs",
+  "test_kids.mjs",
 ];
 
 const MIME = {

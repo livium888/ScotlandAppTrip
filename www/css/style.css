@@ -2554,3 +2554,44 @@ button, select, input[type="text"], input[type="file"] { font-family: inherit; }
   color: var(--text-muted);
 }
 .chooser-sheet .modal-btn:disabled { opacity: 0.5; }
+
+/* ---------- For kids ---------- */
+.kids-head { margin: 4px 0 18px; }
+.kids-title { margin: 0; font-size: 24px; font-weight: 700; color: var(--text); }
+.kids-sub { margin: 4px 0 0; font-size: 13.5px; color: var(--text-muted); }
+
+/* Two rows of large targets rather than a list of words: this screen gets used
+   one-handed, usually in a hurry. */
+.kids-finds { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 8px; }
+.kids-find {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 4px;
+  min-height: 66px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  font-family: inherit;
+}
+.kids-find:active { background: var(--surface-2); }
+.kids-find-icon { font-size: 20px; line-height: 1; }
+.kids-find-label { font-size: 10.5px; font-weight: 600; color: var(--text); text-align: center; line-height: 1.2; }
+
+.kids-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 12px 14px;
+  margin-bottom: 8px;
+}
+.kids-row-main { flex: 1; min-width: 0; text-align: left; border: none; background: none; font-family: inherit; padding: 0; }
+.kids-row-name { display: block; font-size: 15px; font-weight: 600; color: var(--text); }
+.kids-row-meta { display: block; font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+.kids-row-days { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.kids-row-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.search-chip-surprise { border-color: var(--accent); color: var(--accent); font-weight: 600; }

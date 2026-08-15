@@ -139,7 +139,7 @@ const shared = await page.evaluate(async () => {
     configurable: true,
     value: { writeText: (t) => { captured = t; return Promise.resolve(); } },
   });
-  document.querySelector('[data-view="overview"]').click();
+  document.querySelector('[data-view="itinerary"]').click();
   await new Promise((r) => setTimeout(r, 500));
   const btn = document.getElementById('shareTrip');
   if (btn) btn.click();

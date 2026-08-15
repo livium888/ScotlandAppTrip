@@ -109,14 +109,10 @@ check('the wet day and the clear day differ', /Rain/.test(itinText) && /Clear/.t
 check('the clear day shows its own temperature', /21°\/12°/.test(itinText), itinText.slice(0, 300));
 
 // --- Beyond the horizon, say so rather than invent one ---
-const overviewCheck = await page.evaluate(() => {
-  document.querySelector('[data-view="overview"]').click();
-  return null;
-});
-await page.waitForTimeout(800);
-const tripText = await page.evaluate(() => document.getElementById('view').textContent);
-check('near days show weather on the trip screen', /🌧️|☀️|21°|14°/.test(tripText), tripText.slice(0, 300));
-check('a day 30 days out claims no forecast', !/30 days.*(Rain|Clear)/.test(tripText), tripText.slice(0, 300));
+// The trip screen that used to repeat this is gone; the itinerary is where a
+// day's forecast belongs, and it is already on screen.
+check('near days show their weather', /🌧️|☀️|21°|14°/.test(itinText), itinText.slice(0, 300));
+check('a day 30 days out claims no forecast', !/30 days.*(Rain|Clear)/.test(itinText), itinText.slice(0, 300));
 
 await page.evaluate(() => document.querySelector('[data-view="today"]').click());
 await page.waitForTimeout(400);

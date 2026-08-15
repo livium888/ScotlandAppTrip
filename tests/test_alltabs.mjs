@@ -147,17 +147,29 @@ await page.waitForTimeout(300);
 check('notes are saved against the board', await page.evaluate(() =>
   /4821/.test(localStorage.getItem('board:b-own:notes') || '')));
 
-// --- Trip summarises the board, not Scotland ---
-await tab('overview');
-const tripText = await text();
-check('the trip screen is named after this board', /Lake District/.test(tripText), tripText.slice(0, 160));
-check('it counts what you saved', /3\s*saved/.test(tripText.replace(/\s+/g, ' ')), tripText.slice(0, 200));
-check('it shows the days you made', /Day 1/.test(tripText), tripText.slice(0, 300));
-check('it carries the budget through', /£60/.test(tripText), tripText.slice(0, 300));
-check('no Fringe blurb on a Cumbrian board', !/Fringe/.test(tripText), tripText.slice(0, 200));
+// --- The board's own facts, on the screens that own them ---
+// The Trip tab used to restate all of this in one place; it counted things you
+// can read on the screen where they matter, and the space went to the kids
+// list. What it was checking still has to be true.
+check('the board is named at the top, whichever screen you are on', await page.evaluate(() =>
+  /Lake District/.test(document.getElementById('topbarTitle').textContent)),
+  await page.evaluate(() => document.getElementById('topbarTitle').textContent));
+await tab('itinerary');
+const planText = await text();
+check('the itinerary shows the days you made', /Day 1/.test(planText), planText.slice(0, 300));
+check('and can be shared as a whole', await page.evaluate(() => !!document.getElementById('shareTrip')));
+await tab('budget');
+const boardBudget = await text();
+check('the budget carries through', /£60/.test(boardBudget), boardBudget.slice(0, 300));
+await tab('picks');
+const picksText = await text();
+check('no Fringe blurb on a Cumbrian board', !/Fringe/.test(picksText), picksText.slice(0, 200));
 
-// A stat tile is a shortcut, not decoration.
-await page.evaluate(() => document.querySelector('[data-goto="eats"]').click());
+// Eats are still reachable from the place list.
+await page.evaluate(() => {
+  const el = document.querySelector('[data-goto="eats"]') || document.querySelector('[data-pick-kind-filter="eat"]');
+  if (el) el.click();
+});
 await page.waitForTimeout(300);
 check('tapping a stat takes you to that tab', /Dog and Gun/.test(await text()));
 

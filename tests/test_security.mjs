@@ -71,7 +71,7 @@ await page.reload({ waitUntil: 'load' });
 await page.waitForTimeout(700);
 
 // --- Hostile text must render as text, on every screen ---
-for (const tab of ['today', 'overview', 'itinerary', 'places', 'eats', 'picks', 'budget', 'tips']) {
+for (const tab of ['today', 'kids', 'itinerary', 'places', 'eats', 'picks', 'budget', 'tips']) {
   await page.evaluate((t) => document.querySelector(`[data-view="${t}"]`)?.click(), tab);
   await page.waitForTimeout(250);
 }
