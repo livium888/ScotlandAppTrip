@@ -3,8 +3,8 @@
   "appName": "Scotland with Ally",
   "webDir": "www",
   "bundledWebRuntime": false,
-  "backgroundColor": "#16324f",
+  "backgroundColor": "#f7f6f3",
   "android": {
-    "backgroundColor": "#16324f"
+    "backgroundColor": "#f7f6f3"
   }
 }

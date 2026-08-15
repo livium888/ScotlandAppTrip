@@ -2599,3 +2599,330 @@ button, select, input[type="text"], input[type="file"] { font-family: inherit; }
 .kids-row-days { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
 .kids-row-actions { display: flex; gap: 6px; flex-shrink: 0; }
 .search-chip-surprise { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+
+/* ==========================================================================
+   Design layer
+   --------------------------------------------------------------------------
+   Everything above this line is the app working. This is the app looking like
+   somebody meant it: one typeface, one type scale, one spacing rhythm, one
+   set of shadows, and motion that responds to a finger.
+
+   It sits at the end deliberately - it restates a handful of components
+   rather than rewriting two thousand lines in place, and every colour still
+   comes from the tokens at the top, so dark mode follows without a second
+   set of rules.
+   ========================================================================== */
+
+/* Inter, bundled rather than fetched: the app has to work on a hillside with
+   no signal, and a font that arrives over the network is a font that does not
+   arrive. One variable file covers every weight used here. */
+@font-face {
+  font-family: "InterVar";
+  src: url("../vendor/fonts/inter-latin.woff2") format("woff2");
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+    U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "InterVar";
+  src: url("../vendor/fonts/inter-latin-ext.woff2") format("woff2");
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF,
+    U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020,
+    U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+:root {
+  /* Shadow as one system, not a value guessed per component. Two layers each:
+     a tight dark line for the edge, a wide soft one for the lift. */
+  --shadow-1: 0 1px 2px rgba(16, 24, 40, 0.04), 0 1px 3px rgba(16, 24, 40, 0.06);
+  --shadow-2: 0 2px 4px rgba(16, 24, 40, 0.04), 0 6px 16px rgba(16, 24, 40, 0.08);
+  --shadow-3: 0 8px 24px rgba(16, 24, 40, 0.12), 0 2px 6px rgba(16, 24, 40, 0.06);
+  --shadow-up: 0 -1px 2px rgba(16, 24, 40, 0.03), 0 -8px 24px rgba(16, 24, 40, 0.07);
+
+  /* One curve for things entering, one for things responding to a touch.
+     Nothing in the app should move on a straight line. */
+  --ease: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --fast: 140ms;
+  --med: 260ms;
+
+  --radius-sm: 10px;
+  --radius: 16px;
+  --radius-lg: 22px;
+}
+
+html, body {
+  font-family: "InterVar", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  /* Inter's default figures are proportional; tabular ones stop times and
+     prices from jittering as they change. */
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.011em;
+}
+
+/* Icons inherit colour and sit on the text baseline wherever they land. */
+.ico { display: block; flex-shrink: 0; }
+.ico-inline { display: inline-block; vertical-align: -0.18em; }
+
+/* ---------- Type ---------- */
+/* Size, weight and tracking move together: the bigger the text, the tighter
+   it is set, which is what stops large headings looking like a browser
+   default. */
+.today-date, .kids-title, .picks-title, .screen-title {
+  font-size: 27px;
+  font-weight: 700;
+  letter-spacing: -0.028em;
+  line-height: 1.12;
+  color: var(--text);
+}
+.today-label, .section-label, .cat-group-label {
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.today-label { color: var(--accent); }
+.card h2 { font-size: 17px; font-weight: 650; letter-spacing: -0.018em; }
+.card p, .pick-status, .settings-hint { font-size: 14px; line-height: 1.5; }
+
+/* ---------- The bar along the top ---------- */
+/* The gradient was doing the work of an era that has passed. A flat surface
+   with a hairline underneath reads as part of the phone rather than a banner
+   printed on it. */
+.topbar {
+  background: var(--surface);
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+  padding: calc(12px + var(--safe-top)) 16px 12px;
+  gap: 8px;
+}
+.topbar-title {
+  font-size: 17px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+.topbar-sub { font-size: 12.5px; color: var(--text-muted); opacity: 1; margin-top: 1px; }
+.topbar-settings {
+  background: transparent;
+  color: var(--text-muted);
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background var(--fast) var(--ease), transform var(--fast) var(--ease);
+}
+.topbar-settings:active { background: var(--surface-2); transform: scale(0.92); opacity: 1; }
+
+/* ---------- The bar along the bottom ---------- */
+.tabbar {
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  border-top: 1px solid var(--border);
+  box-shadow: var(--shadow-up);
+  padding: 8px 6px calc(8px + var(--safe-bottom));
+}
+.tab {
+  gap: 4px;
+  padding: 5px 2px 4px;
+  font-size: 10.5px;
+  font-weight: 550;
+  letter-spacing: -0.005em;
+  color: var(--text-muted);
+  transition: color var(--fast) var(--ease);
+}
+.tab .ico { transition: transform var(--med) var(--ease-out); }
+.tab.active { color: var(--accent); font-weight: 650; }
+/* The active icon lifts a little. It is two pixels, and it is the difference
+   between a row of labels and something that knows where you are. */
+.tab.active .ico { transform: translateY(-1px) scale(1.06); }
+.tab:active .ico { transform: scale(0.9); }
+.tab-icon { display: flex; align-items: center; justify-content: center; height: 24px; }
+
+/* ---------- Surfaces ---------- */
+.card {
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-1);
+  border: 1px solid var(--border);
+  padding: 16px;
+  margin-bottom: 12px;
+}
+
+/* ---------- Anything you press ---------- */
+/* One rule, so a button, a chip and a row all answer a finger the same way.
+   Scale rather than opacity: a thing that shrinks has been pressed; a thing
+   that fades has been switched off. */
+.modal-btn, .search-chip, .cat-tile, .kids-find, .kids-row, .today-card,
+.app-banner-action, .pick-row, .chooser-card, .idea-chip, .map-chip {
+  transition: transform var(--fast) var(--ease), box-shadow var(--fast) var(--ease),
+    background var(--fast) var(--ease), border-color var(--fast) var(--ease);
+}
+.modal-btn:active, .search-chip:active, .cat-tile:active, .kids-find:active,
+.app-banner-action:active, .idea-chip:active, .map-chip:active {
+  transform: scale(0.965);
+}
+
+.modal-btn {
+  border-radius: 12px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  padding: 13px 16px;
+  min-height: 46px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-1);
+}
+/* A primary action should look like the thing to press, not like a slab of
+   the accent colour with the contrast washed out of it. */
+.modal-btn-primary {
+  background: var(--accent);
+  color: var(--on-accent);
+  border-color: var(--accent);
+  box-shadow: var(--shadow-2);
+}
+.modal-btn-primary:active { box-shadow: var(--shadow-1); }
+
+.search-chip {
+  border-radius: 999px;
+  padding: 10px 15px;
+  font-size: 13.5px;
+  font-weight: 500;
+  letter-spacing: -0.008em;
+  min-height: 42px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  box-shadow: var(--shadow-1);
+}
+.search-chip-surprise {
+  background: var(--accent-soft);
+  border-color: transparent;
+  color: var(--accent);
+  font-weight: 650;
+}
+
+/* ---------- Motion ---------- */
+/* Screens arrive rather than appear. 200ms and 8 pixels: enough to register
+   as a change of place, not enough to wait for. */
+@keyframes view-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+.view.switching > * { animation: view-in var(--med) var(--ease-out) both; }
+
+/* Rows land one after another, which reads as a list being dealt out rather
+   than a block being pasted in. Capped so a long list is not a slow one. */
+.view.switching > *:nth-child(1) { animation-delay: 0ms; }
+.view.switching > *:nth-child(2) { animation-delay: 28ms; }
+.view.switching > *:nth-child(3) { animation-delay: 56ms; }
+.view.switching > *:nth-child(4) { animation-delay: 78ms; }
+.view.switching > *:nth-child(5) { animation-delay: 96ms; }
+.view.switching > *:nth-child(n + 6) { animation-delay: 110ms; }
+
+@media (prefers-reduced-motion: reduce) {
+  .view.switching > * { animation: none; }
+  * { transition-duration: 1ms !important; }
+}
+
+/* ---------- Dark ---------- */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-2: 0 4px 14px rgba(0, 0, 0, 0.45);
+    --shadow-3: 0 10px 30px rgba(0, 0, 0, 0.55);
+    --shadow-up: 0 -8px 24px rgba(0, 0, 0, 0.4);
+  }
+  .card { box-shadow: none; }
+  .modal-btn { box-shadow: none; }
+  .search-chip { box-shadow: none; }
+  .tabbar { background: color-mix(in srgb, var(--surface) 90%, transparent); }
+}
+
+/* ---------- Today, read at arm's length ---------- */
+/* The time was set in the success green, which meant nothing - green is the
+   colour this app uses for "that worked". A time is just a time; the name of
+   the place is what you are looking for, so that is what carries the weight. */
+.today-time {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-muted);
+  letter-spacing: 0.01em;
+  text-transform: none;
+  font-variant-numeric: tabular-nums;
+}
+.today-name { font-size: 18px; font-weight: 650; letter-spacing: -0.02em; margin-top: 3px; }
+.today-card { padding: 15px 16px 14px; }
+.today-card.next {
+  border-color: var(--accent);
+  border-width: 1px;
+  box-shadow: var(--shadow-2), 0 0 0 1px var(--accent);
+}
+/* A pill, sitting on the card's edge, rather than eight grey capitals
+   floating above the time. */
+.today-next-flag {
+  top: -10px;
+  left: 15px;
+  background: var(--accent);
+  border-radius: 999px;
+  padding: 4px 9px;
+  font-size: 9.5px;
+  letter-spacing: 0.09em;
+  box-shadow: var(--shadow-1);
+}
+.today-card.done { opacity: 1; background: transparent; box-shadow: none; border-style: dashed; }
+.today-card.done .today-name { color: var(--text-muted); font-weight: 600; }
+.today-done-flag {
+  font-size: 9.5px;
+  letter-spacing: 0.09em;
+  color: var(--text-muted);
+  opacity: 0.8;
+}
+.today-note {
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--text);
+  padding: 9px 11px;
+  line-height: 1.45;
+}
+.today-leg {
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 2px 0 10px 16px;
+  margin-top: -4px;
+}
+
+/* ---------- The line at the top that tells you one thing ---------- */
+/* It was a full-width slab in the accent colour, directly under a header in
+   the accent colour, and it out-shouted the screen it was captioning. A tint
+   and a hairline say the same thing without taking the top of the app. */
+.app-banner {
+  padding: 10px 16px;
+  font-size: 12.5px;
+  font-weight: 500;
+  border-bottom: 1px solid var(--border);
+}
+.app-banner.nudge { background: var(--surface); color: var(--text-muted); }
+.app-banner.nudge .app-banner-action { color: var(--accent); border-color: var(--accent); }
+.app-banner-action { font-size: 11.5px; font-weight: 650; padding: 6px 13px; }
+
+/* ---------- Rows in a list ---------- */
+.pick-row { transition: transform var(--fast) var(--ease), background var(--fast) var(--ease); }
+.pick-row:active { transform: scale(0.985); background: var(--surface-2); }
+.pick-row-chevron { color: var(--text-muted); opacity: 0.55; }
+.search-trigger-icon { display: flex; align-items: center; color: var(--text-muted); }

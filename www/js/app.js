@@ -1314,7 +1314,7 @@
       <div class="modal-backdrop" data-close="1">
         <div class="modal-sheet" role="dialog" aria-label="Which one did you mean?">
           <div class="modal-handle"></div>
-          <button class="modal-close" data-close="1" aria-label="Close">✕</button>
+          <button class="modal-close" data-close="1" aria-label="Close">${icon('close', { size: 17, cls: 'ico-inline' })}</button>
           <div class="modal-body">
             <h2 class="modal-title">Which "${esc(opts.query)}"?</h2>
             <div class="modal-subtitle">${esc(
@@ -1501,7 +1501,7 @@
       <div class="modal-backdrop" data-close="1">
         <div class="modal-sheet" role="dialog" aria-label="${esc(p.name)}">
           <div class="modal-handle"></div>
-          <button class="modal-close" data-close="1" aria-label="Close">✕</button>
+          <button class="modal-close" data-close="1" aria-label="Close">${icon('close', { size: 17, cls: 'ico-inline' })}</button>
           <div class="modal-body">
             <span class="pill" style="background:${cityColor(p.city)}">${esc(p.city)}</span>
             <h2 class="modal-title">${esc(p.name)}</h2>
@@ -1509,7 +1509,7 @@
             <div class="modal-price">${esc(p.price)}</div>
             ${
               p.nearAttraction
-                ? `<div class="place-distance">📍 ${esc(p.distance)} — near ${esc(p.nearAttraction)}</div>`
+                ? `<div class="place-distance">${icon('pin', { size: 15, cls: 'ico-inline' })} ${esc(p.distance)} — near ${esc(p.nearAttraction)}</div>`
                 : ""
             }
             <p class="modal-notes">${esc(p.notes)}</p>
@@ -1558,7 +1558,7 @@
     if (isOffline()) {
       appBanner.className = "app-banner offline";
       appBanner.innerHTML =
-        `<span>📵 No connection — your places, plan and notes all still work. Search, weather and maps need signal.</span>`;
+        `<span>${icon('alert', { size: 15, cls: 'ico-inline' })} No connection — your places, plan and notes all still work. Search, weather and maps need signal.</span>`;
       appBanner.hidden = false;
       return;
     }
@@ -1787,7 +1787,7 @@
       <div class="modal-backdrop" data-close="1">
         <div class="modal-sheet" role="dialog" aria-label="Switch board">
           <div class="modal-handle"></div>
-          <button class="modal-close" data-close="1" aria-label="Close">✕</button>
+          <button class="modal-close" data-close="1" aria-label="Close">${icon('close', { size: 17, cls: 'ico-inline' })}</button>
           <div class="modal-body">
             <h2 class="modal-title">Your boards</h2>
             <p class="settings-hint">A board with dates works like a trip. Without them it's just a list of places worth keeping.</p>
@@ -1804,7 +1804,7 @@
                           b.destination ? ` · ${esc(b.destination)}` : ""
                         } · ${picks} place${picks === 1 ? "" : "s"}</div>
                       </div>
-                      ${b.id === state.activeId ? `<span class="board-row-tick">✓</span>` : ""}
+                      ${b.id === state.activeId ? `<span class="board-row-tick">${icon('check', { size: 16, cls: 'ico-inline' })}</span>` : ""}
                     </button>
                   `;
                 })
@@ -1909,7 +1909,7 @@
       <div class="modal-backdrop" data-close="1">
         <div class="modal-sheet" role="dialog" aria-label="${esc(opts.title)}">
           <div class="modal-handle"></div>
-          <button class="modal-close" data-close="1" aria-label="Close">✕</button>
+          <button class="modal-close" data-close="1" aria-label="Close">${icon('close', { size: 17, cls: 'ico-inline' })}</button>
           <div class="modal-body">
             <h2 class="modal-title">${esc(opts.title)}</h2>
             <p class="place-notes" style="margin-top:10px;">${esc(opts.detail)}</p>
@@ -1949,7 +1949,7 @@
       <div class="modal-backdrop" data-close="1">
         <div class="modal-sheet" role="dialog" aria-label="Settings">
           <div class="modal-handle"></div>
-          <button class="modal-close" data-close="1" aria-label="Close">✕</button>
+          <button class="modal-close" data-close="1" aria-label="Close">${icon('close', { size: 17, cls: 'ico-inline' })}</button>
           <div class="modal-body">
             <h2 class="modal-title">Settings</h2>
 
@@ -2043,7 +2043,7 @@
             </p>
             <p class="settings-hint" id="tileCount">Checking what's stored…</p>
             <div class="settings-btn-row">
-              <button class="modal-btn modal-btn-primary" id="downloadTilesBtn">⬇ Download map area</button>
+              <button class="modal-btn modal-btn-primary" id="downloadTilesBtn">${icon('download', { size: 17, cls: 'ico-inline' })} Download map area</button>
               <button class="modal-btn" id="clearTilesBtn">Clear</button>
             </div>
             <pre class="settings-result" id="tileResult" hidden></pre>
@@ -2060,7 +2060,7 @@
             <p class="settings-hint${backupIsOverdue() ? " backup-overdue" : ""}"><b>${esc(backupAgeLine())}</b></p>
             <div class="settings-btn-row">
               <button class="modal-btn${backupIsOverdue() ? " modal-btn-primary" : ""}" id="exportBackupBtn">⬇ Export</button>
-              <button class="modal-btn" id="importBackupBtn">⬆ Import</button>
+              <button class="modal-btn" id="importBackupBtn">${icon('upload', { size: 17, cls: 'ico-inline' })} Import</button>
             </div>
             <input type="file" id="importBackupFile" accept="application/json,.json" hidden />
             <pre class="settings-result" id="backupResult" hidden></pre>
@@ -2393,15 +2393,15 @@
         <div class="modal-backdrop" data-close="1">
           <div class="modal-sheet" role="dialog" aria-label="About this place">
             <div class="modal-handle"></div>
-            <button class="modal-close" data-close="1" aria-label="Close">✕</button>
+            <button class="modal-close" data-close="1" aria-label="Close">${icon('close', { size: 17, cls: 'ico-inline' })}</button>
             <div class="modal-body">
               <h2 class="modal-title">${esc(opts.name)}</h2>
               ${opts.subtitle ? `<div class="modal-subtitle">${esc(opts.subtitle)}</div>` : ""}
 
               <label class="settings-label">What is it</label>
               <div class="move-row">
-                <button class="move-chip${state.major ? "" : " active"}" data-label-major="0">📍 Somewhere to go</button>
-                <button class="move-chip${state.major ? " active" : ""}" data-label-major="1">🏘️ A town or area</button>
+                <button class="move-chip${state.major ? "" : " active"}" data-label-major="0">${icon('pin', { size: 15, cls: 'ico-inline' })} Somewhere to go</button>
+                <button class="move-chip${state.major ? " active" : ""}" data-label-major="1">${icon('globe', { size: 15, cls: 'ico-inline' })} A town or area</button>
               </div>
 
               ${
@@ -2413,8 +2413,8 @@
                   : `
               <label class="settings-label">Shows up in</label>
               <div class="move-row">
-                <button class="move-chip${state.kind === "place" ? " active" : ""}" data-label-kind="place">🏛️ To do</button>
-                <button class="move-chip${state.kind === "eat" ? " active" : ""}" data-label-kind="eat">🍽️ Eat</button>
+                <button class="move-chip${state.kind === "place" ? " active" : ""}" data-label-kind="place">${icon('castle', { size: 17, cls: 'ico-inline' })} To do</button>
+                <button class="move-chip${state.kind === "eat" ? " active" : ""}" data-label-kind="eat">${icon('food', { size: 17, cls: 'ico-inline' })} Eat</button>
               </div>
 
               <label class="settings-label">Where it goes</label>
@@ -2509,7 +2509,7 @@
       <div class="modal-backdrop" data-close="1">
         <div class="modal-sheet" role="dialog" aria-label="Choose a folder">
           <div class="modal-handle"></div>
-          <button class="modal-close" data-close="1" aria-label="Close">✕</button>
+          <button class="modal-close" data-close="1" aria-label="Close">${icon('close', { size: 17, cls: 'ico-inline' })}</button>
           <div class="modal-body">
             <h2 class="modal-title">Where should "${esc(candidateName)}" go?</h2>
             ${
@@ -2639,7 +2639,7 @@
       <div class="modal-backdrop" data-close="1">
         <div class="modal-sheet" role="dialog" aria-label="Copy this to share">
           <div class="modal-handle"></div>
-          <button class="modal-close" data-close="1" aria-label="Close">✕</button>
+          <button class="modal-close" data-close="1" aria-label="Close">${icon('close', { size: 17, cls: 'ico-inline' })}</button>
           <div class="modal-body">
             <h2 class="modal-title">${esc(title)}</h2>
             <div class="modal-subtitle">Sharing isn't available here — copy this instead</div>
@@ -2697,6 +2697,10 @@
     el.textContent = message;
     el.classList.remove("with-action");
     el.classList.add("show");
+    // Every confirmation in the app comes through here, which makes this the
+    // one place worth wiring a haptic to: you feel the save rather than
+    // having to look up and read that it happened.
+    tapFeedback("light");
     clearToastTimer();
     toastTimer = setTimeout(() => el.classList.remove("show"), 2400);
   }
@@ -2880,7 +2884,7 @@
           </button>
           <div class="kids-row-actions">
             <button class="search-around" data-kid-day="${esc(p.id)}" aria-label="Put ${esc(p.name)} on a day">📅</button>
-            <button class="search-around" data-kid-off="${esc(p.id)}" aria-label="Not one for the kids">✕</button>
+            <button class="search-around" data-kid-off="${esc(p.id)}" aria-label="Not one for the kids">${icon('close', { size: 17, cls: 'ico-inline' })}</button>
           </div>
         </div>
       `;
@@ -3215,7 +3219,7 @@
         <div class="modal-backdrop" data-close="1">
           <div class="modal-sheet" role="dialog" aria-label="Put it on a day">
             <div class="modal-handle"></div>
-            <button class="modal-close" data-close="1" aria-label="Close">✕</button>
+            <button class="modal-close" data-close="1" aria-label="Close">${icon('close', { size: 17, cls: 'ico-inline' })}</button>
             <div class="modal-body">
               <h2 class="modal-title">When are you going?</h2>
               <div class="modal-subtitle">${esc(pick.name)}</div>
@@ -3415,7 +3419,7 @@
       html += `
         <section class="planner-area">
           <button class="planner-area-head${on === list.length ? " on" : on ? " part" : ""}" data-plan-area="${esc(area)}">
-            <span class="planner-area-tick">${on === list.length ? "✓" : on ? "–" : ""}</span>
+            <span class="planner-area-tick">${on === list.length ? icon("check", { size: 15 }) : on ? "–" : ""}</span>
             <span class="planner-area-name">${esc(area)}</span>
             <span class="planner-area-count">${esc(String(on))}/${esc(String(list.length))}</span>
           </button>
@@ -3424,7 +3428,7 @@
               .map(
                 (p) => `
                   <button class="planner-place${planner.selected[p.id] ? " on" : ""}" data-plan-pick="${esc(p.id)}">
-                    <span class="planner-place-tick">${planner.selected[p.id] ? "✓" : ""}</span>
+                    <span class="planner-place-tick">${planner.selected[p.id] ? icon("check", { size: 15 }) : ""}</span>
                     <span class="planner-place-main">
                       <span class="planner-place-name">${esc(p.name)}</span>
                       ${p.category ? `<span class="planner-place-meta">${esc(p.category)}</span>` : ""}
@@ -3496,7 +3500,7 @@
             .join("")}
           ${
             check.problems.length
-              ? `<p class="planner-warn">⚠ ${esc(check.problems.join(", and "))}. Worth moving something.</p>`
+              ? `<p class="planner-warn">${icon('alert', { size: 16, cls: 'ico-inline' })} ${esc(check.problems.join(", and "))}. Worth moving something.</p>`
               : ""
           }
         </div>
@@ -3568,7 +3572,7 @@
 
     planOverlay.innerHTML = `
       <div class="search-head">
-        <button class="search-back" data-plan-close="1" aria-label="Close">←</button>
+        <button class="search-back" data-plan-close="1" aria-label="Close">${icon('back', { size: 20, cls: 'ico-inline' })}</button>
         <div class="idea-head-text">
           <div class="idea-head-title">${reviewing ? "How this looks" : "Plan my days"}</div>
           <div class="idea-head-sub">${
@@ -4073,19 +4077,19 @@
     // saved - which is where every trip starts - there is nothing to arrange,
     // and the honest answer is to go and find some, together.
     if (plan.days.length) {
-      html += `<button class="hero-share" id="shareTrip" style="color:var(--navy);border-color:var(--line);background:var(--card);margin-bottom:14px;">↗ Share this plan</button>`;
+      html += `<button class="hero-share" id="shareTrip" style="color:var(--navy);border-color:var(--line);background:var(--card);margin-bottom:14px;">${icon('share', { size: 17, cls: 'ico-inline' })} Share this plan</button>`;
     }
 
     html += `
       <div class="card plan-ai-card">
         ${
           picks.length
-            ? `<button class="plan-ai-btn" id="autoPlanBtn">✨ Plan my days for me</button>
+            ? `<button class="plan-ai-btn" id="autoPlanBtn">${icon('sparkle', { size: 17, cls: 'ico-inline' })} Plan my days for me</button>
                <p class="settings-hint" style="text-align:center;">Choose which places - or a whole area - and see what fits before anything changes.</p>
 `
             : `<p class="pick-status">Nothing saved yet — so there is nothing to arrange into days.</p>`
         }
-        <button class="plan-ai-btn plan-idea-btn" id="tripIdeaBtn">🧭 Suggest a trip</button>
+        <button class="plan-ai-btn plan-idea-btn" id="tripIdeaBtn">${icon('directions', { size: 17, cls: 'ico-inline' })} Suggest a trip</button>
         <p class="settings-hint" style="text-align:center;">Say where you are and how far you'll go — you get whole routes back, with the stops already in order.</p>
       </div>
     `;
@@ -4102,7 +4106,7 @@
         <div class="card day-card">
           <div class="plan-day-head">
             <span class="day-title">${esc(day.label)}</span>
-            <button class="plan-day-remove" data-remove-day="${esc(day.id)}" aria-label="Remove day">✕</button>
+            <button class="plan-day-remove" data-remove-day="${esc(day.id)}" aria-label="Remove day">${icon('close', { size: 17, cls: 'ico-inline' })}</button>
           </div>
           ${weatherLine(forecast, { quiet: true })}
           <div class="plan-items">
@@ -4137,7 +4141,7 @@
               ${p.address ? `<div class="plan-item-sub">${esc(p.address)}</div>` : ""}
               ${
                 mayBeClosed
-                  ? `<div class="plan-warn">⚠ May be closed this day — hours say "${esc(p.openingHours)}". Check before going.</div>`
+                  ? `<div class="plan-warn">${icon('alert', { size: 15, cls: 'ico-inline' })} May be closed this day — hours say "${esc(p.openingHours)}". Check before going.</div>`
                   : ""
               }
               ${
@@ -4156,7 +4160,7 @@
               <button data-plan-move="${esc(day.id)}|${esc(it.pickId)}|1" ${
                 idx === items.length - 1 ? "disabled" : ""
               } aria-label="Move down">↓</button>
-              <button data-plan-remove="${esc(day.id)}|${esc(it.pickId)}" aria-label="Remove">✕</button>
+              <button data-plan-remove="${esc(day.id)}|${esc(it.pickId)}" aria-label="Remove">${icon('close', { size: 17, cls: 'ico-inline' })}</button>
             </div>
           </div>
         `;
@@ -4343,7 +4347,7 @@
               <span class="day-title">${esc(d.title)}</span>
               <span class="day-date">${esc(d.day)} · ${esc(d.date)}</span>
             </div>
-            <span class="chevron">▶</span>
+            <span class="chevron">${icon('forward', { size: 16, cls: 'ico-inline' })}</span>
           </div>
           ${weatherLine(forecast, { quiet: true })}
           <div class="day-summary">${esc(d.summary)}</div>
@@ -4356,7 +4360,7 @@
                 }>
                 <div class="item-time">${esc(it.time)}</div>
                 <div class="item-body">
-                  <div class="item-name">${esc(it.name)}${it.place ? ' <span class="item-arrow">›</span>' : ""}</div>
+                  <div class="item-name">${esc(it.name)}${it.place ? ` <span class="item-arrow">${icon('forward', { size: 13, cls: 'ico-inline' })}</span>` : ""}</div>
                   <div class="item-detail">${esc(it.detail)}</div>
                   <span class="item-tag">${esc(it.tag)}</span>
                 </div>
@@ -4364,7 +4368,7 @@
             `
               )
               .join("")}
-            <button class="day-share" data-share-day="${i}">↗ Share this day</button>
+            <button class="day-share" data-share-day="${i}">${icon('share', { size: 16, cls: 'ico-inline' })} Share this day</button>
           </div>
         </div>
       `;
@@ -4499,7 +4503,7 @@
             <span class="row-badge">${esc(item.city)}</span>
             ${picked ? `<span class="row-badge day">saved</span>` : ""}
           </div>
-          <div class="search-result-more">Details ›</div>
+          <div class="search-result-more">Details ${icon('forward', { size: 13, cls: 'ico-inline' })}</div>
         </button>
         <button class="pick-toggle${picked ? " picked" : ""}" data-toggle-pick="${source}" data-name="${esc(
       item.name
@@ -4608,7 +4612,7 @@
             <span class="budget-currency">£</span>
             <input class="budget-input" type="number" inputmode="decimal" min="0" step="1"
                    value="${esc(String(r.amount || ""))}" data-extra-amount="${i}" aria-label="Amount for ${esc(r.item)}" />
-            <button class="budget-remove" data-extra-remove="${i}" aria-label="Remove ${esc(r.item)}">✕</button>
+            <button class="budget-remove" data-extra-remove="${i}" aria-label="Remove ${esc(r.item)}">${icon('close', { size: 17, cls: 'ico-inline' })}</button>
           </div>
         </div>
       `;
@@ -4722,7 +4726,7 @@
       items.forEach((it, i) => {
         html += `<li data-i="${i}" class="${it.done ? "checked" : ""}">
           <span class="packing-text">${esc(it.text)}</span>
-          <button class="packing-remove" data-packing-remove="${i}" aria-label="Remove ${esc(it.text)}">✕</button>
+          <button class="packing-remove" data-packing-remove="${i}" aria-label="Remove ${esc(it.text)}">${icon('close', { size: 17, cls: 'ico-inline' })}</button>
         </li>`;
       });
       html += `</ul>`;
@@ -5037,7 +5041,7 @@
         String(r.rating)
       )}${esc(count)}</span>`;
     }
-    return `<span class="candidate-rating">⭐ ${esc(String(r.rating))}${esc(count)}</span>`;
+    return `<span class="candidate-rating">${icon('star', { size: 14, cls: 'ico-inline' })} ${esc(String(r.rating))}${esc(count)}</span>`;
   }
 
   function suggestionIcon(kind) {
@@ -5446,7 +5450,7 @@
           tunable
             ? `<button class="cat-tune" id="exploreCatTune" aria-label="Change what ${esc(
                 cat.label
-              )} asks for">✎</button>`
+              )} asks for">${icon('edit', { size: 15, cls: 'ico-inline' })}</button>`
             : ""
         }
       </div>
@@ -5466,7 +5470,7 @@
       <div class="modal-backdrop" data-close="1">
         <div class="modal-sheet" role="dialog" aria-label="Change what this looks for">
           <div class="modal-handle"></div>
-          <button class="modal-close" data-close="1" aria-label="Close">✕</button>
+          <button class="modal-close" data-close="1" aria-label="Close">${icon('close', { size: 17, cls: 'ico-inline' })}</button>
           <div class="modal-body">
             <h2 class="modal-title">${cat.icon} ${esc(cat.label)}</h2>
             <div class="modal-subtitle">What this asks the AI to find</div>
@@ -5544,7 +5548,7 @@
       <div class="modal-backdrop" data-close="1">
         <div class="modal-sheet" role="dialog" aria-label="What are you looking for?">
           <div class="modal-handle"></div>
-          <button class="modal-close" data-close="1" aria-label="Close">✕</button>
+          <button class="modal-close" data-close="1" aria-label="Close">${icon('close', { size: 17, cls: 'ico-inline' })}</button>
           <div class="modal-body">
             <h2 class="modal-title">What are you looking for?</h2>
             <form class="search-bar" id="catCustomForm" style="margin:12px 0 4px;">
@@ -5606,11 +5610,11 @@
     let body = `
       <p class="settings-hint explore-lead">
         Search at the top of the screen for a town or place, then use
-        <b>🧭 Around here</b> on the result. Or start from:
+        <b>${icon('directions', { size: 15, cls: 'ico-inline' })} Around here</b> on the result. Or start from:
       </p>
       <div class="explore-centre-row">
-        <button class="move-chip" id="exploreGpsBtn">📍 Where I am</button>
-        <button class="move-chip" id="exploreMapBtn">🗺 Point on a map</button>
+        <button class="move-chip" id="exploreGpsBtn">${icon('pin', { size: 16, cls: 'ico-inline' })} Where I am</button>
+        <button class="move-chip" id="exploreMapBtn">${icon('map', { size: 16, cls: 'ico-inline' })} Point on a map</button>
         ${pickOptions ? `<select id="exploreFromPick"><option value="">From a saved place…</option>${pickOptions}</select>` : ""}
       </div>
     `;
@@ -5653,7 +5657,7 @@
       body += `
         <button class="modal-btn modal-btn-primary explore-run" id="exploreRunBtn"${
           ready && !searching ? "" : " disabled"
-        }>${searching ? "Searching…" : `🔍 ${ranBefore && !explore.stale ? "Search again" : "Search"}`}</button>
+        }>${searching ? "Searching…" : `${icon('search', { size: 18, cls: 'ico-inline' })} ${ranBefore && !explore.stale ? "Search again" : "Search"}`}</button>
       `;
       if (!ready) {
         body += `<p class="settings-hint explore-run-hint">Pick what you're looking for, then press Search.</p>`;
@@ -5723,11 +5727,11 @@
                   }${ratingBadge(r)}</div>
                   ${meta ? `<div class="place-notes">${esc(meta)}</div>` : ""}
                   ${r.description ? `<div class="place-notes">${esc(r.description)}</div>` : ""}
-                  <div class="search-result-more">Details ›</div>
+                  <div class="search-result-more">Details ${icon('forward', { size: 13, cls: 'ico-inline' })}</div>
                 </button>
                 ${
                   r.aiSuggested && r.sources && r.sources.length
-                    ? `<div class="place-links"><a href="${esc(safeUrl(r.sources[0].uri))}" target="_blank" rel="noopener">🔗 source</a></div>`
+                    ? `<div class="place-links"><a href="${esc(safeUrl(r.sources[0].uri))}" target="_blank" rel="noopener">${icon('link', { size: 14, cls: 'ico-inline' })} source</a></div>`
                     : ""
                 }
               </div>
@@ -5742,8 +5746,8 @@
     return `
       <div class="card">
         <div class="explore-head" id="exploreToggle">
-          <b>🧭 Explore around a place</b>
-          <span class="chevron">${explore.open ? "▼" : "▶"}</span>
+          <b>${icon('directions', { size: 18, cls: 'ico-inline' })} Explore around a place</b>
+          <span class="chevron">${explore.open ? icon("down", { size: 16 }) : icon("forward", { size: 16 })}</span>
         </div>
         ${explore.open ? body : ""}
       </div>
@@ -5931,7 +5935,7 @@
       .filter((d) => (plan.items[d.id] || []).some((it) => it.pickId === p.id))
       .map((d) => shortDayLabel(d.label));
 
-    const meta = [p.category, away, p.rating != null ? `⭐ ${p.rating}` : null]
+    const meta = [p.category, away, p.rating != null ? `${icon('star', { size: 13, cls: 'ico-inline' })} ${p.rating}` : null]
       .filter(Boolean)
       .join(" · ");
 
@@ -5948,7 +5952,7 @@
             ${p.enrichStatus === "loading" ? `<span class="row-badge">loading…</span>` : ""}
           </div>
         </div>
-        <span class="pick-row-chevron">›</span>
+        <span class="pick-row-chevron">${icon('forward', { size: 17, cls: 'ico-inline' })}</span>
       </button>
     `;
   }
@@ -5962,14 +5966,14 @@
     return `
       <div class="area-head">
         <button class="area-head-main" data-open-pick="${esc(p.id)}">
-          <span class="area-head-icon">🏘️</span>
+          <span class="area-head-icon">${icon('globe', { size: 15, cls: 'ico-inline' })}</span>
           <span class="area-head-text">
             <span class="area-head-name">${esc(p.name)}</span>
             <span class="area-head-meta">${esc(meta)}</span>
           </span>
-          <span class="pick-row-chevron">›</span>
+          <span class="pick-row-chevron">${icon('forward', { size: 17, cls: 'ico-inline' })}</span>
         </button>
-        <button class="area-head-explore" data-explore-from="${esc(p.id)}">🧭 What's nearby</button>
+        <button class="area-head-explore" data-explore-from="${esc(p.id)}">${icon('directions', { size: 16, cls: 'ico-inline' })} What's nearby</button>
       </div>
     `;
   }
@@ -6009,34 +6013,34 @@
       <div class="modal-backdrop" data-close="1">
         <div class="modal-sheet" role="dialog" aria-label="${esc(p.name)}">
           <div class="modal-handle"></div>
-          <button class="modal-close" data-close="1" aria-label="Close">✕</button>
+          <button class="modal-close" data-close="1" aria-label="Close">${icon('close', { size: 17, cls: 'ico-inline' })}</button>
           <div class="modal-body">
             <h2 class="modal-title">${esc(p.name)}</h2>
             <div class="modal-subtitle">${esc(
               [p.category, p.city].filter(Boolean).join(" · ")
-            )}${p.rating != null ? ` · ⭐ ${esc(String(p.rating))}` : ""}</div>
+            )}${p.rating != null ? ` · ${icon('star', { size: 13, cls: 'ico-inline' })} ${esc(String(p.rating))}` : ""}</div>
 
             ${description ? `<p class="place-notes" style="margin-top:10px;">${esc(description)}</p>` : ""}
 
-            ${p.address ? `<div class="place-fact">📍 ${esc(p.address)}</div>` : ""}
+            ${p.address ? `<div class="place-fact">${icon('pin', { size: 16, cls: 'ico-inline' })} ${esc(p.address)}</div>` : ""}
             ${
               // The geocoder had more than one answer and nobody was asked.
               // Saying so beats a map pin that looks as confident as any other.
               p.geoAlternatives
-                ? `<div class="place-fact doubt-fact">⚠️ ${esc(
+                ? `<div class="place-fact doubt-fact">${icon('alert', { size: 16, cls: 'ico-inline' })} ${esc(
                     String(p.geoAlternatives.length)
                   )} places share this name and they are far apart — this is the first one.
                    <button class="link-btn" data-fix-location="${esc(p.id)}">Pick the right one</button></div>`
                 : ""
             }
-            ${p.openingHours ? `<div class="place-fact">🕒 ${esc(p.openingHours)}</div>` : ""}
-            ${p.phone ? `<div class="place-fact">📞 <a href="tel:${esc(p.phone)}">${esc(p.phone)}</a></div>` : ""}
-            ${safeUrl(p.website) ? `<div class="place-fact">🌐 <a href="${esc(safeUrl(p.website))}" target="_blank" rel="noopener">Website</a></div>` : ""}
+            ${p.openingHours ? `<div class="place-fact">${icon('clock', { size: 16, cls: 'ico-inline' })} ${esc(p.openingHours)}</div>` : ""}
+            ${p.phone ? `<div class="place-fact">${icon('phone', { size: 16, cls: 'ico-inline' })} <a href="tel:${esc(p.phone)}">${esc(p.phone)}</a></div>` : ""}
+            ${safeUrl(p.website) ? `<div class="place-fact">${icon('link', { size: 16, cls: 'ico-inline' })} <a href="${esc(safeUrl(p.website))}" target="_blank" rel="noopener">Website</a></div>` : ""}
 
             ${weatherForPick(p)}
 
             ${p.lat != null ? `<div class="detail-map" id="detailMap"></div>` : ""}
-            ${mapsUrl ? `<button class="modal-btn modal-btn-primary" data-open-maps="${esc(mapsUrl)}">📍 ${
+            ${mapsUrl ? `<button class="modal-btn modal-btn-primary" data-open-maps="${esc(mapsUrl)}">${icon('pin', { size: 16, cls: 'ico-inline' })} ${
               p.googleUrl ? "Open on Google Maps" : "Find on Google Maps"
             }</button>` : ""}
 
@@ -6053,7 +6057,7 @@
                 )
                 .join("")}
               <button class="day-chip add" data-day-sheet="${esc(p.id)}">${
-                plan.days.length ? "+ Day" : "📅 Put it on a day"
+                plan.days.length ? "+ Day" : `${icon('calendarPlus', { size: 16, cls: 'ico-inline' })} Put it on a day`
               }</button>
             </div>
 
@@ -6064,15 +6068,15 @@
                 ? ""
                 : `<label class="settings-label">Shows up in</label>
             <div class="move-row">
-              <button class="move-chip${pickKind(p) === "place" ? " active" : ""}" data-pick-kind="${esc(p.id)}|place">🏛️ Places</button>
-              <button class="move-chip${pickKind(p) === "eat" ? " active" : ""}" data-pick-kind="${esc(p.id)}|eat">🍽️ Eats</button>
+              <button class="move-chip${pickKind(p) === "place" ? " active" : ""}" data-pick-kind="${esc(p.id)}|place">${icon('castle', { size: 16, cls: 'ico-inline' })} Places</button>
+              <button class="move-chip${pickKind(p) === "eat" ? " active" : ""}" data-pick-kind="${esc(p.id)}|eat">${icon('food', { size: 17, cls: 'ico-inline' })} Eats</button>
             </div>`
             }
 
             <label class="settings-label">What this is</label>
             <div class="move-row">
-              <button class="move-chip${p.major ? "" : " active"}" data-pick-major="${esc(p.id)}|0">📍 Somewhere to go</button>
-              <button class="move-chip${p.major ? " active" : ""}" data-pick-major="${esc(p.id)}|1">🏘️ A town or area</button>
+              <button class="move-chip${p.major ? "" : " active"}" data-pick-major="${esc(p.id)}|0">${icon('pin', { size: 15, cls: 'ico-inline' })} Somewhere to go</button>
+              <button class="move-chip${p.major ? " active" : ""}" data-pick-major="${esc(p.id)}|1">${icon('globe', { size: 15, cls: 'ico-inline' })} A town or area</button>
             </div>
             <p class="settings-hint">A town or area heads its own section in Picks, and places you save near it are filed under it.</p>
 
@@ -6090,9 +6094,9 @@
 
             <div class="settings-btn-row" style="margin-top:12px;">
               <button class="modal-btn booked-toggle${p.booked ? " on" : ""}" data-toggle-booked="${esc(p.id)}">
-                ${p.booked ? "✓ Booked" : "Mark booked"}
+                ${p.booked ? `${icon('check', { size: 15, cls: 'ico-inline' })} Booked` : "Mark booked"}
               </button>
-              <button class="modal-btn" data-explore-from="${esc(p.id)}">🧭 What's nearby</button>
+              <button class="modal-btn" data-explore-from="${esc(p.id)}">${icon('directions', { size: 16, cls: 'ico-inline' })} What's nearby</button>
             </div>
             <button class="modal-btn booked-toggle${isForKids(p) ? " on" : ""}" data-toggle-kids="${esc(p.id)}"
                     style="width:100%;margin-top:8px;">
@@ -6841,7 +6845,7 @@
     // have not, and neither is a dead end. The one required answer is the
     // exception - "Skip" on a button that cannot be pressed is a contradiction.
     const blocked = step.key === "from" && !tripIdea.brief.from.trim();
-    const label = isReview ? "✨ Suggest trips" : ideaAnswered(step.key) || blocked ? "Next" : "Skip";
+    const label = isReview ? `${icon('sparkle', { size: 16, cls: 'ico-inline' })} Suggest trips` : ideaAnswered(step.key) || blocked ? "Next" : "Skip";
     return `
       <div class="idea-nav">
         <button class="modal-btn idea-back" data-idea-move="-1" ${at === 0 ? "disabled" : ""}>Back</button>
@@ -7084,7 +7088,7 @@
     const screenId = `${tripIdea.view}|${ideaStepIndex()}|${tripIdea.expanded}|${tripIdea.status}`;
     ideaOverlay.innerHTML = `
       <div class="search-head">
-        <button class="search-back" data-idea-close="1" aria-label="Close">←</button>
+        <button class="search-back" data-idea-close="1" aria-label="Close">${icon('back', { size: 20, cls: 'ico-inline' })}</button>
         <div class="idea-head-text">
           <div class="idea-head-title">${showResults ? "Trip suggestions" : "Plan a trip"}</div>
           <div class="idea-head-sub">${
@@ -7581,7 +7585,7 @@
       <div class="modal-backdrop" data-close="1">
         <div class="modal-sheet chooser-sheet" role="dialog" aria-label="Choose a stop">
           <div class="modal-handle"></div>
-          <button class="modal-close" data-close="1" aria-label="Close">✕</button>
+          <button class="modal-close" data-close="1" aria-label="Close">${icon('close', { size: 17, cls: 'ico-inline' })}</button>
           <div class="modal-body">
             <div class="chooser-head">
               <button class="chooser-arrow" data-choice-move="-1" ${stopChoice.index === 0 ? "disabled" : ""}
@@ -7619,7 +7623,7 @@
             <div class="settings-btn-row" style="margin-top:14px;">
               ${
                 safeUrl(option.website)
-                  ? `<button class="modal-btn" data-open-maps="${esc(safeUrl(option.website))}">🌐 Website</button>`
+                  ? `<button class="modal-btn" data-open-maps="${esc(safeUrl(option.website))}">${icon('link', { size: 16, cls: 'ico-inline' })} Website</button>`
                   : ""
               }
               <button class="modal-btn" data-open-maps="${esc(
@@ -8013,7 +8017,7 @@
   function suggestionChips(label) {
     return (
       `<div class="section-label">${esc(label)}</div><div class="search-chips">` +
-      `<button class="search-chip search-chip-surprise" data-surprise="1">🎲 Surprise me</button>` +
+      `<button class="search-chip search-chip-surprise" data-surprise="1">${icon('dice', { size: 16, cls: 'ico-inline' })} Surprise me</button>` +
       SEARCH_SUGGESTIONS.map(
         (r) => `<button class="search-chip" data-recent="${esc(r)}">${esc(r)}</button>`
       ).join("") +
@@ -8186,7 +8190,7 @@
       // it belongs here because this is where that realisation happens.
       body += `
         <div class="section-label">Or don't search at all</div>
-        <button class="search-chip search-chip-wide" data-open-idea-search="1">🧭 Suggest me a trip</button>
+        <button class="search-chip search-chip-wide" data-open-idea-search="1">${icon('directions', { size: 16, cls: 'ico-inline' })} Suggest me a trip</button>
         <p class="settings-hint" style="text-align:center;">Say where you're starting and how far you'll go.</p>
       `;
 
@@ -8194,7 +8198,7 @@
       // stretch of coast, the far side of a loch - point at it instead.
       body += `
         <div class="section-label">No name for it?</div>
-        <button class="search-chip search-chip-wide" id="searchMapPick">🗺 Point at it on a map</button>
+        <button class="search-chip search-chip-wide" id="searchMapPick">${icon('map', { size: 16, cls: 'ico-inline' })} Point at it on a map</button>
       `;
       body += `
         <div class="card search-tip">
@@ -8234,8 +8238,8 @@
         body += `<div class="search-filters">
           ${[
             ["all", `All ${results.length}`],
-            ["place", `🏛️ To go ${counts.place}`],
-            ["eat", `🍽️ To eat ${counts.eat}`],
+            ["place", `${icon('castle', { size: 15, cls: 'ico-inline' })} To go ${counts.place}`],
+            ["eat", `${icon('food', { size: 15, cls: 'ico-inline' })} To eat ${counts.eat}`],
           ]
             .map(
               ([k, label]) =>
@@ -8266,7 +8270,7 @@
             <div class="search-result-main">
               <button class="result-tap" data-preview-candidate="${i}">
                 <div class="place-name">${esc(r.name)}${
-                  r.isArea ? ` <span class="area-badge">🏘️ ${esc(prettyCategory(r.type) || "Area")}</span>` : ""
+                  r.isArea ? ` <span class="area-badge">${icon('globe', { size: 13, cls: 'ico-inline' })} ${esc(prettyCategory(r.type) || "Area")}</span>` : ""
                 }${r.aiSuggested ? ` <span class="ai-badge">AI</span>` : ""}${ratingBadge(r)}</div>
                 <div class="place-notes">${esc(r.displayName || "")}</div>
                 ${r.description ? `<div class="place-notes">${esc(r.description)}</div>` : ""}
@@ -8276,7 +8280,7 @@
               </button>
               ${
                 r.sources && r.sources.length
-                  ? `<div class="place-links"><a href="${esc(safeUrl(r.sources[0].uri))}" target="_blank" rel="noopener">🔗 source</a></div>`
+                  ? `<div class="place-links"><a href="${esc(safeUrl(r.sources[0].uri))}" target="_blank" rel="noopener">${icon('link', { size: 14, cls: 'ico-inline' })} source</a></div>`
                   : ""
               }
             </div>
@@ -8293,7 +8297,7 @@
                 r.lat != null
                   ? `<button class="search-around" data-around-candidate="${i}" aria-label="Look around ${esc(
                       r.name
-                    )}">🧭</button>`
+                    )}">${icon('directions', { size: 16 })}</button>`
                   : ""
               }
               ${
@@ -8324,8 +8328,8 @@
           </p>
         `;
       }
-      body += `<p class="settings-hint search-foot">＋ saves it, 🧭 looks around it, or tap the place to read about it first.${
-        results.some((r) => r.isArea) ? " A 🏘️ result is a town or area: saving it gives it its own section." : ""
+      body += `<p class="settings-hint search-foot">＋ saves it, the compass looks around it, or tap the place to read about it first.${
+        results.some((r) => r.isArea) ? " A town-or-area result: saving it gives it its own section." : ""
       }</p>`;
       // When none of it is what you meant. The query says what you are looking
       // for; this says what would make it right, in your own words, and the
@@ -8349,13 +8353,13 @@
 
     searchOverlay.innerHTML = `
       <div class="search-head">
-        <button class="search-back" data-search-close="1" aria-label="Close search">←</button>
+        <button class="search-back" data-search-close="1" aria-label="Close search">${icon('back', { size: 20, cls: 'ico-inline' })}</button>
         <form class="search-field" id="pickSearchForm">
           <input type="text" id="pickSearchInput" placeholder="Search for a place to add…"
                  autocomplete="off" autocorrect="off" value="${esc(pickSearch.query)}" />
           ${
             pickSearch.query
-              ? `<button type="button" class="search-clear" id="searchClear" aria-label="Clear">✕</button>`
+              ? `<button type="button" class="search-clear" id="searchClear" aria-label="Clear">${icon('close', { size: 17, cls: 'ico-inline' })}</button>`
               : ""
           }
         </form>
@@ -8471,7 +8475,7 @@
       <div class="modal-backdrop" data-close="1">
         <div class="modal-sheet" role="dialog" aria-label="${esc(r.name)}">
           <div class="modal-handle"></div>
-          <button class="modal-close" data-close="1" aria-label="Close">✕</button>
+          <button class="modal-close" data-close="1" aria-label="Close">${icon('close', { size: 17, cls: 'ico-inline' })}</button>
           <div class="modal-body">
             <h2 class="modal-title">${esc(r.name)}${
               r.aiSuggested ? ` <span class="ai-badge">AI</span>` : ""
@@ -8493,10 +8497,10 @@
             <div class="settings-btn-row" style="margin-top:12px;">
               ${
                 safeUrl(r.website)
-                  ? `<button class="modal-btn" data-open-maps="${esc(safeUrl(r.website))}">🌐 Website</button>`
+                  ? `<button class="modal-btn" data-open-maps="${esc(safeUrl(r.website))}">${icon('link', { size: 16, cls: 'ico-inline' })} Website</button>`
                   : ""
               }
-              ${mapsUrl ? `<button class="modal-btn" data-open-maps="${esc(mapsUrl)}">📍 Google Maps</button>` : ""}
+              ${mapsUrl ? `<button class="modal-btn" data-open-maps="${esc(mapsUrl)}">${icon('pin', { size: 16, cls: 'ico-inline' })} Google Maps</button>` : ""}
             </div>
 
             ${
@@ -8505,7 +8509,7 @@
                     .slice(0, 2)
                     .map(
                       (s) =>
-                        `<a href="${esc(safeUrl(s.uri))}" target="_blank" rel="noopener">🔗 ${esc(s.title || "source")}</a>`
+                        `<a href="${esc(safeUrl(s.uri))}" target="_blank" rel="noopener">${icon('link', { size: 14, cls: 'ico-inline' })} ${esc(s.title || "source")}</a>`
                     )
                     .join(" ")}</div>`
                 : ""
@@ -8600,7 +8604,7 @@
       <div class="modal-backdrop" data-close="1">
         <div class="modal-sheet" role="dialog" aria-label="Where to search">
           <div class="modal-handle"></div>
-          <button class="modal-close" data-close="1" aria-label="Close">✕</button>
+          <button class="modal-close" data-close="1" aria-label="Close">${icon('close', { size: 17, cls: 'ico-inline' })}</button>
           <div class="modal-body">
             <h2 class="modal-title">Where should I look?</h2>
             <p class="settings-hint">Results outside this are almost always the wrong place with the right name.</p>
@@ -9820,7 +9824,7 @@
 
     mapOverlay.innerHTML = `
       <div class="map-head">
-        <button class="map-close" data-map-close="1" aria-label="Close map">✕</button>
+        <button class="map-close" data-map-close="1" aria-label="Close map">${icon('close', { size: 17, cls: 'ico-inline' })}</button>
         <div class="map-head-text">
           <div class="map-title">${mappable.length} on the map</div>
           ${missing ? `<div class="map-sub">${missing} still without a location</div>` : ""}
@@ -9841,7 +9845,7 @@
       ${
         mappable.length
           ? `<div class="map-foot">
-               <button class="map-open-btn" id="allMapGoogle">↗ ${
+               <button class="map-open-btn" id="allMapGoogle">${icon("external", { size: 16, cls: "ico-inline" })} ${
                  mappable.length === 1 ? "Open in Google Maps" : "Route in Google Maps"
                }</button>
                ${truncated ? `<div class="map-note">Google Maps takes 10 stops — the first 10 are sent.</div>` : ""}
@@ -10005,7 +10009,7 @@
 
     mapOverlay.innerHTML = `
       <div class="map-head">
-        <button class="map-close" data-mappick-close="1" aria-label="Cancel">✕</button>
+        <button class="map-close" data-mappick-close="1" aria-label="Cancel">${icon('close', { size: 17, cls: 'ico-inline' })}</button>
         <div class="map-head-text">
           <div class="map-title">${esc(options.title || "Point at a place")}</div>
           <div class="map-sub">Drag the map — the pin stays in the middle</div>
@@ -10245,8 +10249,8 @@
   let guideOpen = false;
   const KIND_FILTERS = [
     { key: "all", label: "All" },
-    { key: "place", label: "🏛️ To do" },
-    { key: "eat", label: "🍽️ Eat" },
+    { key: "place", label: `${icon('castle', { size: 17, cls: 'ico-inline' })} To do` },
+    { key: "eat", label: `${icon('food', { size: 17, cls: 'ico-inline' })} Eat` },
   ];
 
   // Entry point for the old Places/Eats routes: same screen, filter preset.
@@ -10261,7 +10265,7 @@
 
     let html = `
       <div class="search-trigger-wrap">
-        <span class="search-trigger-icon">🔍</span>
+        <span class="search-trigger-icon" data-ico="search" data-ico-size="19"></span>
         <input class="search-trigger-input" id="pickSearchTrigger" type="text"
                placeholder="Search for a place, town or area…" readonly
                aria-label="Search for a place to add" />
@@ -10296,15 +10300,15 @@
             <li><b>Explore around a place</b> — cafés, museums, playgrounds nearby</li>
             <li><b>Have a trip suggested</b> — say roughly where and how far, get whole routes back</li>
           </ul>
-          <button class="modal-btn modal-btn-primary" data-open-search="1" style="width:100%;margin-top:12px;">🔍 Search for a place</button>
-          <button class="modal-btn" data-open-idea="1" style="width:100%;margin-top:8px;">🧭 Suggest a trip</button>
+          <button class="modal-btn modal-btn-primary" data-open-search="1" style="width:100%;margin-top:12px;">${icon('search', { size: 18, cls: 'ico-inline' })} Search for a place</button>
+          <button class="modal-btn" data-open-idea="1" style="width:100%;margin-top:8px;">${icon('directions', { size: 17, cls: 'ico-inline' })} Suggest a trip</button>
           <p class="settings-hint">Tapping ♡ on a guide suggestion below saves it here too.</p>
         </div>
       `;
     } else if (!picks.length) {
       html += `<div class="card"><p class="pick-status">Nothing saved under that filter yet.</p></div>`;
     } else {
-      html += `<button class="hero-share" id="sharePicks" style="color:var(--navy);border-color:var(--line);background:var(--card);margin:16px 0;">↗ Share my picks</button>`;
+      html += `<button class="hero-share" id="sharePicks" style="color:var(--navy);border-color:var(--line);background:var(--card);margin:16px 0;">${icon('share', { size: 17, cls: 'ico-inline' })} Share my picks</button>`;
 
       // Section order follows the folders list (so a manually reordered/renamed
       // folder stays put), then any leftover city values from before the
@@ -10934,17 +10938,17 @@
                 ${p.address ? `<div class="today-sub">${esc(p.address)}</div>` : ""}
               </div>
             </div>
-            ${p.openingHours ? `<div class="place-fact">🕒 ${esc(p.openingHours)}</div>` : ""}
+            ${p.openingHours ? `<div class="place-fact">${icon('clock', { size: 16, cls: 'ico-inline' })} ${esc(p.openingHours)}</div>` : ""}
             ${
               mayBeClosed
-                ? `<div class="plan-warn">⚠ May be closed today — check before setting off.</div>`
+                ? `<div class="plan-warn">${icon('alert', { size: 15, cls: 'ico-inline' })} May be closed today — check before setting off.</div>`
                 : ""
             }
-            ${p.note ? `<div class="today-note">📝 ${esc(p.note)}</div>` : ""}
+            ${p.note ? `<div class="today-note">${icon('note', { size: 15, cls: 'ico-inline' })} ${esc(p.note)}</div>` : ""}
             <div class="today-actions">
               <button class="modal-btn modal-btn-primary" data-open-maps="${esc(
                 directionsUrl(p, prev)
-              )}">↗ ${leg && leg.driving ? "Drive there" : "Directions"}</button>
+              )}">${leg && leg.driving ? icon("car", { size: 17, cls: "ico-inline" }) : icon("directions", { size: 16, cls: "ico-inline" })} ${leg && leg.driving ? "Drive there" : "Directions"}</button>
               <button class="modal-btn" data-open-pick="${esc(p.id)}">Details</button>
             </div>
           </div>
@@ -11115,6 +11119,32 @@
       t.classList.toggle("active", t.getAttribute("data-view") === name);
     });
     view.scrollTop = 0;
+    paintIcons(view);
+    // Only when the screen has actually changed. Re-running the entrance on
+    // every redraw - and some screens redraw as coordinates arrive - would
+    // make the list flicker under your thumb.
+    if (previous !== name) replayViewEntrance();
+  }
+
+  // Screens arrive rather than appear: the class is removed and re-added so
+  // the animation restarts, which it will not do if the class is already
+  // there. The reflow between the two is the part that makes it work.
+  function replayViewEntrance() {
+    view.classList.remove("switching");
+    void view.offsetWidth;
+    view.classList.add("switching");
+  }
+
+  // Fills every <span data-ico="name"> with its icon. Called after anything
+  // that writes HTML, so markup can ask for an icon by name and never has to
+  // know how one is drawn.
+  function paintIcons(root) {
+    (root || document).querySelectorAll("[data-ico]").forEach((el) => {
+      const name = el.getAttribute("data-ico");
+      if (el.firstElementChild && el.dataset.icoDrawn === name) return;
+      el.innerHTML = icon(name, { size: Number(el.getAttribute("data-ico-size")) || 22 });
+      el.dataset.icoDrawn = name;
+    });
   }
 
   tabbar.querySelectorAll(".tab").forEach((t) => {
@@ -11352,6 +11382,56 @@
     topbarText.setAttribute("role", "button");
     topbarText.setAttribute("aria-label", "Switch board");
   }
+
+  // The chrome carries its icons in markup as data-ico names; this draws them
+  // once at startup. Screens draw their own as they render.
+  paintIcons(document);
+
+  // ---------- The bits that only exist on a phone ----------
+  // A web page in a WebView gives itself away in three places before you have
+  // touched anything: a status bar in somebody else's colour along the top, a
+  // white flash while the page loads, and taps that produce no sensation at
+  // all. None of that is visual design - it is the app admitting what it is.
+  function nativePlugin(name) {
+    const caps = window.Capacitor;
+    return (caps && caps.Plugins && caps.Plugins[name]) || null;
+  }
+
+  function setUpNativeShell() {
+    const bar = nativePlugin("StatusBar");
+    if (bar) {
+      // The status bar has to follow the theme, and follow it when it
+      // changes: dark icons on the light paper, light icons on the dark.
+      const dress = () => {
+        const dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+        try {
+          bar.setStyle({ style: dark ? "DARK" : "LIGHT" });
+          bar.setBackgroundColor({ color: dark ? "#12161b" : "#f7f6f3" });
+        } catch (e) {
+          /* An older WebView without one of these is not worth a broken app. */
+        }
+      };
+      dress();
+      window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", dress);
+    }
+  }
+
+  // A tap that does something you cannot undo, or that confirms something,
+  // gets a short one. Everything else gets nothing: haptics on every button
+  // is the phone equivalent of a beep on every keystroke.
+  function tapFeedback(kind) {
+    const haptics = nativePlugin("Haptics");
+    if (!haptics) return;
+    try {
+      if (kind === "heavy") haptics.notification({ type: "SUCCESS" });
+      else haptics.impact({ style: kind === "medium" ? "MEDIUM" : "LIGHT" });
+    } catch (e) {
+      /* Not every device has a motor, and none of this is load-bearing. */
+    }
+  }
+  window.tapFeedback = tapFeedback;
+
+  setUpNativeShell();
 
   refreshForBoard();
 })();

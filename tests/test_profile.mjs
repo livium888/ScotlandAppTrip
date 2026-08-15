@@ -111,7 +111,9 @@ const mapsBtn = await page.evaluate(() => {
 });
 check('maps button uses the exact CID link', mapsBtn && mapsBtn.url === 'https://www.google.com/maps?cid=15690000382639893418', JSON.stringify(mapsBtn));
 // "Open" means we have Google's exact place id; "Find" means a name search.
-check('maps button label reflects exact place', mapsBtn && /^📍 Open on Google Maps/.test(mapsBtn.label), mapsBtn && mapsBtn.label);
+// The pin was an emoji in the label and is a drawn icon now, so this asks
+// about the wording - which is the half that carries the meaning.
+check('maps button label reflects exact place', mapsBtn && /^Open on Google Maps/.test(mapsBtn.label), mapsBtn && mapsBtn.label);
 check('detail sheet renders address', cardText.includes('Albert Square') || cardText.includes('M2 5DB'));
 check('detail sheet renders hours', cardText.includes('Mo-Fr 09:00-17:00'));
 check('detail sheet renders phone', cardText.includes('+44 161 234 5000'));
