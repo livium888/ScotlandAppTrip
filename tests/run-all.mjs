@@ -53,6 +53,7 @@ const SUITES = [
   "test_mapslink.mjs",
   "test_planpicker.mjs",
   "test_kids.mjs",
+  "test_pastday.mjs",
 ];
 
 const MIME = {

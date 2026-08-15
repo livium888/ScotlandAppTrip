@@ -192,6 +192,10 @@
   function categoryPrompt(key) {
     const custom = loadTripSettings().catPrompts[key];
     if (custom && custom.trim()) return custom.trim();
+    // The one category that must not ask the same thing twice: tapping it
+    // again is the whole interaction, and a fixed prompt would hand back the
+    // same three places for ever.
+    if (key === "surprise") return `${aSurprise()} - and say why it is worth the time`;
     const cat = findCategory(key);
     return cat ? cat.prompt : String(key);
   }
@@ -4812,6 +4816,31 @@
     { key: "pub", label: "Pubs", icon: "🍺", group: "Food & drink", tag: "amenity", value: "pub",
       prompt: "pubs that serve food and allow children" },
 
+    // The asks that never occur to anyone. Every category above names a kind
+    // of place, which is the only thing a map can be asked for - but it is not
+    // how anyone actually decides where to go. These name what you want out of
+    // somewhere instead, and they only work at all because the AI is doing the
+    // finding. The OSM fallbacks are honest guesses, hence approx on all of
+    // them.
+    { key: "comfort", label: "Comfort food", icon: "🥧", group: "Worth asking", tag: "amenity", value: "restaurant", approx: true,
+      prompt: "comfort food - pies, stew, chips, a proper roast, somewhere warm and filling rather than clever" },
+    { key: "locals", label: "Where locals eat", icon: "🍲", group: "Worth asking", tag: "amenity", value: "restaurant", approx: true,
+      prompt: "where local people actually eat rather than where visitors are sent - unshowy, busy with regulars, no tourist menu" },
+    { key: "detour", label: "Worth the detour", icon: "↩️", group: "Worth asking", tag: "tourism", value: "attraction", approx: true,
+      prompt: "somewhere worth going out of your way for, and say plainly what the one thing is that makes it worth it" },
+    { key: "quiet", label: "Somewhere quiet", icon: "🤫", group: "Worth asking", tag: "leisure", value: "park", approx: true,
+      prompt: "somewhere calm and uncrowded to sit or walk, away from coaches and crowds" },
+    { key: "authentic", label: "The real thing", icon: "🪵", group: "Worth asking", tag: "tourism", value: "attraction", approx: true,
+      prompt: "places that are genuinely of this area rather than made for visitors - working, ordinary, still doing what they always did" },
+    { key: "oldest", label: "Older than the rest", icon: "🗿", group: "Worth asking", tag: "historic", value: "yes", approx: true,
+      prompt: "the oldest surviving things around here - the ones that were already there when everything nearby was built" },
+    { key: "late", label: "Open late", icon: "🌙", group: "Worth asking", tag: "amenity", value: "restaurant", approx: true,
+      prompt: "places still open in the evening or late, and say what time they actually stop serving" },
+    { key: "rain", label: "Only if it rains", icon: "☔", group: "Worth asking", tag: "tourism", value: "museum", approx: true,
+      prompt: "things that are better in bad weather than good - indoors, atmospheric, worth a wet afternoon" },
+    { key: "surprise", label: "Surprise me", icon: "🎲", group: "Worth asking", tag: "tourism", value: "attraction", approx: true,
+      prompt: "something unexpected nearby that most visitors never hear about - pick one angle and commit to it, and say why it is worth the time" },
+
     // With a small child in tow
     { key: "softplay", label: "Soft play", icon: "🧸", group: "With a child", tag: "leisure", value: "playground", approx: true,
       prompt: "indoor soft play centres and indoor play barns for young children" },
@@ -4861,7 +4890,7 @@
       prompt: "supermarkets and food shops" },
   ];
 
-  const CATEGORY_GROUPS = ["Food & drink", "With a child", "See & do", "Outdoors", "Practical"];
+  const CATEGORY_GROUPS = ["Worth asking", "Food & drink", "With a child", "See & do", "Outdoors", "Practical"];
 
   function findCategory(key) {
     return NEARBY_CATEGORIES.find((c) => c.key === key) || null;
@@ -7977,6 +8006,21 @@
     return SURPRISES[Math.floor(Math.random() * SURPRISES.length)];
   }
 
+  // The same block wherever searching happens. It used to exist only on the
+  // blank screen, which meant it was gone the moment you searched - and the
+  // moment you most want a different angle is when the results in front of you
+  // are not it.
+  function suggestionChips(label) {
+    return (
+      `<div class="section-label">${esc(label)}</div><div class="search-chips">` +
+      `<button class="search-chip search-chip-surprise" data-surprise="1">🎲 Surprise me</button>` +
+      SEARCH_SUGGESTIONS.map(
+        (r) => `<button class="search-chip" data-recent="${esc(r)}">${esc(r)}</button>`
+      ).join("") +
+      `</div>`
+    );
+  }
+
   function loadRecentSearches() {
     const list = readJson(RECENT_KEY, []);
     return Array.isArray(list) ? list.slice(0, 6) : [];
@@ -8123,8 +8167,12 @@
     let body = "";
 
     if (pickSearch.status === "idle") {
-      // Nothing typed yet, so offer the two things that save typing: what you
-      // searched before, and the kind of thing people search for.
+      // The asks come before the history. Six recent searches is two rows of
+      // chips, and on a phone with the keyboard up that is the whole screen -
+      // so everything worth discovering sat below the fold, on the one screen
+      // whose job is to suggest what to ask for. You already know what you
+      // searched yesterday; that can be the thing you scroll to.
+      body += suggestionChips("Try");
       if (recents.length) {
         body += `<div class="section-label">Recent</div><div class="search-chips">`;
         body += recents
@@ -8132,12 +8180,6 @@
           .join("");
         body += `</div>`;
       }
-      body += `<div class="section-label">Try</div><div class="search-chips">`;
-      body += `<button class="search-chip search-chip-surprise" data-surprise="1">🎲 Surprise me</button>`;
-      body += SEARCH_SUGGESTIONS.map(
-        (r) => `<button class="search-chip" data-recent="${esc(r)}">${esc(r)}</button>`
-      ).join("");
-      body += `</div>`;
 
       // Searching finds one place at a time, which is the wrong tool when you
       // do not yet know what you are looking for. This is the other door, and
@@ -8168,12 +8210,14 @@
       body += `<div class="card"><p class="pick-status">Search failed — check your connection and try again.</p>${
         lastSearchError ? `<pre class="settings-result bad">${esc(lastSearchError)}</pre>` : ""
       }</div>`;
+      body += suggestionChips("Or ask for something else");
     } else if (!results.length) {
       body += `<div class="card"><p class="pick-status">No matches for “${esc(
         pickSearch.query
       )}” — try a shorter or more general name.</p>${
         lastSearchError ? `<pre class="settings-result bad">${esc(lastSearchError)}</pre>` : ""
       }</div>`;
+      body += suggestionChips("Or ask for something else");
     } else {
       if (lastSearchError) {
         body += `<div class="card"><p class="pick-status">Fell back to OpenStreetMap — the AI search didn't answer.</p><pre class="settings-result bad">${esc(
@@ -8298,6 +8342,9 @@
             : ""
         }
       `;
+      // At the bottom of the results, where you end up when they were not
+      // what you wanted.
+      body += suggestionChips("Ask a different way");
     }
 
     searchOverlay.innerHTML = `
@@ -10720,7 +10767,15 @@
   }
 
   // Today's day if the trip is running, otherwise the next one still ahead,
-  // otherwise the first - so the screen is never empty for lack of a match.
+  // otherwise the last one that has been - so the screen is never empty for
+  // lack of a match.
+  //
+  // "Otherwise the first" is what this used to do, and it was wrong in the one
+  // case it existed for. Once every planned day is behind you, the first day is
+  // the furthest in the past: a trip that ended on Tuesday opened on the
+  // previous Thursday and called it "Next up", and it stayed there for good,
+  // because nothing about it changes with the date. Days you plan while trying
+  // the app out land in exactly that state within a couple of days.
   function currentPlanDay() {
     const plan = loadPlan();
     if (!plan.days.length) return null;
@@ -10733,7 +10788,14 @@
     const upcoming = dated.filter((x) => x.date && x.date > now).sort((a, b) => a.date - b.date)[0];
     if (upcoming) return { ...upcoming, isToday: false };
 
-    return { day: plan.days[0], date: dated[0].date, isToday: false };
+    // Everything is behind us: the nearest one is the most recent, not the
+    // oldest, and it is not "next" anything.
+    const past = dated.filter((x) => x.date && x.date < now).sort((a, b) => b.date - a.date)[0];
+    if (past) return { ...past, isToday: false, isPast: true };
+
+    // No day carries a readable date at all - a hand-typed label like
+    // "Arrival". Nothing to work out, so show the first and say no more.
+    return { day: plan.days[0], date: null, isToday: false, undated: true };
   }
 
   // Today was drawn once, when you opened the tab, and never again. Leave the
@@ -10795,8 +10857,9 @@
     const dayCode = dayCodeFromLabel(current.day.label);
     // Was always the first stop of the day, which by mid-afternoon pointed at
     // something finished hours ago - on the one screen meant for use while you
-    // are out of the flat.
-    const nextIdx = nextItemIndex(items, current.isToday, new Date());
+    // are out of the flat. And nothing on a day that has already been is
+    // "next", however early in that day it was.
+    const nextIdx = current.isPast ? -1 : nextItemIndex(items, current.isToday, new Date());
 
     // Weather belongs at the top of Today: it's the one thing that changes a
     // plan before you've left the flat.
@@ -10805,13 +10868,37 @@
     };
     const forecast = forecastForDay(current.day.label, dayWeatherAnchor(current.day.id, redrawToday), redrawToday);
 
+    // What this day is, said plainly. A day behind you is not "Next up", and
+    // being told so is the difference between a screen that looks stuck and
+    // one you can trust about the date.
+    const heading = current.isToday
+      ? "Today"
+      : current.isPast
+        ? "Last planned day"
+        : current.undated
+          ? "Your plan"
+          : "Next up";
+
     let html = `
       <div class="today-head">
-        <div class="today-label">${current.isToday ? "Today" : "Next up"}</div>
+        <div class="today-label">${heading}</div>
         <div class="today-date">${esc(current.day.label)}</div>
       </div>
       ${weatherLine(forecast)}
     `;
+
+    // Nothing ahead of you, so the screen says what it is looking at and
+    // offers the only thing worth doing from here: a day for today.
+    if (current.isPast) {
+      html += `
+        <div class="card today-over">
+          <p class="pick-status">Nothing planned for today — this is the most recent day you had planned${
+            current.date ? `, ${daysAgoLabel(current.date)}` : ""
+          }.</p>
+          <button class="modal-btn modal-btn-primary" id="todayAddDay">＋ Add today to the plan</button>
+        </div>
+      `;
+    }
 
     if (!items.length) {
       html += `
@@ -10828,7 +10915,7 @@
         const leg = walkLeg(prev, p);
         const mayBeClosed = closedOnDay(p.openingHours, dayCode);
         const isNext = idx === nextIdx;
-        const done = current.isToday && (nextIdx < 0 || idx < nextIdx);
+        const done = (current.isToday || current.isPast) && (nextIdx < 0 || idx < nextIdx);
 
         if (leg && leg.mins >= 5) {
           html += `<div class="today-leg">${legLabel(leg)}</div>`;
@@ -10873,7 +10960,29 @@
     view.querySelectorAll("[data-open-pick]").forEach((btn) =>
       btn.addEventListener("click", () => openPickDetail(btn.getAttribute("data-open-pick")))
     );
+    const addToday = document.getElementById("todayAddDay");
+    if (addToday) {
+      addToday.addEventListener("click", () => {
+        ensureDayFor(new Date());
+        todayShown = "";
+        renderToday();
+        toast("Today added to the plan");
+      });
+    }
     wireRainyDayButtons();
+  }
+
+  // "two days ago" rather than a date, because the point being made is how
+  // long it has been, not which day it was - the label above already says that.
+  function daysAgoLabel(date) {
+    const midnight = new Date();
+    midnight.setHours(0, 0, 0, 0);
+    const days = Math.round((midnight - date) / 864e5);
+    if (days <= 0) return "today";
+    if (days === 1) return "yesterday";
+    if (days < 14) return `${days} days ago`;
+    if (days < 60) return `${Math.round(days / 7)} weeks ago`;
+    return "a while ago";
   }
 
   // A wet forecast is only useful if it leads somewhere. This drops you into

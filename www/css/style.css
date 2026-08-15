@@ -2010,6 +2010,10 @@ button, select, input[type="text"], input[type="file"] { font-family: inherit; }
 
 /* ---------- Today ---------- */
 .today-head { margin-bottom: 14px; }
+/* Shown when every planned day is behind you: says so, and offers the one
+   thing worth doing from there. */
+.today-over { margin-bottom: 14px; }
+.today-over .modal-btn { margin-top: 10px; }
 .today-label {
   font-size: 12px;
   font-weight: 700;
