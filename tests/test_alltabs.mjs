@@ -108,8 +108,16 @@ const budgetText = await text();
 check('every saved place is listed in the budget', /Castlerigg/.test(budgetText) && /Dog and Gun/.test(budgetText), budgetText.slice(0, 200));
 check('no Scotland estimate on a board that never had one', !/Wallace Monument|Estimated budget|Scotland estimate/i.test(budgetText), budgetText.slice(0, 200));
 
+// Pricing is a tap on the line then a number, rather than a grid of empty
+// boxes - nobody filled those in, which is why the screen estimates itself
+// now and only asks when you disagree with it.
 await page.evaluate(() => {
-  const input = document.querySelector('[data-pick-cost]');
+  const rows = Array.from(document.querySelectorAll('[data-budget-open]'));
+  (rows.find((r) => /Castlerigg/.test(r.textContent)) || rows[0]).click();
+});
+await page.waitForSelector('[data-budget-edit]');
+await page.evaluate(() => {
+  const input = document.querySelector('[data-budget-edit]');
   input.value = '12';
   input.dispatchEvent(new Event('blur'));
 });

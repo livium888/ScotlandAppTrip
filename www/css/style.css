@@ -2926,3 +2926,110 @@ html, body {
 .pick-row:active { transform: scale(0.985); background: var(--surface-2); }
 .pick-row-chevron { color: var(--text-muted); opacity: 0.55; }
 .search-trigger-icon { display: flex; align-items: center; color: var(--text-muted); }
+
+/* ---------- One order, said out loud ---------- */
+/* The old sort row was four unlabelled chips whose choice was saved but never
+   explained, so the list came back in a different order from the one you left
+   it in for no visible reason. */
+.order-bar { margin: 4px 0 12px; }
+.order-chips { display: flex; gap: 7px; overflow-x: auto; scrollbar-width: none; padding-bottom: 2px; }
+.order-chips::-webkit-scrollbar { display: none; }
+.order-chip {
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 550;
+  padding: 8px 14px;
+  border-radius: 999px;
+  min-height: 38px;
+  transition: transform var(--fast) var(--ease), background var(--fast) var(--ease),
+    color var(--fast) var(--ease), border-color var(--fast) var(--ease);
+}
+.order-chip:active { transform: scale(0.95); }
+.order-chip.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+  font-weight: 650;
+}
+.order-note { margin: 7px 2px 0; font-size: 12px; color: var(--text-muted); }
+
+/* Section headings stay put while their section scrolls past, so you always
+   know which day or which town you are looking at. */
+.section-label.list-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 18px 0 8px;
+  padding: 7px 2px;
+  background: var(--bg);
+}
+.list-head-count {
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0;
+  color: var(--text-muted);
+  background: var(--surface-2);
+  border-radius: 999px;
+  padding: 2px 8px;
+  min-width: 22px;
+  text-align: center;
+}
+.hero-share { width: 100%; }
+
+/* ---------- Budget: a number the app worked out ---------- */
+.budget-card { padding: 4px 0; }
+.budget-line {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  font-family: inherit;
+  text-align: left;
+  padding: 13px 16px;
+  transition: background var(--fast) var(--ease);
+}
+.budget-card .budget-line:last-child { border-bottom: none; }
+.budget-line:active { background: var(--surface-2); }
+.budget-line-main { min-width: 0; display: block; }
+.budget-line-name { display: block; font-size: 15px; font-weight: 550; color: var(--text); }
+.budget-line-note { display: block; font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+.budget-line-right { flex-shrink: 0; text-align: right; }
+.budget-line-amount { display: block; font-size: 15px; font-weight: 650; color: var(--text); }
+/* Where the number came from, on every line. An estimate that does not admit
+   to being one is just a wrong number. */
+.budget-tag {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.03em;
+  margin-top: 3px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-muted);
+}
+.budget-tag.yours { background: var(--accent-soft); color: var(--accent); }
+.budget-unknown-head {
+  font-size: 11.5px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  padding: 14px 16px 6px;
+  border-top: 1px solid var(--border);
+}
+.budget-hero { text-align: center; padding: 22px 16px; }
+.budget-hero-total { font-size: 34px; font-weight: 700; letter-spacing: -0.03em; color: var(--text); }
+.budget-hero-sub { font-size: 13px; color: var(--text-muted); margin-top: 6px; line-height: 1.45; }

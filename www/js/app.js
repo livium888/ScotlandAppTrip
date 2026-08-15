@@ -850,6 +850,203 @@
     localStorage.setItem(boardKey(activeBoard().id, "budget"), JSON.stringify(rows));
   }
 
+  // ---------- A budget that fills itself in ----------
+  // It was a spreadsheet: one row per saved place, each with an empty number
+  // box, plus a form for anything else. Nobody types a number into forty
+  // boxes on a phone, so the screen showed £0 for ever and the tab was dead
+  // weight.
+  //
+  // Everything on it is already knowable. The trip has days in it, the days
+  // have places in them, the places have coordinates, and what a castle or a
+  // pub lunch costs for a family is exactly the kind of ordinary fact the
+  // model already has. So the app works it out, says out loud that it is an
+  // estimate and where each number came from, and lets you correct any line -
+  // at which point your number wins, permanently.
+  function loadBudgetEstimate() {
+    const e = readJson(boardKey(activeBoard().id, "budget-est"), null);
+    return e && typeof e === "object" ? e : null;
+  }
+
+  function saveBudgetEstimate(est) {
+    localStorage.setItem(boardKey(activeBoard().id, "budget-est"), JSON.stringify(est));
+  }
+
+  // Miles you will actually drive, taken from the plan rather than guessed:
+  // the legs between consecutive stops on each day, plus the same distance
+  // back at the end of it, because you have to get home.
+  function planDrivingMiles() {
+    const plan = loadPlan();
+    const byId = {};
+    loadPicks().forEach((p) => (byId[p.id] = p));
+    let km = 0;
+    plan.days.forEach((d) => {
+      const stops = itemsInDayOrder(planItems(plan, d.id))
+        .map((it) => byId[it.pickId])
+        .filter((p) => p && p.lat != null);
+      for (let i = 1; i < stops.length; i++) {
+        km += haversineKm(stops[i - 1].lat, stops[i - 1].lon, stops[i].lat, stops[i].lon) * ROAD_FACTOR;
+      }
+      if (stops.length > 1) {
+        km += haversineKm(stops[0].lat, stops[0].lon, stops[stops.length - 1].lat, stops[stops.length - 1].lon) *
+          ROAD_FACTOR;
+      }
+    });
+    return Math.round(km * 0.621371);
+  }
+
+  function budgetPrompt(names, days, miles) {
+    const s = loadTripSettings();
+    const who = s.travellers.trim() || "two adults";
+    return (
+      `Typical 2026 UK visitor costs, in pounds, for: ${who}.\n` +
+      `Destination: ${s.destination || "Scotland"}. Trip length: ${days || 1} day(s).` +
+      (miles ? ` Roughly ${miles} miles of driving in total.` : "") +
+      `\n\nFor each place listed below give the realistic total cost for this group to visit ` +
+      `once - admission for everyone, or a typical spend if it is somewhere to eat or drink. ` +
+      `Use 0 where entry is genuinely free. Give a low and a high, and keep the gap honest ` +
+      `rather than wide for safety.\n\nPlaces:\n` +
+      names.map((n) => `- ${n}`).join("\n") +
+      `\n\nReply as JSON only:\n` +
+      `{"places":[{"name":"exactly as listed","low":0,"high":0,"note":"a few words, e.g. free, or family ticket"}],` +
+      `"foodPerDay":{"low":0,"high":0,"note":""},` +
+      `"fuelTotal":{"low":0,"high":0,"note":""},` +
+      `"stayPerNight":{"low":0,"high":0,"note":""}}\n` +
+      `foodPerDay is for the whole group for one day, eating the way visitors normally do. ` +
+      `fuelTotal covers the driving above for the whole trip. stayPerNight is a mid-range ` +
+      `place for this group. No other text.`
+    );
+  }
+
+  function num(v) {
+    const n = Number(v);
+    return Number.isFinite(n) && n >= 0 ? n : 0;
+  }
+
+  function normaliseBudget(raw) {
+    const range = (r) => ({ low: num(r && r.low), high: Math.max(num(r && r.low), num(r && r.high)), note: (r && r.note) || "" });
+    const places = {};
+    (Array.isArray(raw && raw.places) ? raw.places : []).forEach((p) => {
+      if (!p || !p.name) return;
+      places[String(p.name).toLowerCase()] = range(p);
+    });
+    return {
+      places,
+      foodPerDay: range(raw && raw.foodPerDay),
+      fuelTotal: range(raw && raw.fuelTotal),
+      stayPerNight: range(raw && raw.stayPerNight),
+      at: Date.now(),
+    };
+  }
+
+  let budgetWorking = false;
+  // Which line is open for you to type your own number into, if any.
+  let budgetEditing = null;
+
+  async function estimateBudget() {
+    const key = loadTripSettings().geminiKey.trim();
+    if (!key) {
+      toast("Add your AI key in Settings first");
+      return;
+    }
+    const picks = loadPicks().filter((p) => !p.major);
+    const days = loadPlan().days.length;
+    const miles = planDrivingMiles();
+    budgetWorking = true;
+    renderBudget();
+    try {
+      const { text } = await callGemini(key, budgetPrompt(picks.map((p) => p.name), days, miles), {
+        json: true,
+        maxTokens: 4096,
+      });
+      const parsed = extractJson(text);
+      if (!parsed || typeof parsed !== "object") throw new Error("no usable answer");
+      const est = normaliseBudget(parsed);
+      est.days = days;
+      est.miles = miles;
+      saveBudgetEstimate(est);
+      toast("Costed the trip");
+    } catch (e) {
+      toast(`Couldn't work it out — ${e && e.message ? e.message : "try again"}`);
+    } finally {
+      budgetWorking = false;
+      renderBudget();
+    }
+  }
+
+  // Assembles what the screen shows: every line, where its number came from,
+  // and whether you have overridden it. A price you typed always wins.
+  function budgetLines() {
+    const est = loadBudgetEstimate();
+    const picks = loadPicks().filter((p) => !p.major);
+    const plan = loadPlan();
+    const nights = Math.max(0, plan.days.length - 1);
+    const extras = loadBudgetExtras();
+
+    const places = picks.map((p) => {
+      const mine = pickCost(p);
+      const guess = est && est.places[p.name.toLowerCase()];
+      return {
+        id: p.id,
+        name: p.name,
+        low: mine || (guess ? guess.low : 0),
+        high: mine || (guess ? guess.high : 0),
+        note: mine ? "your price" : guess ? guess.note : "",
+        source: mine ? "yours" : guess ? "estimate" : "unknown",
+      };
+    });
+
+    const trip = [];
+    if (est) {
+      if (plan.days.length && est.foodPerDay.high) {
+        trip.push({
+          key: "food",
+          name: `Eating, ${plan.days.length} day${plan.days.length === 1 ? "" : "s"}`,
+          low: est.foodPerDay.low * plan.days.length,
+          high: est.foodPerDay.high * plan.days.length,
+          note: est.foodPerDay.note || `${money(est.foodPerDay.low)}–${money(est.foodPerDay.high)} a day`,
+          source: "estimate",
+        });
+      }
+      if (est.fuelTotal.high) {
+        trip.push({
+          key: "fuel",
+          name: "Getting about",
+          low: est.fuelTotal.low,
+          high: est.fuelTotal.high,
+          note: est.miles ? `about ${est.miles} miles of driving in the plan` : est.fuelTotal.note,
+          source: "estimate",
+        });
+      }
+      if (nights && est.stayPerNight.high) {
+        trip.push({
+          key: "stay",
+          name: `Somewhere to stay, ${nights} night${nights === 1 ? "" : "s"}`,
+          low: est.stayPerNight.low * nights,
+          high: est.stayPerNight.high * nights,
+          note: est.stayPerNight.note || `${money(est.stayPerNight.low)}–${money(est.stayPerNight.high)} a night`,
+          source: "estimate",
+        });
+      }
+    }
+
+    // An override on a trip-level line is stored as an ordinary extra with a
+    // reserved name, so there is one place where "what you told us" lives.
+    const overrides = {};
+    extras.forEach((r) => {
+      if (r.overrides) overrides[r.overrides] = Number(r.amount) || 0;
+    });
+    trip.forEach((line) => {
+      if (overrides[line.key] !== undefined) {
+        line.low = line.high = overrides[line.key];
+        line.note = "your price";
+        line.source = "yours";
+      }
+    });
+
+    const own = extras.filter((r) => !r.overrides);
+    return { places, trip, own, est };
+  }
+
   // The packing list used to be one global list of fixed Scottish items with
   // only its ticks stored. It's now per board and fully editable - a
   // three-day city break and a week in the Highlands need different lists.
@@ -2851,43 +3048,46 @@
       return;
     }
 
-    // Nearest first when there is somewhere to measure from, because with a
-    // tired child the question is which of these is closest.
-    const origin = sortOrigin();
-    const sorted = origin
-      ? mine
-          .slice()
-          .sort(
-            (a, b) =>
-              (a.lat == null ? Infinity : haversineKm(origin.lat, origin.lon, a.lat, a.lon)) -
-              (b.lat == null ? Infinity : haversineKm(origin.lat, origin.lon, b.lat, b.lon))
-          )
-      : mine;
+    // Ordered by the same control as Picks, for the same reason: this is the
+    // same list of saved places, and having it arrange itself one way here and
+    // another way there is most of what made the two screens hard to read
+    // against each other. It was always nearest-first, from an origin nothing
+    // on screen named.
+    const sortKey = mine.length > 2 ? loadSort() : "area";
+    if (mine.length > 2) html += renderSortRow(sortKey);
 
-    html += `<div class="section-label">Marked for the kids</div>`;
-    sorted.forEach((p) => {
-      const away =
-        origin && p.lat != null ? formatDistance(haversineKm(origin.lat, origin.lon, p.lat, p.lon)) : "";
-      const days = onDays[p.id] || [];
-      html += `
-        <div class="kids-row">
-          <button class="kids-row-main" data-open-pick="${esc(p.id)}">
-            <span class="kids-row-name">${esc(p.name)}</span>
-            <span class="kids-row-meta">${esc(
-              [p.city, p.category, away].filter(Boolean).join(" · ")
-            )}</span>
-            ${
-              days.length
-                ? `<span class="kids-row-days">${days.map((d) => `<span class="row-badge day">${esc(d)}</span>`).join("")}</span>`
-                : ""
-            }
-          </button>
-          <div class="kids-row-actions">
-            <button class="search-around" data-kid-day="${esc(p.id)}" aria-label="Put ${esc(p.name)} on a day">📅</button>
-            <button class="search-around" data-kid-off="${esc(p.id)}" aria-label="Not one for the kids">${icon('close', { size: 17, cls: 'ico-inline' })}</button>
+    groupPicks(mine, sortKey).forEach((s) => {
+      html += `<div class="section-label list-head"><span>${esc(s.label)}</span><span class="list-head-count">${
+        s.count
+      }</span></div>`;
+      s.rows.forEach((r) => {
+        const p = r.pick;
+        const days = sortKey === "day" && !s.loose ? [] : onDays[p.id] || [];
+        const meta = [r.meta, r.away].filter(Boolean).join(" · ");
+        html += `
+          <div class="kids-row">
+            <button class="kids-row-main" data-open-pick="${esc(p.id)}">
+              <span class="kids-row-name">${esc(p.name)}</span>
+              ${meta ? `<span class="kids-row-meta">${esc(meta)}</span>` : ""}
+              ${
+                days.length
+                  ? `<span class="kids-row-days">${days
+                      .map((d) => `<span class="row-badge day">${esc(d)}</span>`)
+                      .join("")}</span>`
+                  : ""
+              }
+            </button>
+            <div class="kids-row-actions">
+              <button class="search-around" data-kid-day="${esc(p.id)}" aria-label="Put ${esc(
+                p.name
+              )} on a day">${icon("calendarPlus", { size: 17 })}</button>
+              <button class="search-around" data-kid-off="${esc(
+                p.id
+              )}" aria-label="Not one for the kids">${icon("close", { size: 17 })}</button>
+            </div>
           </div>
-        </div>
-      `;
+        `;
+      });
     });
 
     view.innerHTML = html;
@@ -2901,6 +3101,14 @@
       btn.addEventListener("click", () => {
         openSearchOverlay(btn.getAttribute("data-kid-search"));
         runSearch(btn.getAttribute("data-kid-search"));
+      })
+    );
+    // The same control as Picks, and the same saved choice - so the two
+    // screens agree about what order this list is in.
+    view.querySelectorAll("[data-sort]").forEach((btn) =>
+      btn.addEventListener("click", () => {
+        saveSort(btn.getAttribute("data-sort"));
+        renderKids();
       })
     );
     view.querySelectorAll("[data-open-pick]").forEach((btn) =>
@@ -4412,16 +4620,30 @@
   // The list was in whatever order things happened to be saved, which is the
   // one order that means nothing by the time there are twenty of them.
   const SORT_KEY = "places-sort-v1";
+  // Ordering used to be two systems fighting each other. Places were grouped
+  // into sections by town, in whatever order the folders happened to be
+  // created, and *then* sorted inside each section by a separate chip. So
+  // "Nearest" meant nearest within a town, while the towns themselves sat in
+  // an arbitrary order; "By day" scattered Monday's stops across five
+  // sections; and the chip was a saved preference, so the list came back in a
+  // different order from the one you left it in, for no visible reason.
+  //
+  // One control now, and the chosen order decides the sections as well as the
+  // rows - so what you pick is what you see, top to bottom, with nothing else
+  // quietly rearranging it underneath.
   const SORTS = [
-    { key: "recent", label: "Newest" },
-    { key: "name", label: "A–Z" },
-    { key: "near", label: "Nearest" },
-    { key: "day", label: "By day" },
+    { key: "area", label: "By area", note: "Grouped by town, A–Z inside" },
+    { key: "day", label: "By day", note: "In the order you'll do them" },
+    { key: "near", label: "Nearest", note: "One list, closest first" },
+    { key: "recent", label: "Just added", note: "One list, newest first" },
   ];
 
   function loadSort() {
-    const v = readJson(SORT_KEY, "recent");
-    return SORTS.some((s) => s.key === v) ? v : "recent";
+    const v = readJson(SORT_KEY, "area");
+    // "name" was a mode of its own before ordering and grouping were the same
+    // decision; it is how every grouped list is sorted inside a section now.
+    if (v === "name") return "area";
+    return SORTS.some((s) => s.key === v) ? v : "area";
   }
 
   function saveSort(key) {
@@ -4479,6 +4701,122 @@
       });
     }
     return copy.sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0));
+  }
+
+  // ---------- One list, ordered one way ----------
+  // Both Picks and Kids are a list of saved places, and both were arranging
+  // them differently and badly. This is the single answer: given a list and a
+  // chosen order, hand back the sections to draw, in the order to draw them.
+  //
+  // Two of the four modes have no sections at all, and that is the point - a
+  // flat list is what "nearest" and "just added" mean. Cutting either into
+  // towns would put a place 2 miles away below a heading three screens down.
+  function groupPicks(list, mode, options) {
+    const opts = options || {};
+    const origin = mode === "near" ? opts.origin || sortOrigin() : null;
+    const away = (p) =>
+      origin && p.lat != null && p.id !== origin.id
+        ? formatDistance(haversineKm(origin.lat, origin.lon, p.lat, p.lon))
+        : null;
+    const byName = (a, b) => a.name.localeCompare(b.name, "en-GB");
+
+    if (mode === "near") {
+      const sorted = list.slice().sort((a, b) => {
+        // Somewhere with no coordinates is not nearby, it is unknown, so it
+        // sinks rather than claiming a place in the order.
+        if (a.lat == null) return b.lat == null ? byName(a, b) : 1;
+        if (b.lat == null) return -1;
+        return (
+          haversineKm(origin.lat, origin.lon, a.lat, a.lon) -
+          haversineKm(origin.lat, origin.lon, b.lat, b.lon)
+        );
+      });
+      return [
+        {
+          label: origin ? `Closest to ${origin.name}` : "Closest first",
+          count: sorted.length,
+          rows: sorted.map((p) => ({ pick: p, away: away(p), meta: p.city })),
+        },
+      ];
+    }
+
+    if (mode === "recent") {
+      const sorted = list.slice().sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0));
+      return [
+        {
+          label: "Newest first",
+          count: sorted.length,
+          rows: sorted.map((p) => ({ pick: p, meta: p.city })),
+        },
+      ];
+    }
+
+    if (mode === "day") {
+      const plan = loadPlan();
+      const placed = {};
+      const sections = plan.days.map((d) => {
+        const items = itemsInDayOrder(planItems(plan, d.id));
+        const rows = [];
+        items.forEach((it) => {
+          const p = list.find((x) => x.id === it.pickId);
+          if (!p) return;
+          placed[p.id] = true;
+          rows.push({ pick: p, meta: [it.time, p.city].filter(Boolean).join(" · ") });
+        });
+        return { label: shortDayLabel(d.label), full: d.label, count: rows.length, rows };
+      });
+      // Everything not on a day yet, last - which is where the work is, and
+      // the reason to be on this screen at all.
+      const loose = list.filter((p) => !placed[p.id]).sort(byName);
+      if (loose.length) {
+        sections.push({
+          label: "Not on a day yet",
+          count: loose.length,
+          rows: loose.map((p) => ({ pick: p, meta: p.city })),
+          loose: true,
+        });
+      }
+      return sections.filter((s) => s.rows.length);
+    }
+
+    // By area. Sections follow the folders list so a renamed or reordered
+    // folder stays put, then any town value predating folders, then Unsorted.
+    const order = loadFolders().slice();
+    list.forEach((p) => {
+      if (p.city && !order.includes(p.city)) order.push(p.city);
+    });
+    order.push("Unsorted");
+    const groups = {};
+    order.forEach((c) => (groups[c] = []));
+    list.forEach((p) => (groups[p.city] || groups.Unsorted).push(p));
+    return order
+      .filter((c) => groups[c] && groups[c].length)
+      .map((c) => ({
+        label: c,
+        area: c,
+        count: groups[c].length,
+        rows: groups[c].sort(byName).map((p) => ({ pick: p, meta: p.category })),
+      }));
+  }
+
+  // The control that chooses it. One row, always visible, always saying which
+  // one is on - it was a saved preference with no label, so the list order
+  // changed between visits with nothing on screen to explain why.
+  function renderSortRow(mode) {
+    const current = SORTS.find((s) => s.key === mode) || SORTS[0];
+    return `
+      <div class="order-bar">
+        <div class="order-chips">
+          ${SORTS.map(
+            (s) =>
+              `<button class="order-chip${s.key === mode ? " on" : ""}" data-sort="${s.key}">${esc(
+                s.label
+              )}</button>`
+          ).join("")}
+        </div>
+        <p class="order-note">${esc(current.note)}</p>
+      </div>
+    `;
   }
 
   // renderPlaces / renderEats / renderPlaceTab lived here. They rendered the
@@ -4553,58 +4891,125 @@
   // every place can carry a cost, and anything that isn't a place (trains,
   // the flat) goes in as its own line.
   function renderBudget() {
-    const picks = loadPicks();
-    const extras = loadBudgetExtras();
+    const { places, trip, own, est } = budgetLines();
     const board = activeBoard();
+    const priced = places.filter((l) => l.source !== "unknown");
+    const unknown = places.filter((l) => l.source === "unknown");
+    const ownTotal = own.reduce((a, r) => a + (Number(r.amount) || 0), 0);
+    const low = priced.reduce((a, l) => a + l.low, 0) + trip.reduce((a, l) => a + l.low, 0) + ownTotal;
+    const high = priced.reduce((a, l) => a + l.high, 0) + trip.reduce((a, l) => a + l.high, 0) + ownTotal;
+    const days = loadPlan().days.length;
 
-    const placesTotal = picks.reduce((a, p) => a + pickCost(p), 0);
-    const extrasTotal = extras.reduce((a, r) => a + (Number(r.amount) || 0), 0);
-    const total = placesTotal + extrasTotal;
-    const priced = picks.filter((p) => pickCost(p) > 0);
-
+    // The number, said as a range, because a single figure to the penny would
+    // be a more confident claim than anything here can support.
     let html = `
       <div class="card budget-hero">
-        <div class="budget-hero-total">${money(total)}</div>
+        <div class="budget-hero-total">${low === high ? money(low) : `${money(low)}–${money(high)}`}</div>
         <div class="budget-hero-sub">${
-          priced.length || extras.length
-            ? `${priced.length} place${priced.length === 1 ? "" : "s"} priced${
-                extras.length ? ` · ${extras.length} other cost${extras.length === 1 ? "" : "s"}` : ""
+          !est && !priced.length && !own.length
+            ? "Nothing costed yet"
+            : `${[
+                places.length
+                  ? `${priced.length} of ${places.length} place${places.length === 1 ? "" : "s"} costed`
+                  : "",
+                trip.length ? "food, travel and beds" : "",
+                own.length ? `${own.length} of your own` : "",
+              ]
+                .filter(Boolean)
+                .join(" · ")}${
+                // The middle of the range, not the top of it: quoting the
+                // worst case as "a day" makes every trip look unaffordable.
+                days ? ` · around ${money(Math.round((low + high) / 2 / days))} a day` : ""
               }`
-            : "Nothing costed yet"
         }</div>
       </div>
     `;
 
-    html += `<div class="section-label">Places</div>`;
-    if (!picks.length) {
-      html += `<div class="card"><p class="pick-status">No places saved on this board yet. Anything you add in Picks can carry a price here.</p></div>`;
-    } else {
-      html += `<div class="card">`;
-      picks.forEach((p) => {
-        html += `
-          <div class="budget-row">
-            <div class="budget-item">${esc(p.name)}${
-              p.booked ? ` <span class="booked-badge">booked</span>` : ""
-            }</div>
-            <div class="budget-input-wrap">
-              <span class="budget-currency">£</span>
-              <input class="budget-input" type="number" inputmode="decimal" min="0" step="0.5"
-                     placeholder="0" value="${pickCost(p) ? esc(String(pickCost(p))) : ""}"
-                     data-pick-cost="${esc(p.id)}" aria-label="Cost for ${esc(p.name)}" />
-            </div>
-          </div>
-        `;
-      });
+    if (!est) {
       html += `
-        <div class="budget-total"><b>Places</b><span class="budget-range">${money(placesTotal)}</span></div>
-      </div>`;
+        <div class="card">
+          <h2>Let it work the trip out</h2>
+          <p>It reads the places you've saved, the days you've planned and the driving between
+             them, then estimates what the lot comes to for ${esc(
+               loadTripSettings().travellers.trim() || "your group"
+             )}. Every line says where its number came from, and you can correct any of them.</p>
+          <button class="modal-btn modal-btn-primary" id="budgetEstimate" style="width:100%;margin-top:12px;">${
+            budgetWorking ? "Working it out…" : `${icon("sparkle", { size: 17, cls: "ico-inline" })} Cost my trip`
+          }</button>
+        </div>
+      `;
     }
 
-    html += `<div class="section-label">Other costs</div><div class="card">`;
-    if (!extras.length) {
-      html += `<p class="pick-status">Travel, accommodation, anything that isn't a place.</p>`;
+    // Tapping a line opens it for editing in place. No dialog: a browser
+    // prompt() in a WebView is the app admitting it is a web page, which is
+    // the whole thing we are trying to stop doing.
+    const line = (l, kind, ref) => {
+      const editing = budgetEditing === `${kind}:${ref}`;
+      if (editing) {
+        return `
+          <div class="budget-line editing">
+            <span class="budget-line-main">
+              <span class="budget-line-name">${esc(l.name)}</span>
+              <span class="budget-line-note">Your price, or empty for the estimate</span>
+            </span>
+            <span class="budget-line-right">
+              <span class="budget-input-wrap">
+                <span class="budget-currency">£</span>
+                <input class="budget-input" type="number" inputmode="decimal" min="0" step="1"
+                       value="${l.source === "yours" ? esc(String(l.low)) : ""}"
+                       data-budget-edit="${esc(kind)}|${esc(String(ref))}"
+                       aria-label="Your price for ${esc(l.name)}" />
+              </span>
+            </span>
+          </div>
+        `;
+      }
+      return `
+        <button class="budget-line" data-budget-open="${esc(kind)}|${esc(String(ref))}">
+          <span class="budget-line-main">
+            <span class="budget-line-name">${esc(l.name)}</span>
+            ${l.note ? `<span class="budget-line-note">${esc(l.note)}</span>` : ""}
+          </span>
+          <span class="budget-line-right">
+            <span class="budget-line-amount">${
+              l.source === "unknown" ? "—" : l.low === l.high ? money(l.low) : `${money(l.low)}–${money(l.high)}`
+            }</span>
+            <span class="budget-tag ${l.source}">${
+              l.source === "yours" ? "yours" : l.source === "estimate" ? "est." : "tap to price"
+            }</span>
+          </span>
+        </button>
+      `;
+    };
+
+    if (trip.length) {
+      html += `<div class="section-label list-head"><span>The trip itself</span></div><div class="card budget-card">`;
+      trip.forEach((l) => (html += line(l, "trip", l.key)));
+      html += `</div>`;
     }
-    extras.forEach((r, i) => {
+
+    if (places.length) {
+      html += `<div class="section-label list-head"><span>Places</span><span class="list-head-count">${places.length}</span></div>`;
+      html += `<div class="card budget-card">`;
+      priced.forEach((l) => (html += line(l, "pick", l.id)));
+      if (unknown.length) {
+        html += `<div class="budget-unknown-head">${unknown.length} not costed</div>`;
+        unknown.forEach((l) => (html += line(l, "pick", l.id)));
+      }
+      html += `</div>`;
+      if (est) {
+        html += `<button class="modal-btn" id="budgetEstimate" style="width:100%;">${
+          budgetWorking ? "Working it out…" : `${icon("refresh", { size: 16, cls: "ico-inline" })} Work it out again`
+        }</button>`;
+      }
+    }
+
+    html += `<div class="section-label list-head"><span>Anything else</span></div><div class="card budget-card">`;
+    if (!own.length) {
+      html += `<p class="pick-status">Ferries, a booking you've already paid for, whatever the app can't know about.</p>`;
+    }
+    own.forEach((r) => {
+      const i = loadBudgetExtras().indexOf(r);
       html += `
         <div class="budget-row">
           <div class="budget-item">${esc(r.item)}</div>
@@ -4612,45 +5017,77 @@
             <span class="budget-currency">£</span>
             <input class="budget-input" type="number" inputmode="decimal" min="0" step="1"
                    value="${esc(String(r.amount || ""))}" data-extra-amount="${i}" aria-label="Amount for ${esc(r.item)}" />
-            <button class="budget-remove" data-extra-remove="${i}" aria-label="Remove ${esc(r.item)}">${icon('close', { size: 17, cls: 'ico-inline' })}</button>
+            <button class="budget-remove" data-extra-remove="${i}" aria-label="Remove ${esc(r.item)}">${icon("close", { size: 17 })}</button>
           </div>
         </div>
       `;
     });
     html += `
       <form class="budget-add" id="budgetAddForm">
-        <input type="text" id="budgetAddItem" placeholder="e.g. train tickets" autocomplete="off" />
+        <input type="text" id="budgetAddItem" placeholder="e.g. ferry tickets" autocomplete="off" />
         <input type="number" id="budgetAddAmount" inputmode="decimal" min="0" step="1" placeholder="£" />
         <button type="submit" aria-label="Add cost">+</button>
       </form>
-      ${
-        extras.length
-          ? `<div class="budget-total"><b>Other</b><span class="budget-range">${money(extrasTotal)}</span></div>`
-          : ""
-      }
     </div>`;
+
+    if (est) {
+      html += `<p class="settings-hint">Estimated ${esc(
+        daysAgoLabel(new Date(est.at))
+      )} for ${esc(loadTripSettings().travellers.trim() || "your group")}. Tap any line to put your own price on it.</p>`;
+    }
 
     if (board.hasGuide) {
       const bLow = BUDGET.reduce((a, b) => a + b.low, 0);
       const bHigh = BUDGET.reduce((a, b) => a + b.high, 0);
-      html += `<div class="section-label">Original Scotland estimate</div><div class="card">`;
+      html += `<div class="section-label list-head"><span>Original Scotland estimate</span></div><div class="card">`;
       BUDGET.forEach((b) => {
         const range = b.low === b.high ? (b.low === 0 ? "Free" : `£${b.low}`) : `£${b.low}–£${b.high}`;
         html += `<div class="budget-row"><div class="budget-item">${esc(b.item)}</div><div class="budget-range">${range}</div></div>`;
       });
       html += `<div class="budget-total"><b>Estimate for the week</b><span class="budget-range">£${bLow}–£${bHigh}</span></div>`;
-      html += `<p class="settings-hint" style="margin-top:10px;">Activities and transport, excluding accommodation. Museums, parks and beaches in this plan are free.</p>`;
       html += `</div>`;
     }
 
     view.innerHTML = html;
+    wireBudget();
+  }
 
-    // Saved on blur, not per keystroke, so a re-render can't interrupt typing.
-    view.querySelectorAll("[data-pick-cost]").forEach((input) => {
-      input.addEventListener("blur", () => {
-        const value = input.value.trim();
-        updatePick(input.getAttribute("data-pick-cost"), { cost: value === "" ? null : Number(value) });
+  function wireBudget() {
+    const estimateBtn = document.getElementById("budgetEstimate");
+    if (estimateBtn) estimateBtn.addEventListener("click", () => estimateBudget());
+
+    // Tapping a line opens it; what you type there outranks anything
+    // estimated, for that line only, and for good.
+    view.querySelectorAll("[data-budget-open]").forEach((btn) =>
+      btn.addEventListener("click", () => {
+        budgetEditing = btn.getAttribute("data-budget-open").replace("|", ":");
         renderBudget();
+        const input = view.querySelector("[data-budget-edit]");
+        if (input) input.focus();
+      })
+    );
+
+    view.querySelectorAll("[data-budget-edit]").forEach((input) => {
+      const commit = () => {
+        const [kind, ref] = input.getAttribute("data-budget-edit").split("|");
+        const value = input.value.trim();
+        if (kind === "pick") {
+          updatePick(ref, { cost: value === "" ? null : Number(value) });
+        } else {
+          const rows = loadBudgetExtras().filter((r) => r.overrides !== ref);
+          if (value !== "") {
+            const label = (budgetLines().trip.find((l) => l.key === ref) || {}).name || ref;
+            rows.push({ item: label, amount: Number(value) || 0, overrides: ref });
+          }
+          saveBudgetExtras(rows);
+        }
+        budgetEditing = null;
+        renderBudget();
+      };
+      input.addEventListener("blur", commit);
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") { e.preventDefault(); input.blur(); }
+        if (e.key === "Escape") { budgetEditing = null; renderBudget(); }
       });
     });
 
@@ -4688,6 +5125,7 @@
       });
     }
   }
+
 
   function loadChecked() {
     try {
@@ -5929,21 +6367,34 @@
   // nothing to scan and no hierarchy. The row below carries only what you
   // need to recognise and triage it; everything else lives one tap away in
   // openPickDetail(), which also means only one map exists at a time.
-  function renderPickRow(p, away) {
+  // `extra` is whatever the current order makes worth knowing about this row:
+  // the town when the list is flat, the time when it is grouped by day, the
+  // category when the section is already the town. The row does not decide -
+  // it is told, by whoever grouped the list.
+  function renderPickRow(p, away, extra, hideDays) {
     const plan = loadPlan();
-    const days = plan.days
-      .filter((d) => (plan.items[d.id] || []).some((it) => it.pickId === p.id))
-      .map((d) => shortDayLabel(d.label));
+    // Grouped by day, the heading above already says which day this is, and
+    // repeating it on every row is noise on the screen that was too busy to
+    // read in the first place.
+    const days = hideDays
+      ? []
+      : plan.days
+          .filter((d) => (plan.items[d.id] || []).some((it) => it.pickId === p.id))
+          .map((d) => shortDayLabel(d.label));
 
-    const meta = [p.category, away, p.rating != null ? `${icon('star', { size: 13, cls: 'ico-inline' })} ${p.rating}` : null]
+    // Escaped in parts, because the rating carries a drawn star: escaping the
+    // joined string would have printed the SVG rather than shown it.
+    const meta = [extra === undefined ? p.category : extra, away]
       .filter(Boolean)
+      .map((x) => esc(String(x)))
+      .concat(p.rating != null ? [`${icon("star", { size: 13, cls: "ico-inline" })} ${esc(String(p.rating))}`] : [])
       .join(" · ");
 
     return `
       <button class="pick-row" data-open-pick="${esc(p.id)}">
         <div class="pick-row-main">
           <div class="pick-row-name">${esc(p.name)}</div>
-          ${meta ? `<div class="pick-row-meta">${esc(meta)}</div>` : ""}
+          ${meta ? `<div class="pick-row-meta">${meta}</div>` : ""}
           <div class="pick-row-badges">
             ${days.map((d) => `<span class="row-badge day">${esc(d)}</span>`).join("")}
             ${p.booked ? `<span class="row-badge booked">booked</span>` : ""}
@@ -10308,58 +10759,58 @@
     } else if (!picks.length) {
       html += `<div class="card"><p class="pick-status">Nothing saved under that filter yet.</p></div>`;
     } else {
-      html += `<button class="hero-share" id="sharePicks" style="color:var(--navy);border-color:var(--line);background:var(--card);margin:16px 0;">${icon('share', { size: 17, cls: 'ico-inline' })} Share my picks</button>`;
-
-      // Section order follows the folders list (so a manually reordered/renamed
-      // folder stays put), then any leftover city values from before the
-      // folders feature existed, then Unsorted last.
-      const sectionOrder = loadFolders().slice();
-      picks.forEach((p) => {
-        if (p.city && !sectionOrder.includes(p.city)) sectionOrder.push(p.city);
-      });
-      sectionOrder.push("Unsorted");
-
       // A major place heads the section named after it rather than appearing
       // as a row inside it - it *is* the section. (If one has been moved into
       // some other folder by hand, it goes back to being an ordinary row
-      // there, which is the only sensible reading of that move.)
+      // there, which is the only sensible reading of that move.) This only
+      // applies where sections are areas; in the other orders it is a place
+      // like any other.
+      const sortKey = picks.length > 2 ? loadSort() : "area";
       const majorByName = {};
-      picks.forEach((p) => {
-        if (p.major && p.city === p.name) majorByName[p.name] = p;
-      });
-
-      const groups = {};
-      sectionOrder.forEach((c) => (groups[c] = []));
-      picks.forEach((p) => {
-        if (majorByName[p.name] === p) return;
-        (groups[p.city] || groups.Unsorted).push(p);
-      });
-
-      // Sorting came across from the Places tab. It applies within each
-      // section rather than flattening the list, so the areas keep their
-      // shape and "Nearest" still means something inside a town.
-      const sortKey = loadSort();
-      const origin = sortKey === "near" ? sortOrigin() : null;
-      if (picks.length > 2) {
-        html += `<div class="sort-row">${SORTS.map(
-          (s) => `<button class="sort-chip${s.key === sortKey ? " on" : ""}" data-sort="${s.key}">${esc(s.label)}</button>`
-        ).join("")}</div>`;
+      if (sortKey === "area") {
+        picks.forEach((p) => {
+          if (p.major && p.city === p.name) majorByName[p.name] = p;
+        });
       }
+      const listed = picks.filter((p) => majorByName[p.name] !== p);
 
-      sectionOrder.forEach((city) => {
-        const major = majorByName[city];
-        if (!groups[city].length && !major) return;
+      if (picks.length > 2) html += renderSortRow(sortKey);
+
+      const sections = groupPicks(listed, sortKey);
+      // A town you have saved heads its own section even before anything has
+      // been filed under it: that header is how you get at what is around it,
+      // so it cannot wait for the section to have contents.
+      if (sortKey === "area") {
+        Object.keys(majorByName).forEach((name) => {
+          if (!sections.some((s) => s.area === name)) {
+            sections.push({ label: name, area: name, count: 0, rows: [] });
+          }
+        });
+        const order = loadFolders();
+        const rank = (s) => {
+          const i = order.indexOf(s.area);
+          return i < 0 ? order.length + (s.area === "Unsorted" ? 1 : 0) : i;
+        };
+        sections.sort((a, b) => rank(a) - rank(b));
+      }
+      if (!sections.length) {
+        html += `<div class="card"><p class="pick-status">Nothing to show in this order.</p></div>`;
+      }
+      sections.forEach((s) => {
+        const major = s.area ? majorByName[s.area] : null;
         html += major
-          ? renderMajorHeader(major, groups[city].length)
-          : `<div class="section-label">${esc(city)}</div>`;
-        sortPicks(groups[city], sortKey, origin).forEach((p) => {
-          const away =
-            origin && p.lat != null && p.id !== origin.id
-              ? formatDistance(haversineKm(origin.lat, origin.lon, p.lat, p.lon))
-              : null;
-          html += renderPickRow(p, away);
+          ? renderMajorHeader(major, s.count)
+          : `<div class="section-label list-head"><span>${esc(s.label)}</span><span class="list-head-count">${
+              s.count
+            }</span></div>`;
+        s.rows.forEach((r) => {
+          html += renderPickRow(r.pick, r.away, r.meta, sortKey === "day" && !s.loose);
         });
       });
+
+      // Sharing is not navigation, and it was sitting between the filters and
+      // the first place on the list. It belongs after the thing being shared.
+      html += `<button class="hero-share" id="sharePicks" style="margin:18px 0 4px;">${icon('share', { size: 17, cls: 'ico-inline' })} Share my picks</button>`;
     }
 
     // The bundled guide came across too, collapsed. It is suggestions rather

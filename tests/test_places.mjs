@@ -110,10 +110,29 @@ check('the ♥ and the sheet agree on what is saved', heartAgrees === true, Stri
 const sorts = await page.evaluate(() => Array.from(document.querySelectorAll('[data-sort]')).map((b) => b.textContent.trim()));
 check('the list can be ordered', sorts.length >= 3, JSON.stringify(sorts));
 
-await page.evaluate(() => document.querySelector('[data-sort="name"]').click());
+// A–Z stopped being a mode of its own when ordering and grouping became one
+// decision: it is how every grouped list is sorted inside its section, so the
+// question is now whether "By area" is alphabetical within a town.
+await page.evaluate(() => document.querySelector('[data-sort="area"]').click());
 await page.waitForTimeout(300);
-const alpha = (await names()).slice(0, 4);
-check('A–Z actually sorts alphabetically', JSON.stringify(alpha) === JSON.stringify([...alpha].sort((a, b) => a.localeCompare(b, 'en-GB'))), JSON.stringify(alpha));
+const perSection = await page.evaluate(() => {
+  // Saved rows only: the bundled guide at the foot of the screen reuses the
+  // same row class and is not part of your list.
+  const out = [];
+  let current = null;
+  document.querySelectorAll('#view .section-label, #view button.pick-row').forEach((el) => {
+    if (el.classList.contains('pick-row')) {
+      if (current) current.push(el.querySelector('.pick-row-name').textContent.trim());
+    } else {
+      current = [];
+      out.push(current);
+    }
+  });
+  return out.filter((s) => s.length > 1);
+});
+check('by area sorts alphabetically inside each area',
+  perSection.every((s) => JSON.stringify(s) === JSON.stringify([...s].sort((a, b) => a.localeCompare(b, 'en-GB')))),
+  JSON.stringify(perSection));
 
 await page.evaluate(() => document.querySelector('[data-sort="near"]').click());
 await page.waitForTimeout(400);
@@ -137,8 +156,15 @@ check('the chosen order is remembered', await page.evaluate(() =>
 // The folder chips went with the tab. Every folder is a heading on one
 // screen now, which answers the same question - what is where - without
 // hiding the rest of the list to do it.
+//
+// Under "by day" the headings are days, because the order chosen decides the
+// sections as well as the rows - that is the point of the control. So this
+// asks the question in the order the question belongs to.
+await page.evaluate(() => document.querySelector('[data-sort="area"]').click());
+await page.waitForTimeout(300);
 const sections = await page.evaluate(() =>
-  Array.from(document.querySelectorAll('.section-label, .area-head-name')).map((e) => e.textContent.trim()));
+  Array.from(document.querySelectorAll('.section-label, .area-head-name')).map((e) =>
+    e.textContent.trim().replace(/\d+$/, '')));
 check('every folder is a heading of its own', sections.includes('Edinburgh') && sections.includes('Stirling'), JSON.stringify(sections));
 // Everything saved is on screen at once - counted against storage rather than
 // a literal, since a guide entry was saved earlier in this run.
