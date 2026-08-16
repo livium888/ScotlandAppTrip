@@ -1523,6 +1523,7 @@
       </div>
     `;
     placeModal.classList.add("open");
+    makeSheetDraggable(placeModal, closePlaceModal);
 
     let chosen = false;
     placeModal.querySelectorAll("[data-close]").forEach((el) =>
@@ -1870,6 +1871,7 @@
       </div>
     `;
     placeModal.classList.add("open");
+    makeSheetDraggable(placeModal, closePlaceModal);
     placeModal.querySelectorAll("[data-close]").forEach((el) => {
       el.addEventListener("click", (e) => {
         if (e.target === el) closePlaceModal();
@@ -1880,6 +1882,166 @@
   function closePlaceModal() {
     placeModal.classList.remove("open");
   }
+
+  // ---------- Things you do with a thumb ----------
+  // A sheet that can only be dismissed by finding a small close button in its
+  // corner is a dialog on a web page. A sheet you push back down is a sheet.
+  // The drag only starts near the handle, which is both where a hand goes and
+  // the one part of it guaranteed not to be scrolling underneath.
+  function makeSheetDraggable(root, onClose) {
+    const sheet = root.querySelector(".modal-sheet");
+    if (!sheet || !sheet.querySelector(".modal-handle")) return;
+
+    let startY = 0;
+    let startedAt = 0;
+    let dy = 0;
+    let dragging = false;
+
+    const start = (e) => {
+      const t = e.touches ? e.touches[0] : e;
+      if (!t) return;
+      if (t.clientY - sheet.getBoundingClientRect().top > 64) return;
+      dragging = true;
+      startY = t.clientY;
+      startedAt = Date.now();
+      dy = 0;
+      sheet.style.transition = "none";
+    };
+
+    const move = (e) => {
+      if (!dragging) return;
+      const t = e.touches ? e.touches[0] : e;
+      if (!t) return;
+      dy = Math.max(0, t.clientY - startY);
+      if (dy > 4 && e.cancelable) e.preventDefault();
+      // Resistance rather than a straight follow, so it feels attached to
+      // something rather than sliding on ice.
+      sheet.style.transform = `translateY(${dy * 0.85}px)`;
+    };
+
+    const end = () => {
+      if (!dragging) return;
+      dragging = false;
+      sheet.style.transition = "";
+      const flick = Date.now() - startedAt < 300 && dy > 40;
+      sheet.style.transform = "";
+      if (dy > 110 || flick) onClose();
+    };
+
+    sheet.addEventListener("touchstart", start, { passive: true });
+    sheet.addEventListener("touchmove", move, { passive: false });
+    sheet.addEventListener("touchend", end);
+    sheet.addEventListener("touchcancel", end);
+  }
+
+  // Swipe a row aside to get at what you would otherwise open the place to do.
+  // Delegated once, on the view, so it survives every redraw - and it locks to
+  // one axis within the first few pixels, because a list that hijacks a
+  // vertical scroll is worse than one with no gestures at all.
+  const SWIPE_OPEN = 132;
+  let swipeRow = null;
+  let swipeStart = null;
+  let swipeAxis = "";
+
+  function closeSwipedRow() {
+    if (!swipeRow) return;
+    const body = swipeRow.querySelector(".pick-row, .kids-row");
+    if (body) body.style.transform = "";
+    swipeRow.classList.remove("swiped");
+    swipeRow = null;
+  }
+
+  function onRowTouchStart(e) {
+    if (!e.touches || !e.touches.length) return;
+    const row = e.target.closest && e.target.closest(".swipeable");
+    if (!row) {
+      closeSwipedRow();
+      return;
+    }
+    if (swipeRow && swipeRow !== row) closeSwipedRow();
+    const body = row.querySelector(".pick-row, .kids-row");
+    if (!body) return;
+    const t = e.touches[0];
+    swipeStart = {
+      x: t.clientX,
+      y: t.clientY,
+      row,
+      body,
+      from: row.classList.contains("swiped") ? -SWIPE_OPEN : 0,
+    };
+    swipeAxis = "";
+  }
+
+  function onRowTouchMove(e) {
+    if (!swipeStart || !e.touches || !e.touches.length) return;
+    const t = e.touches[0];
+    const dx = t.clientX - swipeStart.x;
+    const dy = t.clientY - swipeStart.y;
+    if (!swipeAxis) {
+      if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+      swipeAxis = Math.abs(dx) > Math.abs(dy) ? "x" : "y";
+      if (swipeAxis === "x") swipeStart.row.classList.add("swiping");
+    }
+    if (swipeAxis !== "x") return;
+    if (e.cancelable) e.preventDefault();
+    swipeStart.shift = Math.max(-SWIPE_OPEN - 16, Math.min(0, swipeStart.from + dx));
+    swipeStart.body.style.transform = `translateX(${swipeStart.shift}px)`;
+  }
+
+  function onRowTouchEnd() {
+    if (!swipeStart) return;
+    const row = swipeStart.row;
+    row.classList.remove("swiping");
+    if (swipeAxis === "x") {
+      if ((swipeStart.shift || 0) < -60) {
+        swipeStart.body.style.transform = `translateX(${-SWIPE_OPEN}px)`;
+        row.classList.add("swiped");
+        swipeRow = row;
+        tapFeedback("light");
+      } else {
+        swipeStart.body.style.transform = "";
+        row.classList.remove("swiped");
+        if (swipeRow === row) swipeRow = null;
+      }
+    }
+    swipeStart = null;
+    swipeAxis = "";
+  }
+
+  // The actions revealed behind a row. Rendered with the row rather than built
+  // when the gesture starts, because that is a frame you cannot spare.
+  function rowActions(id) {
+    return `
+      <div class="row-actions" aria-hidden="true">
+        <button class="row-action day" data-row-day="${esc(id)}" tabindex="-1"
+                aria-label="Put on a day">${icon("calendarPlus", { size: 18 })}<span>Day</span></button>
+        <button class="row-action remove" data-row-remove="${esc(id)}" tabindex="-1"
+                aria-label="Remove">${icon("trash", { size: 18 })}<span>Remove</span></button>
+      </div>
+    `;
+  }
+
+  // One set of listeners on the view, for every list it will ever draw.
+  view.addEventListener("touchstart", onRowTouchStart, { passive: true });
+  view.addEventListener("touchmove", onRowTouchMove, { passive: false });
+  view.addEventListener("touchend", onRowTouchEnd);
+  view.addEventListener("touchcancel", onRowTouchEnd);
+  view.addEventListener("click", (e) => {
+    const day = e.target.closest && e.target.closest("[data-row-day]");
+    const remove = e.target.closest && e.target.closest("[data-row-remove]");
+    if (!day && !remove) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const id = (day || remove).getAttribute(day ? "data-row-day" : "data-row-remove");
+    closeSwipedRow();
+    if (day) {
+      openDaySheet(id, { onDone: () => VIEWS[view.dataset.activeTab].render() });
+      return;
+    }
+    // The existing one, which puts a place back where it was rather than at
+    // the end - a place reappearing somewhere else reads as a second mistake.
+    removePickWithUndo(id, () => VIEWS[view.dataset.activeTab].render());
+  });
 
   // ---------- Connection ----------
   // Every feature that needs the network failed in its own words - search said
@@ -2173,6 +2335,7 @@
       </div>
     `;
     placeModal.classList.add("open");
+    makeSheetDraggable(placeModal, closePlaceModal);
 
     placeModal.querySelectorAll("[data-close]").forEach((el) =>
       el.addEventListener("click", (e) => {
@@ -2262,6 +2425,7 @@
       </div>
     `;
     placeModal.classList.add("open");
+    makeSheetDraggable(placeModal, closePlaceModal);
 
     placeModal.querySelectorAll("[data-close]").forEach((el) =>
       el.addEventListener("click", (e) => {
@@ -2411,6 +2575,7 @@
       </div>
     `;
     placeModal.classList.add("open");
+    makeSheetDraggable(placeModal, closePlaceModal);
     placeModal.querySelectorAll("[data-close]").forEach((el) => {
       el.addEventListener("click", (e) => {
         if (e.target === el) closePlaceModal();
@@ -2782,6 +2947,7 @@
         </div>
       `;
       placeModal.classList.add("open");
+    makeSheetDraggable(placeModal, closePlaceModal);
 
       let settled = false;
       placeModal.querySelectorAll("[data-close]").forEach((el) =>
@@ -2881,6 +3047,7 @@
       </div>
     `;
     placeModal.classList.add("open");
+    makeSheetDraggable(placeModal, closePlaceModal);
 
     let decided = false;
     const finalize = (folder) => {
@@ -2990,6 +3157,7 @@
       </div>
     `;
     placeModal.classList.add("open");
+    makeSheetDraggable(placeModal, closePlaceModal);
 
     placeModal.querySelectorAll("[data-close]").forEach((el) => {
       el.addEventListener("click", (e) => {
@@ -3212,6 +3380,8 @@
         const days = sortKey === "day" && !s.loose ? [] : onDays[p.id] || [];
         const meta = [r.meta, r.away].filter(Boolean).join(" · ");
         html += `
+          <div class="swipeable">
+            ${rowActions(p.id)}
           <div class="kids-row">
             ${photoBlock(p, "thumb")}
             <button class="kids-row-main" data-open-pick="${esc(p.id)}">
@@ -3233,6 +3403,7 @@
                 p.id
               )}" aria-label="Not one for the kids">${icon("close", { size: 17 })}</button>
             </div>
+          </div>
           </div>
         `;
       });
@@ -3602,6 +3773,7 @@
         </div>
       `;
       placeModal.classList.add("open");
+    makeSheetDraggable(placeModal, closePlaceModal);
 
       placeModal.querySelectorAll("[data-close]").forEach((el) =>
         el.addEventListener("click", (e) => {
@@ -6076,6 +6248,7 @@
       </div>
     `;
     placeModal.classList.add("open");
+    makeSheetDraggable(placeModal, closePlaceModal);
 
     placeModal.querySelectorAll("[data-close]").forEach((el) => {
       el.addEventListener("click", (e) => {
@@ -6149,6 +6322,7 @@
       </div>
     `;
     placeModal.classList.add("open");
+    makeSheetDraggable(placeModal, closePlaceModal);
 
     placeModal.querySelectorAll("[data-close]").forEach((el) => {
       el.addEventListener("click", (e) => {
@@ -6539,6 +6713,8 @@
       .join(" · ");
 
     return `
+      <div class="swipeable">
+        ${rowActions(p.id)}
       <button class="pick-row" data-open-pick="${esc(p.id)}">
         ${photoBlock(p, "thumb")}
         <div class="pick-row-main">
@@ -6554,6 +6730,7 @@
         </div>
         <span class="pick-row-chevron">${icon('forward', { size: 17, cls: 'ico-inline' })}</span>
       </button>
+      </div>
     `;
   }
 
@@ -6742,6 +6919,7 @@
       </div>
     `;
     placeModal.classList.add("open");
+    makeSheetDraggable(placeModal, closePlaceModal);
     wirePickDetail(p);
   }
 
@@ -8260,6 +8438,7 @@
       </div>
     `;
     placeModal.classList.add("open");
+    makeSheetDraggable(placeModal, closePlaceModal);
     wireStopChooser();
 
     if (option.lat != null && document.getElementById("chooserMap")) {
@@ -9153,6 +9332,7 @@
       </div>
     `;
     placeModal.classList.add("open");
+    makeSheetDraggable(placeModal, closePlaceModal);
 
     placeModal.querySelectorAll("[data-close]").forEach((el) => {
       el.addEventListener("click", (e) => {
@@ -9271,6 +9451,7 @@
       </div>
     `;
     placeModal.classList.add("open");
+    makeSheetDraggable(placeModal, closePlaceModal);
 
     const say = (text) => {
       const el = document.getElementById("anchorStatus");
@@ -11842,6 +12023,7 @@
       </div>
     `;
     placeModal.classList.add("open");
+    makeSheetDraggable(placeModal, closePlaceModal);
 
     const dismiss = () => {
       exitConfirmOpen = false;

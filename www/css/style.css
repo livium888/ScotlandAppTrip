@@ -3100,3 +3100,49 @@ html, body {
   .photo-none { background: rgba(127, 180, 212, 0.14); }
 }
 .leaflet-container { background: var(--surface-2); font-family: inherit; }
+
+/* ---------- Swipe a row aside ---------- */
+/* The actions sit underneath and never move; the row slides off them. */
+.swipeable { position: relative; overflow: hidden; border-radius: var(--radius); }
+.swipeable .pick-row,
+.swipeable .kids-row {
+  position: relative;
+  z-index: 1;
+  transition: transform var(--med) var(--ease-out);
+  will-change: transform;
+}
+.swipeable.swiping .pick-row,
+.swipeable.swiping .kids-row { transition: none; }
+.row-actions {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 8px;
+  display: flex;
+  gap: 6px;
+  padding-left: 8px;
+}
+.row-action {
+  width: 63px;
+  border: none;
+  border-radius: 12px;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  color: var(--on-accent);
+}
+.row-action.day { background: var(--accent); }
+.row-action.remove { background: var(--danger); }
+.row-action:active { filter: brightness(0.9); }
+/* Reachable without the gesture: a keyboard or a screen reader gets there by
+   opening the place, and these would otherwise be a tab stop into nowhere. */
+.swipeable:not(.swiped) .row-action { pointer-events: none; }
+
+/* The sheet follows a thumb back down, and springs if you let go early. */
+.modal-sheet { transition: transform var(--med) var(--ease-out); }
+.modal-handle { cursor: grab; touch-action: none; }
