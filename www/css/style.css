@@ -3033,3 +3033,70 @@ html, body {
 .budget-hero { text-align: center; padding: 22px 16px; }
 .budget-hero-total { font-size: 34px; font-weight: 700; letter-spacing: -0.03em; color: var(--text); }
 .budget-hero-sub { font-size: 13px; color: var(--text-muted); margin-top: 6px; line-height: 1.45; }
+
+/* ---------- Pictures ---------- */
+/* There were none. Not one image anywhere in the app, which is most of why a
+   list of places read as a database rather than as somewhere you might go. */
+.photo-thumb,
+.photo-hero {
+  background: var(--surface-2);
+  overflow: hidden;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+}
+.photo-thumb { width: 54px; height: 54px; border-radius: 11px; }
+.photo-hero {
+  width: 100%;
+  height: 190px;
+  border-radius: 14px;
+  margin-bottom: 14px;
+}
+.photo-thumb img,
+.photo-hero img { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* No photograph is an ordinary state, not a broken one: the category, drawn,
+   on a tint. An empty grey box would say the app had failed at something. */
+.photo-none { background: var(--accent-soft); color: var(--accent); }
+.photo-hero.photo-none { height: 120px; }
+.photo-failed { background: var(--surface-2); }
+
+/* Rows became a picture, a stack of text and a chevron. */
+.pick-row,
+.kids-row { gap: 12px; align-items: center; }
+.pick-row-main { min-width: 0; }
+
+/* ---------- The map ---------- */
+/* Leaflet's own pin is a blue teardrop with a drop shadow, drawn for a
+   different app in a different decade, and it was the most obviously foreign
+   object left on the screen. */
+/* A separate class from .map-pin, which is the numbered circle the
+   all-places map already uses and which works. This is for the single-place
+   maps, where Leaflet was drawing its own stock blue teardrop. */
+.map-drop {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50% 50% 50% 4px;
+  transform: rotate(-45deg);
+  background: var(--accent);
+  color: var(--on-accent);
+  border: 2px solid var(--surface);
+  box-shadow: var(--shadow-2);
+}
+.map-drop .ico { transform: rotate(45deg); }
+
+/* The tiles are somebody else's colours - bright green woodland, red A-roads -
+   under an interface that is paper and navy. A light touch on saturation
+   settles them behind it without making the map hard to read. */
+.leaflet-tile-pane { filter: saturate(0.78) contrast(0.96); }
+@media (prefers-color-scheme: dark) {
+  /* Inverting the hue rather than the whole image keeps the labels legible
+     and stops the water going orange. */
+  .leaflet-tile-pane { filter: invert(0.92) hue-rotate(180deg) saturate(0.6) brightness(0.95); }
+  .photo-none { background: rgba(127, 180, 212, 0.14); }
+}
+.leaflet-container { background: var(--surface-2); font-family: inherit; }

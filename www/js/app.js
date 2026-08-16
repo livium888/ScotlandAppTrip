@@ -1628,18 +1628,160 @@
     }
 
     let description = hit.description || null;
+    let photo = null;
     try {
       const title = (hit.label || name).replace(/ /g, "_");
       const sumRes = await fetch(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}`);
       if (sumRes.ok) {
         const sum = await sumRes.json();
         if (sum.extract) description = sum.extract;
+        // The picture was in this response all along and was being thrown
+        // away. Nothing in the app had an image in it - not one - which is
+        // most of why a screen of places read as a database rather than
+        // somewhere you might go.
+        if (sum.thumbnail && sum.thumbnail.source) photo = upscaleWikiThumb(sum.thumbnail.source);
       }
     } catch (e) {
       // no Wikipedia page - Wikidata's short description is still fine
     }
 
-    return { description, website };
+    return { description, website, photo };
+  }
+
+  // ---------- Pictures ----------
+  // Wikipedia hands back a 320px-wide thumbnail, which is soft on a phone at
+  // three times that. The size is a path segment, so asking for a bigger one
+  // is a substitution rather than another request.
+  function upscaleWikiThumb(url, width) {
+    return String(url).replace(/\/(\d+)px-/, `/${width || 640}px-`);
+  }
+
+  // A photo of the wrong castle is worse than no photo at all, so a title has
+  // to earn it: either it shares a real word with the place, or the article's
+  // own coordinates put it within a couple of hundred metres.
+  function photoTitleFits(title, name) {
+    const words = (s) =>
+      String(s)
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, " ")
+        .split(/\s+/)
+        .filter((w) => w.length > 3 && !["the", "and", "inn", "cafe", "house"].includes(w));
+    const a = words(title);
+    const b = words(name);
+    if (!a.length || !b.length) return false;
+    return b.some((w) => a.includes(w));
+  }
+
+  const WIKI_API = "https://en.wikipedia.org/w/api.php";
+
+  async function findPhoto(name, lat, lon) {
+    const params =
+      `action=query&prop=pageimages|coordinates&piprop=thumbnail&pithumbsize=640&format=json&origin=*`;
+    // Somewhere with coordinates is best found by them: two places share a
+    // name far more often than they share a spot on the map.
+    if (lat != null && lon != null) {
+      try {
+        const url =
+          `${WIKI_API}?${params}&generator=geosearch&ggscoord=${lat}|${lon}&ggsradius=1000&ggslimit=8`;
+        const res = await fetch(url, { headers: { Accept: "application/json" } });
+        if (res.ok) {
+          const data = await res.json();
+          const pages = Object.values((data.query && data.query.pages) || {}).filter(
+            (p) => p.thumbnail && p.thumbnail.source
+          );
+          const named = pages.find((p) => photoTitleFits(p.title, name));
+          const close = pages.find((p) => {
+            const c = p.coordinates && p.coordinates[0];
+            return c && haversineKm(lat, lon, c.lat, c.lon) < 0.2;
+          });
+          const hit = named || close;
+          if (hit) return upscaleWikiThumb(hit.thumbnail.source);
+        }
+      } catch (e) {
+        /* offline, or Wikipedia having a day - not worth a message */
+      }
+    }
+    try {
+      const url = `${WIKI_API}?${params}&generator=search&gsrsearch=${encodeURIComponent(name)}&gsrlimit=3`;
+      const res = await fetch(url, { headers: { Accept: "application/json" } });
+      if (!res.ok) return null;
+      const data = await res.json();
+      const pages = Object.values((data.query && data.query.pages) || {});
+      const hit = pages.find((p) => p.thumbnail && p.thumbnail.source && photoTitleFits(p.title, name));
+      return hit ? upscaleWikiThumb(hit.thumbnail.source) : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // Looking one up costs a request, so a place is only ever asked about once -
+  // a miss is remembered as firmly as a hit.
+  const photoLookups = {};
+
+  function wantPhoto(p, onFound) {
+    if (!p || p.photo || p.photoChecked) return;
+    if (photoLookups[p.id]) return;
+    photoLookups[p.id] = true;
+    findPhoto(p.name, p.lat, p.lon).then((url) => {
+      const picks = loadPicks();
+      const pick = picks.find((x) => x.id === p.id);
+      if (!pick) return;
+      pick.photoChecked = true;
+      if (url) pick.photo = url;
+      savePicks(picks);
+      if (url && onFound) onFound(url);
+    });
+  }
+
+  // Three at a time, and only for what is on the screen: a list of forty
+  // places should not open forty connections the moment you scroll past it.
+  function fetchMissingPhotos(list, redraw) {
+    let started = 0;
+    let found = false;
+    const done = () => {
+      if (!found) {
+        found = true;
+        // One redraw when the first picture lands, not one per picture.
+        setTimeout(() => redraw && redraw(), 400);
+      }
+    };
+    list.forEach((p) => {
+      if (started >= 3) return;
+      if (p.photo || p.photoChecked || photoLookups[p.id]) return;
+      started++;
+      wantPhoto(p, done);
+    });
+  }
+
+  // What a row shows when there is no photograph: the category, drawn, on a
+  // tinted square. An empty grey box says the app is broken; this says there
+  // is no picture of this pub, which is true and unremarkable.
+  const CATEGORY_ICONS = [
+    [/castle|palace|fort|tower|ruin|abbey|cathedral|church|monument|historic/i, "castle"],
+    [/museum|gallery|exhibit/i, "note"],
+    [/playground|soft play|park|garden|zoo|farm|animal/i, "kids"],
+    [/beach|coast|loch|lake|river|waterfall|hill|mountain|walk|trail|glen|forest|wood/i, "walk"],
+    [/pub|bar|inn|distillery|brewery|whisky/i, "food"],
+    [/cafe|café|coffee|bakery|tea/i, "coffee"],
+    [/restaurant|bistro|grill|pizza|chippy|takeaway|eat|food|diner/i, "food"],
+    [/hotel|b&b|guest|hostel|stay/i, "tips"],
+    [/town|city|village|area|region/i, "globe"],
+  ];
+
+  function categoryIcon(p) {
+    const hay = `${p.category || ""} ${p.name || ""} ${p.description || ""}`;
+    const hit = CATEGORY_ICONS.find(([re]) => re.test(hay));
+    return hit ? hit[1] : "pin";
+  }
+
+  // `size` is "thumb" for a row or "hero" for the top of a sheet.
+  function photoBlock(p, size) {
+    const cls = size === "hero" ? "photo-hero" : "photo-thumb";
+    if (p.photo) {
+      return `<div class="${cls}"><img src="${esc(p.photo)}" alt="" loading="lazy" decoding="async"
+        onerror="this.parentNode.classList.add('photo-failed');this.remove();" /></div>`;
+    }
+    return `<div class="${cls} photo-none">${icon(categoryIcon(p), { size: size === "hero" ? 44 : 22 })}</div>`;
   }
 
   async function enrichPick(id) {
@@ -1678,6 +1820,7 @@
     if (wiki) {
       if (wiki.description) fresh.description = wiki.description;
       if (!fresh.website && wiki.website) fresh.website = wiki.website;
+      if (wiki.photo) fresh.photo = wiki.photo;
     }
     fresh.enrichStatus = geo || wiki ? "done" : "empty";
     savePicks(picks);
@@ -3056,6 +3199,10 @@
     const sortKey = mine.length > 2 ? loadSort() : "area";
     if (mine.length > 2) html += renderSortRow(sortKey);
 
+    fetchMissingPhotos(mine, () => {
+      if (view.dataset.activeTab === "kids") renderKids();
+    });
+
     groupPicks(mine, sortKey).forEach((s) => {
       html += `<div class="section-label list-head"><span>${esc(s.label)}</span><span class="list-head-count">${
         s.count
@@ -3066,6 +3213,7 @@
         const meta = [r.meta, r.away].filter(Boolean).join(" · ");
         html += `
           <div class="kids-row">
+            ${photoBlock(p, "thumb")}
             <button class="kids-row-main" data-open-pick="${esc(p.id)}">
               <span class="kids-row-name">${esc(p.name)}</span>
               ${meta ? `<span class="kids-row-meta">${esc(meta)}</span>` : ""}
@@ -6392,6 +6540,7 @@
 
     return `
       <button class="pick-row" data-open-pick="${esc(p.id)}">
+        ${photoBlock(p, "thumb")}
         <div class="pick-row-main">
           <div class="pick-row-name">${esc(p.name)}</div>
           ${meta ? `<div class="pick-row-meta">${meta}</div>` : ""}
@@ -6447,9 +6596,26 @@
 
   // Everything about one place, opened from a row. This is where the map,
   // the full facts and all the editing controls live.
+  // Leaflet's own marker is a blue teardrop with a drop shadow, drawn for a
+  // different app in a different decade, and on a styled map it was the one
+  // object that plainly came from somewhere else.
+  function dropIcon(name) {
+    return L.divIcon({
+      className: "map-pin-wrap",
+      html: `<span class="map-drop">${icon(name || "pin", { size: 15 })}</span>`,
+      iconSize: [30, 30],
+      iconAnchor: [15, 30],
+    });
+  }
+
   function openPickDetail(id) {
     const p = loadPicks().find((x) => x.id === id);
     if (!p) return;
+    // Opening a place is the one moment its picture is worth a request of its
+    // own: you are looking straight at where it would go.
+    wantPhoto(p, () => {
+      if (placeModal.classList.contains("open")) openPickDetail(id);
+    });
     const mapsUrl = pickGoogleUrl(p);
     const plan = loadPlan();
     const folders = loadFolders();
@@ -6466,6 +6632,7 @@
           <div class="modal-handle"></div>
           <button class="modal-close" data-close="1" aria-label="Close">${icon('close', { size: 17, cls: 'ico-inline' })}</button>
           <div class="modal-body">
+            ${photoBlock(p, "hero")}
             <h2 class="modal-title">${esc(p.name)}</h2>
             <div class="modal-subtitle">${esc(
               [p.category, p.city].filter(Boolean).join(" · ")
@@ -6590,7 +6757,7 @@
       const map = L.map(mapEl, { scrollWheelZoom: false, attributionControl: false });
       addTileLayer(map);
       map.setView([p.lat, p.lon], 15);
-      L.marker([p.lat, p.lon]).addTo(map);
+      L.marker([p.lat, p.lon], { icon: dropIcon(categoryIcon(p)) }).addTo(map);
       // Leaflet needs a nudge when it initialises inside a sheet that was
       // display:none a moment ago, or it renders a grey box.
       setTimeout(() => {
@@ -8002,6 +8169,7 @@
     if (wiki) {
       option.description = option.description || wiki.description || "";
       option.website = option.website || wiki.website || "";
+      option.photo = option.photo || wiki.photo || null;
     }
     if (geo) {
       option.lat = geo.lat;
@@ -8098,7 +8266,7 @@
       const map = L.map("chooserMap", { scrollWheelZoom: false, attributionControl: false });
       addTileLayer(map);
       map.setView([option.lat, option.lon], 14);
-      L.marker([option.lat, option.lon]).addTo(map);
+      L.marker([option.lat, option.lon], { icon: dropIcon("pin") }).addTo(map);
       setTimeout(() => {
         if (map._container && map._container.isConnected) map.invalidateSize();
       }, 60);
@@ -8885,6 +9053,7 @@
           if (wiki) {
             if (!r.description) r.description = wiki.description || "";
             if (!r.website) r.website = wiki.website || "";
+            if (!r.photo) r.photo = wiki.photo || null;
           }
           if (geo) {
             r.lat = geo.lat;
@@ -9036,7 +9205,7 @@
       const map = L.map(mapEl, { scrollWheelZoom: false, attributionControl: false });
       addTileLayer(map);
       map.setView([r.lat, r.lon], 15);
-      L.marker([r.lat, r.lon]).addTo(map);
+      L.marker([r.lat, r.lon], { icon: dropIcon(categoryIcon(r)) }).addTo(map);
       setTimeout(() => {
         if (map._container && map._container.isConnected) map.invalidateSize();
       }, 60);
@@ -10126,7 +10295,7 @@
     pickMiniMaps.push(map);
     addTileLayer(map);
     const markers = mappable.map(({ r, i }) =>
-      L.marker([r.lat, r.lon])
+      L.marker([r.lat, r.lon], { icon: dropIcon(categoryIcon(r)) })
         .addTo(map)
         // Escaped, not interpolated: Leaflet treats a string here as HTML,
         // and this name arrived from a geocoder or a model.
@@ -10164,7 +10333,7 @@
     pickMiniMaps.push(map);
     addTileLayer(map);
     map.setView([pick.lat, pick.lon], 14);
-    L.marker([pick.lat, pick.lon]).addTo(map);
+    L.marker([pick.lat, pick.lon], { icon: dropIcon(categoryIcon(pick)) }).addTo(map);
   }
 
   // ---------- Every saved place on one map ----------
@@ -10673,6 +10842,7 @@
     if (wiki) {
       if (wiki.description) target.description = wiki.description;
       if (!target.website && wiki.website) target.website = wiki.website;
+      if (wiki.photo) target.photo = wiki.photo;
     }
     if (geo) {
       target.lat = geo.lat;
@@ -10806,6 +10976,11 @@
         s.rows.forEach((r) => {
           html += renderPickRow(r.pick, r.away, r.meta, sortKey === "day" && !s.loose);
         });
+      });
+
+      // Only what is on this screen, three at a time - see fetchMissingPhotos.
+      fetchMissingPhotos(listed, () => {
+        if (view.dataset.activeTab === "picks") renderPicks();
       });
 
       // Sharing is not navigation, and it was sitting between the filters and
@@ -11782,6 +11957,7 @@
     if (wiki) {
       if (wiki.description) candidate.description = wiki.description;
       if (!candidate.website && wiki.website) candidate.website = wiki.website;
+      if (wiki.photo) candidate.photo = wiki.photo;
     }
 
     pickSearch = { query: "", status: "idle", results: [] };

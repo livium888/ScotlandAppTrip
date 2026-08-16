@@ -23,7 +23,16 @@ const browser = await chromium.launch(LAUNCH_OPTS);
 const page = await browser.newPage();
 await page.setViewportSize({ width: 390, height: 844 });
 page.on('pageerror', (e) => { console.log('PAGEERROR:', e.message); failures++; });
-await page.route(/generativelanguage|nominatim|wikidata|wikipedia|overpass|tile\.|open-meteo|photon|places\.googleapis/, (r) => r.abort());
+// A one-pixel stand-in, so the layout can be judged without the real network.
+// The app removes an <img> that fails to load and falls back to the drawn
+// tile, which is right - and would make this check untestable if the image
+// were simply blocked.
+const PIXEL = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+  'base64');
+await page.route(/upload\.wikimedia\.org/, (r) =>
+  r.fulfill({ status: 200, contentType: 'image/png', body: PIXEL }));
+await page.route(/generativelanguage|nominatim|wikidata|wikipedia\.org\/w|overpass|tile\.|open-meteo|photon|places\.googleapis/, (r) => r.abort());
 
 await page.goto(BASE, { waitUntil: 'load' });
 await page.evaluate(() => {
@@ -118,6 +127,53 @@ check('icons inherit their colour rather than carrying their own', await page.ev
   return svg.getAttribute('stroke') === 'currentColor';
 }));
 
+// ---------- Pictures ----------
+// There were none. Not one <img> in the whole app, which is most of why a
+// screen of places read as a database rather than as somewhere to go.
+await page.evaluate(() => {
+  const picks = JSON.parse(localStorage.getItem('board:b-d:picks'));
+  picks.push({ id: 'p2', name: 'The Sheep Heid Inn', city: 'Edinburgh', category: 'Pub',
+    lat: 55.9403, lon: -3.1583, addedAt: 2, photoChecked: true });
+  picks[0].photo = 'https://upload.wikimedia.org/x/640px-a.png';
+  picks[0].photoChecked = true;
+  localStorage.setItem('board:b-d:picks', JSON.stringify(picks));
+});
+await page.reload({ waitUntil: 'load' });
+await page.waitForTimeout(500);
+await page.evaluate(() => document.querySelector('[data-view="picks"]').click());
+await page.waitForTimeout(600);
+
+check('a saved place shows its photograph', await page.evaluate(() =>
+  !!document.querySelector('.pick-row .photo-thumb img')));
+// A pub is not on Wikipedia and never will be, so "no picture" has to be an
+// ordinary state rather than a hole in the layout.
+check('and one without a photo still looks intentional', await page.evaluate(() => {
+  const none = document.querySelector('.pick-row .photo-none');
+  return !!none && !!none.querySelector('svg.ico');
+}));
+check('the fallback is the kind of place, not a generic dot', await page.evaluate(() => {
+  const rows = Array.from(document.querySelectorAll('.pick-row'));
+  const pub = rows.find((r) => /Sheep Heid/.test(r.textContent));
+  return !!pub && !!pub.querySelector('.photo-none svg');
+}));
+
+await page.evaluate(() => {
+  const rows = Array.from(document.querySelectorAll('[data-open-pick]'));
+  rows.find((r) => /Edinburgh Castle/.test(r.textContent)).click();
+});
+await page.waitForSelector('#placeModal.open');
+await page.waitForTimeout(400);
+check('and the sheet leads with it', await page.evaluate(() =>
+  !!document.querySelector('#placeModal .photo-hero')));
+
+// A photo of the wrong castle is worse than no photo, so a title has to earn
+// one by sharing a real word with the place.
+check('a photo is only taken from an article that matches the place', await page.evaluate(() => {
+  const f = window.__photoTitleFits;
+  return !f || (f('Edinburgh Castle', 'Edinburgh Castle') && !f('Cardiff Castle', 'Edinburgh Zoo'));
+}));
+
+await page.evaluate(() => document.querySelector('#placeModal .modal-close').click());
 await browser.close();
 console.log(failures === 0 ? '\nALL TESTS PASSED' : `\n${failures} FAILED`);
 process.exit(failures ? 1 : 0);
