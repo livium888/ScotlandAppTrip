@@ -125,7 +125,11 @@ await page.evaluate(() => document.getElementById('mapBtn').click());
 await page.waitForTimeout(2500);
 check('a map fetches tiles when it can', tileRequests > 0, String(tileRequests));
 const cached = await page.evaluate(() => new Promise((resolve) => {
-  const req = indexedDB.open('trip-tiles-v1', 1);
+  // No version pinned: the store this asks about is the tiles one, and
+  // pinning a number here meant the test broke the day photos and geocoder
+  // answers moved into the same database - which is a fact about the app's
+  // storage, not about whether a map works offline.
+  const req = indexedDB.open('trip-tiles-v1');
   req.onsuccess = () => {
     const c = req.result.transaction('tiles', 'readonly').objectStore('tiles').count();
     c.onsuccess = () => resolve(c.result);
@@ -185,7 +189,9 @@ await page.evaluate(() => document.getElementById('settingsBtn').click());
 await page.waitForSelector('#downloadTilesBtn', { timeout: 4000 });
 check('Settings offers the map area for the trip', await page.evaluate(() =>
   !!document.getElementById('downloadTilesBtn')));
-check('and says what is already stored', /tiles stored on this phone/.test(
+// Megabytes, not a tile count: room on the phone is the thing being spent,
+// and "2,500 map tiles" tells nobody whether that is a lot.
+check('and says what is already stored', /(MB of map stored on this phone|No map area stored yet)/.test(
   await page.evaluate(() => document.getElementById('tileCount').textContent)),
   await page.evaluate(() => document.getElementById('tileCount').textContent));
 

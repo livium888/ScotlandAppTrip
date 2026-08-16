@@ -55,6 +55,13 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- Without this, navigator.onLine is hardcoded true in an Android
+         WebView, so isOffline() could never once return true on a real phone
+         and the banner explaining what still works with no signal - the whole
+         offline story - had never been seen by anybody. The browser suite
+         passed throughout because Chromium honours setOffline regardless. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
     <!-- "Where I am" in Explore needs these. Without them the browser
          geolocation call has nothing to grant and the button silently does
          nothing, which is exactly how it behaved before they were added.

@@ -141,6 +141,34 @@ for (const file of files) {
   }
 }
 
+// Permissions the app needs to work at all, each one earned by a bug.
+//
+// ACCESS_NETWORK_STATE is the reason this check exists: without it an Android
+// WebView reports navigator.onLine as true for ever, so isOffline() could
+// never fire and the entire offline story was invisible on a real device. No
+// browser test could catch that - Chromium honours setOffline regardless of
+// what an Android manifest says - so it is checked here, where the manifest is.
+const REQUIRED_PERMISSIONS = [
+  ["android.permission.INTERNET", "everything network"],
+  ["android.permission.ACCESS_NETWORK_STATE", "knowing when there is no signal"],
+  ["android.permission.ACCESS_COARSE_LOCATION", '"Where I am"'],
+  ["android.permission.ACCESS_FINE_LOCATION", "an accurate fix"],
+];
+
+const manifest = files.find((f) => f.endsWith("AndroidManifest.xml"));
+if (!manifest) {
+  console.log("FAIL: no AndroidManifest.xml found");
+  failures++;
+} else {
+  const text = readFileSync(manifest, "utf8");
+  for (const [permission, why] of REQUIRED_PERMISSIONS) {
+    if (!text.includes(permission)) {
+      console.log(`FAIL: AndroidManifest.xml is missing ${permission} — needed for ${why}`);
+      failures++;
+    }
+  }
+}
+
 console.log(`Checked ${files.length} Android XML file(s).`);
 if (failures) {
   console.log(`\n${failures} problem(s) — Gradle would reject these.`);

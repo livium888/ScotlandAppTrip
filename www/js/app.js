@@ -237,6 +237,41 @@
     return `${text}, ${dest}`;
   }
 
+  // ---------- Asking the network ----------
+  // Only the AI call had a timeout. Every other lookup - the geocoder, the
+  // map data, Wikipedia, the forecast - was a bare fetch(), which on a phone
+  // that has half a bar does not fail: it waits, indefinitely, and the
+  // spinner above it waits with it. Half a bar is the normal condition in a
+  // glen, so the normal condition of this app there was a screen that never
+  // resolved and had nothing on it to press.
+  //
+  // A request that cannot be answered has to end, so the code around it can
+  // say so and offer the next thing.
+  const NET_TIMEOUT_MS = 8000; // a name to a coordinate, a page summary
+  const NET_TIMEOUT_SLOW_MS = 15000; // Overpass, which is genuinely slow
+
+  function fetchWithTimeout(url, opts, ms) {
+    const options = opts || {};
+    const limit = ms || NET_TIMEOUT_MS;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), limit);
+    // Some callers already pass a signal of their own - the type-ahead
+    // cancels the previous request on every keystroke. Both reasons to stop
+    // have to keep working, so the caller's signal is relayed into ours
+    // rather than replaced by it.
+    const outer = options.signal;
+    const relay = () => controller.abort();
+    if (outer) {
+      if (outer.aborted) controller.abort();
+      else outer.addEventListener("abort", relay);
+    }
+    const settings = Object.assign({}, options, { signal: controller.signal });
+    return fetch(url, settings).finally(() => {
+      clearTimeout(timer);
+      if (outer) outer.removeEventListener("abort", relay);
+    });
+  }
+
   // ---------- Gemini (optional, free tier) ----------
   // Long enough for a grounded answer on a slow connection, short enough that
   // a request which is never coming back says so rather than hanging.
@@ -262,7 +297,7 @@
   const GEMINI_MODEL_PREFERENCE = ["flash-lite", "flash-latest", "flash", "pro"];
 
   async function geminiListModels(key) {
-    const res = await fetch(`${GEMINI_BASE}/models?key=${encodeURIComponent(key)}`);
+    const res = await fetchWithTimeout(`${GEMINI_BASE}/models?key=${encodeURIComponent(key)}`, {}, AI_TIMEOUT_MS);
     const text = await res.text();
     let data = null;
     try {
@@ -1417,6 +1452,11 @@
   // made rather than pretending it was.
   const AMBIGUOUS_MIN_KM = 25;
   const GEOCODE_LIMIT = 5;
+  // Set by geocodeCandidates on every attempt: true when the answer came from
+  // the on-device cache rather than the network.
+  let lastGeocodeFromCache = false;
+  // How long the whole question gets, across all its attempts.
+  const GEOCODE_BUDGET_MS = 12000;
 
   async function geocodeCandidates(name, cityHint, anchor) {
     const queries = [];
@@ -1437,16 +1477,34 @@
     const box = anchor ? `&bounded=1&viewbox=${encodeURIComponent(anchorViewbox(anchor, ANCHOR_GRACE))}` : "";
     const attempts = (anchor ? (cityHint ? [queries[0], queries[2]] : [queries[2]]) : queries).map((q) => ({ q, box }));
 
+    // A timeout per request is not the same as a timeout for the question.
+    // Three attempts that each give up after eight seconds is twenty-four
+    // seconds of somebody looking at a spinner, which is not meaningfully
+    // better than hanging. The whole lookup gets a budget, and attempts stop
+    // when it is spent.
+    const deadline = Date.now() + GEOCODE_BUDGET_MS;
+
     for (const attempt of attempts) {
+      const left = deadline - Date.now();
+      // Under a second left is not enough for an answer, only for another wait.
+      if (left < 1000) break;
       const url =
         `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=${GEOCODE_LIMIT}` +
         `&addressdetails=1&extratags=1&namedetails=1&q=${encodeURIComponent(attempt.q)}${attempt.box}`;
       let data;
       try {
-        const res = await fetch(url, { headers: { Accept: "application/json" } });
-        if (!res.ok) continue;
-        data = await res.json();
+        const answer = await cachedJson(
+          url,
+          { headers: { Accept: "application/json" } },
+          Math.min(NET_TIMEOUT_MS, left)
+        );
+        data = answer.data;
+        // Read by the Explore loop below, which pauses a second between
+        // lookups out of politeness to Nominatim. There is nobody to be
+        // polite to when the answer came off the device.
+        lastGeocodeFromCache = answer.fromCache;
       } catch (e) {
+        lastGeocodeFromCache = false;
         continue;
       }
       if (data && data.length) {
@@ -1608,7 +1666,7 @@
     const searchUrl = `https://www.wikidata.org/w/api.php?action=wbsearchentities&search=${encodeURIComponent(
       name
     )}&language=en&format=json&origin=*`;
-    const searchRes = await fetch(searchUrl);
+    const searchRes = await fetchWithTimeout(searchUrl);
     if (!searchRes.ok) throw new Error("wikidata search error");
     const searchData = await searchRes.json();
     const hit = searchData.search && searchData.search[0];
@@ -1617,7 +1675,7 @@
     let website = null;
     try {
       const entUrl = `https://www.wikidata.org/w/api.php?action=wbgetentities&ids=${hit.id}&props=claims&format=json&origin=*`;
-      const entRes = await fetch(entUrl);
+      const entRes = await fetchWithTimeout(entUrl);
       const entData = await entRes.json();
       const claims = entData.entities[hit.id].claims;
       const p856 = claims && claims.P856;
@@ -1632,7 +1690,9 @@
     let photo = null;
     try {
       const title = (hit.label || name).replace(/ /g, "_");
-      const sumRes = await fetch(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}`);
+      const sumRes = await fetchWithTimeout(
+        `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}`
+      );
       if (sumRes.ok) {
         const sum = await sumRes.json();
         if (sum.extract) description = sum.extract;
@@ -1675,18 +1735,30 @@
 
   const WIKI_API = "https://en.wikipedia.org/w/api.php";
 
+  // Answers `{ url, asked }`. The second half is the whole point: `asked` is
+  // true only when Wikipedia actually replied and had nothing, and false when
+  // the question never got through. Both used to come back as a bare null,
+  // and the caller wrote that down as "this place has no photograph" - so
+  // opening the list once with no signal permanently blinded every place on
+  // it, on every network, forever after. Which is precisely the moment the
+  // app is most likely to be opened: in the car, in a glen, before you go.
   async function findPhoto(name, lat, lon) {
+    if (isOffline()) return { url: null, asked: false };
     const params =
       `action=query&prop=pageimages|coordinates&piprop=thumbnail&pithumbsize=640&format=json&origin=*`;
+    // Both lookups are allowed to fail; only a clean reply counts as an
+    // answer, and one clean reply anywhere is enough to settle the question.
+    let answered = false;
     // Somewhere with coordinates is best found by them: two places share a
     // name far more often than they share a spot on the map.
     if (lat != null && lon != null) {
       try {
         const url =
           `${WIKI_API}?${params}&generator=geosearch&ggscoord=${lat}|${lon}&ggsradius=1000&ggslimit=8`;
-        const res = await fetch(url, { headers: { Accept: "application/json" } });
+        const res = await fetchWithTimeout(url, { headers: { Accept: "application/json" } });
         if (res.ok) {
           const data = await res.json();
+          answered = true;
           const pages = Object.values((data.query && data.query.pages) || {}).filter(
             (p) => p.thumbnail && p.thumbnail.source
           );
@@ -1696,7 +1768,7 @@
             return c && haversineKm(lat, lon, c.lat, c.lon) < 0.2;
           });
           const hit = named || close;
-          if (hit) return upscaleWikiThumb(hit.thumbnail.source);
+          if (hit) return { url: upscaleWikiThumb(hit.thumbnail.source), asked: true };
         }
       } catch (e) {
         /* offline, or Wikipedia having a day - not worth a message */
@@ -1704,26 +1776,42 @@
     }
     try {
       const url = `${WIKI_API}?${params}&generator=search&gsrsearch=${encodeURIComponent(name)}&gsrlimit=3`;
-      const res = await fetch(url, { headers: { Accept: "application/json" } });
-      if (!res.ok) return null;
+      const res = await fetchWithTimeout(url, { headers: { Accept: "application/json" } });
+      if (!res.ok) return { url: null, asked: answered };
       const data = await res.json();
       const pages = Object.values((data.query && data.query.pages) || {});
       const hit = pages.find((p) => p.thumbnail && p.thumbnail.source && photoTitleFits(p.title, name));
-      return hit ? upscaleWikiThumb(hit.thumbnail.source) : null;
+      return { url: hit ? upscaleWikiThumb(hit.thumbnail.source) : null, asked: true };
     } catch (e) {
-      return null;
+      return { url: null, asked: answered };
     }
   }
 
-  // Looking one up costs a request, so a place is only ever asked about once -
-  // a miss is remembered as firmly as a hit.
+  // Looking one up costs a request, so a place is only asked about once per
+  // run of the app. A genuine "there is no photograph of this pub" is written
+  // down and never asked again; a request that failed is not written down at
+  // all, so the next time the app opens with signal it tries once more. The
+  // in-memory guard is what stops that becoming a retry on every redraw.
   const photoLookups = {};
+
+  // Cleared when the signal returns, so a list looked at in a tunnel fills in
+  // once you are out of it rather than staying blank until the app restarts.
+  function forgetFailedPhotoLookups() {
+    Object.keys(photoLookups).forEach((id) => {
+      if (photoLookups[id] === "failed") delete photoLookups[id];
+    });
+  }
 
   function wantPhoto(p, onFound) {
     if (!p || p.photo || p.photoChecked) return;
     if (photoLookups[p.id]) return;
     photoLookups[p.id] = true;
-    findPhoto(p.name, p.lat, p.lon).then((url) => {
+    findPhoto(p.name, p.lat, p.lon).then(({ url, asked }) => {
+      // Nothing was learned, so nothing is recorded - not even a "no".
+      if (!url && !asked) {
+        photoLookups[p.id] = "failed";
+        return;
+      }
       const picks = loadPicks();
       const pick = picks.find((x) => x.id === p.id);
       if (!pick) return;
@@ -1779,8 +1867,12 @@
   function photoBlock(p, size) {
     const cls = size === "hero" ? "photo-hero" : "photo-thumb";
     if (p.photo) {
-      return `<div class="${cls}"><img src="${esc(p.photo)}" alt="" loading="lazy" decoding="async"
-        onerror="this.parentNode.classList.add('photo-failed');this.remove();" /></div>`;
+      // data-photo keeps the original address after src has been swapped for
+      // a blob, so the cache stays keyed on the picture rather than on a URL
+      // that only exists in this tab.
+      return `<div class="${cls}"><img src="${esc(p.photo)}" data-photo="${esc(p.photo)}" alt="" loading="lazy" decoding="async"
+        onload="window.__photoSeen(this)"
+        onerror="window.__photoGone(this)" /></div>`;
     }
     return `<div class="${cls} photo-none">${icon(categoryIcon(p), { size: size === "hero" ? 44 : 22 })}</div>`;
   }
@@ -2103,7 +2195,12 @@
     appBanner.innerHTML = "";
   }
 
-  window.addEventListener("online", refreshBanner);
+  window.addEventListener("online", () => {
+    refreshBanner();
+    // Signal coming back is the one moment worth asking again about
+    // everything that could not be asked while it was gone.
+    forgetFailedPhotoLookups();
+  });
   window.addEventListener("offline", refreshBanner);
 
   // ---------- Backup ----------
@@ -2610,10 +2707,10 @@
     const tileCountEl = document.getElementById("tileCount");
     const tileResult = document.getElementById("tileResult");
     const showTileCount = async () => {
-      const n = await countTiles();
+      const [n, bytes] = await Promise.all([countTiles(), tilesBytes()]);
       if (!tileCountEl) return;
       tileCountEl.textContent = n
-        ? `${n.toLocaleString("en-GB")} map tiles stored on this phone.`
+        ? `${formatBytes(bytes)} of map stored on this phone — it works with no signal.`
         : "No map area stored yet — maps will need signal.";
     };
     showTileCount();
@@ -5791,7 +5888,7 @@
   let suggestItems = [];
 
   async function fetchSuggestions(query, signal) {
-    const res = await fetch(
+    const res = await fetchWithTimeout(
       `${PHOTON_URL}?q=${encodeURIComponent(query)}&limit=6&lang=en`,
       { signal }
     );
@@ -5829,7 +5926,7 @@
   // autocomplete, so it is only reached when the purpose-built service has
   // already failed - and still behind the same debounce.
   async function fetchSuggestionsFallback(query, signal) {
-    const res = await fetch(
+    const res = await fetchWithTimeout(
       `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=6&addressdetails=1&namedetails=1&q=${encodeURIComponent(
         query
       )}`,
@@ -6175,7 +6272,9 @@
         aiSuggested: true,
         sources,
       });
-      await new Promise((r) => setTimeout(r, 1100));
+      // A second per place was six or seven seconds of a search spent doing
+      // nothing at all. Only owed when a request was genuinely made.
+      if (!lastGeocodeFromCache) await new Promise((r) => setTimeout(r, 1100));
     }
     if (!out.length) {
       throw new Error(
@@ -6259,9 +6358,7 @@
     const url =
       `https://nominatim.openstreetmap.org/search?format=json&limit=10&bounded=1` +
       `&viewbox=${encodeURIComponent(viewbox)}&extratags=1&namedetails=1&q=${encodeURIComponent(query)}`;
-    const res = await fetch(url, { headers: { Accept: "application/json" } });
-    if (!res.ok) throw new Error(`Nominatim returned ${res.status}`);
-    const rows = await res.json();
+    const rows = (await cachedJson(url, { headers: { Accept: "application/json" } })).data;
     return (Array.isArray(rows) ? rows : [])
       .map((r) => ({
         name: (r.namedetails && r.namedetails.name) || String(r.display_name || "").split(",")[0],
@@ -6746,11 +6843,11 @@
     let data = null;
     for (const endpoint of OVERPASS_ENDPOINTS) {
       try {
-        const res = await fetch(endpoint, {
-          method: "POST",
-          body: q,
-          headers: { "Content-Type": "text/plain" },
-        });
+        const res = await fetchWithTimeout(
+          endpoint,
+          { method: "POST", body: q, headers: { "Content-Type": "text/plain" } },
+          NET_TIMEOUT_SLOW_MS
+        );
         if (!res.ok) {
           lastError = new Error(`overpass ${endpoint} returned ${res.status}`);
           continue;
@@ -10310,9 +10407,11 @@
     // must win when both exist.
     let data = [];
     for (const url of anchor ? [`${base}&bounded=1&viewbox=${encodeURIComponent(anchorViewbox(anchor))}`, base] : [base]) {
-      const res = await fetch(url, { headers: { Accept: "application/json" } });
-      if (!res.ok) return [];
-      data = await res.json();
+      try {
+        data = (await cachedJson(url, { headers: { Accept: "application/json" } })).data;
+      } catch (e) {
+        return [];
+      }
       if (Array.isArray(data) && data.some((r) => looksLikeMajorPlace({ type: r.type }))) break;
     }
     const hits = (Array.isArray(data) ? data : []).filter((r) => looksLikeMajorPlace({ type: r.type }));
@@ -10381,7 +10480,7 @@
   // billing is per field-mask tier, so asking for less keeps it in the
   // cheapest bracket rather than being charged for data we don't display.
   async function searchGooglePlaces(query, key, anchor) {
-    const res = await fetch("https://places.googleapis.com/v1/places:searchText", {
+    const res = await fetchWithTimeout("https://places.googleapis.com/v1/places:searchText", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -10417,7 +10516,7 @@
             }
           : { textQuery: scopedQuery(query), maxResultCount: 5 }
       ),
-    });
+    }, NET_TIMEOUT_SLOW_MS);
 
     if (!res.ok) {
       const detail = await res.text().catch(() => "");
@@ -10462,9 +10561,7 @@
       `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&addressdetails=1` +
       `&extratags=1&namedetails=1&q=${encodeURIComponent(anchor ? query : scopedQuery(query))}`;
     const url = anchor ? `${base}&bounded=1&viewbox=${encodeURIComponent(anchorViewbox(anchor))}` : base;
-    const res = await fetch(url, { headers: { Accept: "application/json" } });
-    if (!res.ok) throw new Error("nominatim error");
-    const data = await res.json();
+    const data = (await cachedJson(url, { headers: { Accept: "application/json" } })).data;
     return data.map((r) => {
       const details = placeFromNominatim(r);
       return {
@@ -10494,15 +10591,24 @@
   // IndexedDB, and the trip's area can be fetched ahead of leaving.
   const TILE_DB = "trip-tiles-v1";
   const TILE_STORE = "tiles";
+  // The same database now holds the other two things worth not paying for
+  // twice: the photographs, as blobs, so a list of places looks like a list
+  // of places with no signal; and the geocoder's answers, because a place
+  // does not move and asking again is both slow and rate-limited.
+  const PHOTO_STORE = "photos";
+  const GEO_STORE = "geocode";
+  const DB_VERSION = 2;
   let tileDbPromise = null;
 
   function tileDb() {
     if (tileDbPromise) return tileDbPromise;
     tileDbPromise = new Promise((resolve, reject) => {
       if (!window.indexedDB) return reject(new Error("no indexeddb"));
-      const req = indexedDB.open(TILE_DB, 1);
+      const req = indexedDB.open(TILE_DB, DB_VERSION);
       req.onupgradeneeded = () => {
-        if (!req.result.objectStoreNames.contains(TILE_STORE)) req.result.createObjectStore(TILE_STORE);
+        [TILE_STORE, PHOTO_STORE, GEO_STORE].forEach((name) => {
+          if (!req.result.objectStoreNames.contains(name)) req.result.createObjectStore(name);
+        });
       };
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => reject(req.error);
@@ -10511,6 +10617,120 @@
       throw e;
     });
     return tileDbPromise;
+  }
+
+  async function dbGet(store, key) {
+    try {
+      const db = await tileDb();
+      return await new Promise((resolve) => {
+        const req = db.transaction(store, "readonly").objectStore(store).get(key);
+        req.onsuccess = () => resolve(req.result === undefined ? null : req.result);
+        req.onerror = () => resolve(null);
+      });
+    } catch (e) {
+      return null;
+    }
+  }
+
+  async function dbPut(store, key, value) {
+    try {
+      const db = await tileDb();
+      return await new Promise((resolve) => {
+        const tx = db.transaction(store, "readwrite");
+        tx.objectStore(store).put(value, key);
+        tx.oncomplete = () => resolve(true);
+        tx.onerror = () => resolve(false);
+      });
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // ---------- Photographs, kept ----------
+  // `photoBlock` pointed an <img> straight at upload.wikimedia.org, so the
+  // one thing that made a list of places feel like somewhere you might go
+  // was also the one thing guaranteed to be missing when you were actually
+  // there. A picture that has already been downloaded once is kept, and used
+  // when the network cannot supply it again.
+  const photoObjectUrls = {};
+
+  async function keepPhoto(url) {
+    if (!url || photoObjectUrls[url]) return;
+    if (await dbGet(PHOTO_STORE, url)) return;
+    try {
+      const res = await fetchWithTimeout(url);
+      if (!res.ok) return;
+      const blob = await res.blob();
+      // A thumbnail is tens of kilobytes; anything far larger is not one, and
+      // is not worth the room on a phone.
+      if (blob.size > 900000) return;
+      await dbPut(PHOTO_STORE, url, blob);
+    } catch (e) {
+      /* no signal, or the picture has gone - nothing to record */
+    }
+  }
+
+  async function photoFromCache(url) {
+    if (!url) return null;
+    if (photoObjectUrls[url]) return photoObjectUrls[url];
+    const blob = await dbGet(PHOTO_STORE, url);
+    if (!blob) return null;
+    photoObjectUrls[url] = URL.createObjectURL(blob);
+    return photoObjectUrls[url];
+  }
+
+  // Called from the <img> itself, which is the only place that knows whether
+  // the picture arrived. Both handlers are on window because the markup is
+  // built as a string in a dozen places.
+  window.__photoSeen = (img) => {
+    keepPhoto(img.getAttribute("data-photo") || img.src);
+  };
+
+  window.__photoGone = (img) => {
+    const url = img.getAttribute("data-photo") || img.src;
+    // Whatever happens next, this handler must not run again on the same
+    // element, or a cached blob that also fails would loop.
+    img.onerror = null;
+    img.removeAttribute("onerror");
+    photoFromCache(url).then((objUrl) => {
+      if (objUrl) {
+        img.src = objUrl;
+        return;
+      }
+      if (img.parentNode) img.parentNode.classList.add("photo-failed");
+      img.remove();
+    });
+  };
+
+  // ---------- The geocoder's answers, kept ----------
+  // A place does not move. Asking Nominatim the same question twice is a
+  // second wait, a second helping of its one-request-a-second rate limit, and
+  // no chance at all of an answer when there is no signal.
+  const GEO_CACHE_MS = 30 * 24 * 60 * 60 * 1000;
+
+  // Answers `{ data, fromCache }` - the second half so the caller can skip the
+  // deliberate pause between lookups when nothing was actually asked.
+  async function cachedJson(url, opts, ms) {
+    const hit = await dbGet(GEO_STORE, url);
+    if (hit && Date.now() - hit.at < GEO_CACHE_MS) return { data: hit.data, fromCache: true };
+    const res = await fetchWithTimeout(url, opts, ms);
+    if (!res.ok) {
+      // A stale answer beats an error: this is a place's coordinates, not a
+      // train time.
+      if (hit) return { data: hit.data, fromCache: true };
+      const err = new Error(`lookup ${res.status}`);
+      err.status = res.status;
+      throw err;
+    }
+    const data = await res.json();
+    // A miss is never written down. "Nothing found" is far more often the
+    // geocoder having a moment, or a place nobody has mapped yet, than a
+    // settled fact - and remembering it for a month means a place that gets
+    // added to OpenStreetMap tomorrow stays unfindable until well after the
+    // trip is over.
+    const empty = Array.isArray(data) ? data.length === 0 : !data;
+    if (!empty) dbPut(GEO_STORE, url, { at: Date.now(), data });
+    return { data, fromCache: false };
   }
 
   function tileKey(z, x, y) {
@@ -10547,6 +10767,36 @@
     } catch (e) {
       return 0;
     }
+  }
+
+  // "2,500 map tiles" is a number about the app. Nobody has any idea whether
+  // that is a lot. Room on the phone is the thing actually being spent, so
+  // that is the thing reported.
+  async function tilesBytes() {
+    try {
+      const db = await tileDb();
+      return await new Promise((resolve) => {
+        let total = 0;
+        const req = db.transaction(TILE_STORE, "readonly").objectStore(TILE_STORE).openCursor();
+        req.onsuccess = () => {
+          const cursor = req.result;
+          if (!cursor) return resolve(total);
+          if (cursor.value && typeof cursor.value.size === "number") total += cursor.value.size;
+          cursor.continue();
+        };
+        req.onerror = () => resolve(total);
+      });
+    } catch (e) {
+      return 0;
+    }
+  }
+
+  function formatBytes(bytes) {
+    if (!bytes) return "0 MB";
+    const mb = bytes / (1024 * 1024);
+    if (mb < 0.1) return "under 0.1 MB";
+    if (mb < 10) return `${mb.toFixed(1)} MB`;
+    return `${Math.round(mb)} MB`;
   }
 
   async function clearTiles() {
@@ -10598,7 +10848,7 @@
             img.onerror = () => finish();
             return null;
           }
-          return fetch(tileUrl(coords.z, coords.x, coords.y))
+          return fetchWithTimeout(tileUrl(coords.z, coords.x, coords.y))
             .then((res) => (res.ok ? res.blob() : null))
             .then((fetched) => {
               if (!fetched) {
@@ -10660,10 +10910,35 @@
     return list;
   }
 
-  // A margin around the saved places, because you walk between them rather
-  // than teleporting to each one.
+  // Everywhere the trip actually touches: the saved places, whatever the plan
+  // schedules, and the area you are currently searching around. The last two
+  // were missing, so a stop added to a day and never saved as a pick, and the
+  // town you are standing in, both fell outside the download.
+  function offlineStops() {
+    const stops = loadPicks()
+      .filter((p) => p.lat != null && p.lon != null)
+      .map((p) => ({ lat: p.lat, lon: p.lon }));
+    const plan = loadPlan();
+    const byId = {};
+    loadPicks().forEach((p) => {
+      byId[p.id] = p;
+    });
+    Object.values((plan && plan.items) || {}).forEach((items) => {
+      (items || []).forEach((item) => {
+        const pick = byId[item.pickId];
+        if (pick && pick.lat != null && pick.lon != null) stops.push({ lat: pick.lat, lon: pick.lon });
+        else if (item.lat != null && item.lon != null) stops.push({ lat: item.lat, lon: item.lon });
+      });
+    });
+    const anchor = loadAnchor();
+    if (anchor && anchor.lat != null && anchor.lon != null) stops.push({ lat: anchor.lat, lon: anchor.lon });
+    return stops;
+  }
+
+  // A margin around the trip, because you walk between its stops rather than
+  // teleporting to each one.
   function savedPlacesBounds(padDegrees) {
-    const located = loadPicks().filter((p) => p.lat != null);
+    const located = offlineStops();
     if (!located.length) return null;
     const pad = padDegrees == null ? 0.08 : padDegrees;
     const lats = located.map((p) => p.lat);
@@ -10676,6 +10951,55 @@
     };
   }
 
+  function tileCentre(z, x, y) {
+    const n = Math.pow(2, z);
+    const lon = ((x + 0.5) / n) * 360 - 180;
+    const latRad = Math.atan(Math.sinh(Math.PI * (1 - (2 * (y + 0.5)) / n)));
+    return { lat: (latRad * 180) / Math.PI, lon };
+  }
+
+  function kmToNearestStop(tile, stops) {
+    const c = tileCentre(tile.z, tile.x, tile.y);
+    let best = Infinity;
+    for (const s of stops) {
+      const d = haversineKm(c.lat, c.lon, s.lat, s.lon);
+      if (d < best) best = d;
+    }
+    return best;
+  }
+
+  // The old trim was `wanted.slice(0, 2500)`. Tiles are pushed z, then x, then
+  // y - so that kept street detail for the westernmost strip of the map and
+  // silently dropped the east, with nobody told which half they got. A trip
+  // that runs west to east got half a trip and no warning.
+  //
+  // What matters is not where a tile sits in an array but how near it is to
+  // somewhere you are going. Coarse zooms are kept whole - they are cheap and
+  // they are what stops the map having holes in it - and the detailed zooms
+  // are filled in from the stops outwards until the budget runs out.
+  function chooseTiles(bounds, stops, cap) {
+    const kept = [];
+    let dropped = 0;
+    let detailTrimmed = false;
+    for (const z of OFFLINE_ZOOMS) {
+      const atZoom = tilesForBounds(bounds, [z]);
+      const room = cap - kept.length;
+      if (atZoom.length <= room) {
+        kept.push.apply(kept, atZoom);
+        continue;
+      }
+      if (room > 0 && stops.length) {
+        atZoom.sort((a, b) => kmToNearestStop(a, stops) - kmToNearestStop(b, stops));
+        kept.push.apply(kept, atZoom.slice(0, room));
+        dropped += atZoom.length - room;
+      } else {
+        dropped += atZoom.length;
+      }
+      detailTrimmed = true;
+    }
+    return { kept, dropped, detailTrimmed };
+  }
+
   // Deliberately serial with a pause between requests. OpenStreetMap's tile
   // policy asks that bulk downloading be avoided; a few hundred tiles for one
   // family's week, fetched politely, is a different thing from scraping, and
@@ -10684,29 +11008,25 @@
     const bounds = savedPlacesBounds();
     if (!bounds) return { ok: false, message: "Save a few places first — the download follows where they are." };
 
-    let wanted = tilesForBounds(bounds, OFFLINE_ZOOMS);
-    const total = wanted.length;
-    let trimmed = false;
-    if (wanted.length > OFFLINE_TILE_CAP) {
-      // Drop the most detailed zoom first: it is the biggest and the least
-      // needed, since street detail is what you have signal for in a town.
-      wanted = tilesForBounds(bounds, OFFLINE_ZOOMS.slice(0, -1));
-      trimmed = true;
-    }
-    if (wanted.length > OFFLINE_TILE_CAP) wanted = wanted.slice(0, OFFLINE_TILE_CAP);
+    const stops = offlineStops();
+    const total = tilesForBounds(bounds, OFFLINE_ZOOMS).length;
+    const { kept: wanted, dropped, detailTrimmed } = chooseTiles(bounds, stops, OFFLINE_TILE_CAP);
 
     let done = 0;
     let saved = 0;
+    let bytes = 0;
     for (const c of wanted) {
       if (tileDownload.cancelled) break;
       done++;
       try {
         const already = await readTile(c.z, c.x, c.y);
         if (!already) {
-          const res = await fetch(tileUrl(c.z, c.x, c.y));
+          const res = await fetchWithTimeout(tileUrl(c.z, c.x, c.y));
           if (res.ok) {
-            await writeTile(c.z, c.x, c.y, await res.blob());
+            const blob = await res.blob();
+            await writeTile(c.z, c.x, c.y, blob);
             saved++;
+            bytes += blob.size || 0;
           }
           await new Promise((r) => setTimeout(r, 60));
         }
@@ -10718,13 +11038,22 @@
     if (onProgress) onProgress(done, wanted.length);
 
     if (tileDownload.cancelled) {
-      return { ok: true, message: `Stopped — ${saved} new tiles kept. What downloaded still works offline.` };
+      return {
+        ok: true,
+        message: `Stopped — ${formatBytes(bytes)} of map kept. What downloaded still works offline.`,
+      };
     }
     return {
       ok: true,
       message:
-        `Saved ${wanted.length} tiles around your places.` +
-        (trimmed ? ` Street-level detail was left out to stay under ${OFFLINE_TILE_CAP} tiles (${total} would have been needed).` : ""),
+        `Saved ${formatBytes(bytes)} of map around your places` +
+        (saved < wanted.length ? ` (${wanted.length - saved} already stored).` : ".") +
+        (detailTrimmed
+          ? ` Street-level detail was filled in nearest your stops first and ran out ` +
+            `${dropped} tiles short of covering everywhere — the far corners of the area ` +
+            `will be less detailed offline. Saving fewer places, or clearing and ` +
+            `downloading again after the plan settles, covers more of what you need.`
+          : ""),
     };
   }
 
@@ -11289,12 +11618,12 @@
   // around here".
   async function reverseGeocode(lat, lon) {
     try {
-      const res = await fetch(
-        `https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=14&lat=${lat}&lon=${lon}`,
-        { headers: { Accept: "application/json" } }
-      );
-      if (!res.ok) return null;
-      const data = await res.json();
+      const data = (
+        await cachedJson(
+          `https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=14&lat=${lat}&lon=${lon}`,
+          { headers: { Accept: "application/json" } }
+        )
+      ).data;
       const a = data.address || {};
       const parts = [
         a.neighbourhood || a.suburb || a.village || a.town || a.hamlet,
@@ -11816,7 +12145,7 @@
       `https://api.open-meteo.com/v1/forecast?latitude=${lat.toFixed(4)}&longitude=${lon.toFixed(4)}` +
       `&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,` +
       `precipitation_sum,wind_speed_10m_max&timezone=auto&forecast_days=${WEATHER_HORIZON_DAYS}`;
-    const res = await fetch(url);
+    const res = await fetchWithTimeout(url);
     if (!res.ok) throw new Error(`open-meteo ${res.status}`);
     const data = await res.json();
     const d = data.daily || {};
@@ -12851,6 +13180,15 @@
     }
   }
   window.tapFeedback = tapFeedback;
+
+  // A door for the browser suite. Most of it drives real controls, because
+  // "the handler is attached" and "tapping it does something" have turned out
+  // to be different questions in this app more than once. But a few of the
+  // worst faults live in functions no button reaches directly: a lookup with
+  // no timeout has no visible symptom except a spinner that stays forever,
+  // and there is no way to wait for forever. These read; none of them changes
+  // anything.
+  window.__tripTest = { geocodeCandidates, findPhoto, isOffline, chooseTiles, offlineStops, formatBytes };
 
   setUpNativeShell();
 
