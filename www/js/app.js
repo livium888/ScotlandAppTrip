@@ -11936,10 +11936,23 @@
   // Screens arrive rather than appear: the class is removed and re-added so
   // the animation restarts, which it will not do if the class is already
   // there. The reflow between the two is the part that makes it work.
+  //
+  // And then it is taken off again, which the first version did not do. The
+  // class is what makes the children animate, so leaving it on meant every
+  // later redraw of the same screen replayed a full-screen fade-and-rise -
+  // and screens redraw constantly here, as photographs arrive, distances
+  // finish measuring, the forecast lands. The result on a real phone was the
+  // whole app strobing. The animation belongs to the change of screen, so it
+  // lasts exactly as long as that.
+  let entranceTimer = null;
+
   function replayViewEntrance() {
     view.classList.remove("switching");
     void view.offsetWidth;
     view.classList.add("switching");
+    clearTimeout(entranceTimer);
+    // Longest stagger (110ms) plus the duration (260ms), with room to spare.
+    entranceTimer = setTimeout(() => view.classList.remove("switching"), 460);
   }
 
   // Fills every <span data-ico="name"> with its icon. Called after anything

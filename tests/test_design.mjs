@@ -174,6 +174,47 @@ check('a photo is only taken from an article that matches the place', await page
 }));
 
 await page.evaluate(() => document.querySelector('#placeModal .modal-close').click());
+await page.waitForTimeout(300);
+
+// ---------- The entrance plays once ----------
+// A screen arriving gets a fade and a rise. The class that does it was added
+// on a tab change and never taken off, and the class is what makes the
+// children animate - so every later redraw of that screen replayed the whole
+// thing. Screens redraw constantly here as photographs arrive, distances
+// finish measuring and the forecast lands, so on a real phone the app
+// strobed: "they keep flashing over and over and over again."
+await page.evaluate(() => {
+  window.__anims = 0;
+  document.getElementById('view').addEventListener('animationstart', (e) => {
+    if (e.animationName === 'view-in') window.__anims++;
+  }, true);
+});
+// A genuine change of screen - re-selecting the tab you are on is not one,
+// and correctly does not replay anything.
+await page.evaluate(() => document.querySelector('[data-view="today"]').click());
+await page.waitForTimeout(250);
+check('a screen animates when you arrive on it', await page.evaluate(() => window.__anims > 0),
+  await page.evaluate(() => String(window.__anims)));
+await page.waitForTimeout(600);
+check('and the class that does it does not outlive the arrival', await page.evaluate(() =>
+  !document.getElementById('view').classList.contains('switching')));
+
+// Any ordinary redraw of the same screen: re-ordering the list stands in for
+// the photograph or the forecast that lands while you are reading it.
+await page.evaluate(() => document.querySelector('[data-view="picks"]').click());
+await page.waitForTimeout(700);
+await page.evaluate(() => { window.__anims = 0; });
+await page.evaluate(() => document.querySelector('[data-pick-kind-filter="eat"]').click());
+await page.waitForTimeout(500);
+check('a redraw of the screen you are already on does not replay it',
+  await page.evaluate(() => window.__anims === 0),
+  await page.evaluate(() => String(window.__anims)));
+await page.evaluate(() => { window.__anims = 0; });
+await page.evaluate(() => document.querySelector('[data-pick-kind-filter="all"]').click());
+await page.waitForTimeout(500);
+check('nor does the next one', await page.evaluate(() => window.__anims === 0),
+  await page.evaluate(() => String(window.__anims)));
+
 await browser.close();
 console.log(failures === 0 ? '\nALL TESTS PASSED' : `\n${failures} FAILED`);
 process.exit(failures ? 1 : 0);
