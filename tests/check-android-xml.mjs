@@ -153,6 +153,8 @@ const REQUIRED_PERMISSIONS = [
   ["android.permission.ACCESS_NETWORK_STATE", "knowing when there is no signal"],
   ["android.permission.ACCESS_COARSE_LOCATION", '"Where I am"'],
   ["android.permission.ACCESS_FINE_LOCATION", "an accurate fix"],
+  ["android.permission.POST_NOTIFICATIONS", "reminders about the day"],
+  ["android.permission.SCHEDULE_EXACT_ALARM", "a reminder landing at the minute it was set for"],
 ];
 
 const manifest = files.find((f) => f.endsWith("AndroidManifest.xml"));

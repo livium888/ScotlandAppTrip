@@ -2670,6 +2670,42 @@
 
             <div class="settings-divider"></div>
 
+            <label class="settings-label">Reminders</label>
+            ${
+              notificationsPossible()
+                ? `<p class="settings-hint">
+                     Worked out from your plan on this phone and nothing else — they fire
+                     with no signal, and nothing is sent anywhere. Off unless you turn them on.
+                   </p>
+                   <label class="settings-toggle">
+                     <input type="checkbox" id="notifyOn"${loadNotifySettings().enabled ? " checked" : ""} />
+                     <span>Remind me about the day</span>
+                   </label>
+                   <div id="notifyDetail"${loadNotifySettings().enabled ? "" : " hidden"}>
+                     <label class="settings-toggle">
+                       <input type="checkbox" id="notifyLeave"${loadNotifySettings().leave ? " checked" : ""} />
+                       <span>Time to leave for the next stop</span>
+                     </label>
+                     <label class="settings-toggle">
+                       <input type="checkbox" id="notifyRain"${loadNotifySettings().rain ? " checked" : ""} />
+                       <span>Rain on a day you'll be outdoors</span>
+                     </label>
+                     <label class="settings-toggle">
+                       <input type="checkbox" id="notifyClosing"${loadNotifySettings().closing ? " checked" : ""} />
+                       <span>Somewhere is closing soon</span>
+                     </label>
+                     <label class="settings-label" for="notifyMorning" style="margin-top:10px;">Morning brief at</label>
+                     <input type="time" id="notifyMorning" class="settings-input" value="${esc(loadNotifySettings().morning)}" />
+                   </div>
+                   <pre class="settings-result" id="notifyResult" hidden></pre>`
+                : `<p class="settings-hint">
+                     Reminders need the installed app — a browser tab cannot wake itself up
+                     to tell you a castle shuts in forty-five minutes.
+                   </p>`
+            }
+
+            <div class="settings-divider"></div>
+
             <label class="settings-label">Backup</label>
             <p class="settings-hint">
               Everything is stored only on this phone. Export a copy you can keep or send
@@ -2739,6 +2775,70 @@
         dlBtn.textContent = "⬇ Download map area";
         if (tileResult) tileResult.textContent = res.message;
         showTileCount();
+      });
+    }
+
+    // ---- Reminders ----
+    const notifyOn = document.getElementById("notifyOn");
+    const notifyDetail = document.getElementById("notifyDetail");
+    const notifyResult = document.getElementById("notifyResult");
+    const sayNotify = (text) => {
+      if (!notifyResult) return;
+      notifyResult.hidden = false;
+      notifyResult.className = "settings-result ok";
+      notifyResult.textContent = text;
+    };
+    const countScheduled = () => {
+      const n = plannedNotifications().length;
+      return n
+        ? `${n} reminder${n === 1 ? "" : "s"} set from your plan.`
+        : "Nothing to remind you about yet — reminders come from the days in your plan.";
+    };
+
+    if (notifyOn) {
+      notifyOn.addEventListener("change", async () => {
+        if (notifyOn.checked) {
+          // Asked for at the moment it is wanted, rather than on first launch
+          // when nobody knows what they are agreeing to.
+          const granted = await askForNotificationPermission();
+          if (!granted) {
+            notifyOn.checked = false;
+            sayNotify("Android turned that down. Reminders need notification permission, which you can grant in the phone's app settings.");
+            return;
+          }
+          saveNotifySettings({ enabled: true });
+          if (notifyDetail) notifyDetail.hidden = false;
+          await rescheduleNotifications(true);
+          sayNotify(countScheduled());
+        } else {
+          saveNotifySettings({ enabled: false });
+          if (notifyDetail) notifyDetail.hidden = true;
+          await cancelAllNotifications();
+          sayNotify("Reminders off. Nothing is scheduled.");
+        }
+      });
+    }
+
+    [
+      ["notifyLeave", "leave"],
+      ["notifyRain", "rain"],
+      ["notifyClosing", "closing"],
+    ].forEach(([id, key]) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.addEventListener("change", async () => {
+        saveNotifySettings({ [key]: el.checked });
+        await rescheduleNotifications(true);
+        sayNotify(countScheduled());
+      });
+    });
+
+    const notifyMorning = document.getElementById("notifyMorning");
+    if (notifyMorning) {
+      notifyMorning.addEventListener("change", async () => {
+        saveNotifySettings({ morning: notifyMorning.value || "07:30" });
+        await rescheduleNotifications(true);
+        sayNotify(countScheduled());
       });
     }
 
@@ -3594,6 +3694,19 @@
 
   function savePlan(plan) {
     localStorage.setItem(boardKey(activeBoard().id, "plan"), JSON.stringify(plan));
+    // Reminders are worked out from the plan, so the plan changing is the one
+    // event that always invalidates them. Debounced because dragging a stop
+    // around a day writes it a dozen times in a second, and the fingerprint
+    // check means an unchanged schedule costs nothing anyway.
+    scheduleReschedule();
+  }
+
+  let rescheduleTimer = null;
+
+  function scheduleReschedule() {
+    if (!notificationsPossible()) return;
+    clearTimeout(rescheduleTimer);
+    rescheduleTimer = setTimeout(() => rescheduleNotifications(), 1200);
   }
 
   // "Day 3 · Fri 21 Aug" -> "Fri 21". Full labels don't fit on a chip.
@@ -4650,6 +4763,65 @@
 
     if (!sawDaySpec) return false; // e.g. "09:00-17:00" - applies every day
     return !mentioned.has(dayCode);
+  }
+
+  // The same conservatism, one step further: what time does it shut. Today
+  // knew a castle was open on a Tuesday and said nothing at all about it
+  // being seven in the evening and the castle shutting at five - which is the
+  // version of that question you actually have while standing in a car park.
+  //
+  // Returns minutes past midnight, or null when the string is anything this
+  // does not confidently understand. Null means "say nothing", which is the
+  // right answer far more often than a guess would be.
+  function closingMinutesOnDay(openingHours, dayCode) {
+    if (!openingHours || !dayCode) return null;
+    const hours = openingHours.trim();
+    if (/24\/7/i.test(hours)) return null;
+    if (/PH|SH|easter|summer|winter|"/i.test(hours)) return null;
+    if (closedOnDay(hours, dayCode)) return null;
+
+    let best = null;
+    hours.split(";").forEach((rule) => {
+      if (/\boff\b/i.test(rule)) return;
+      const dayPart = (rule.match(/^[\sA-Za-z,\-]+/) || [""])[0];
+      const days = new Set();
+      let sawDaySpec = false;
+      const rangeRe = /(Mo|Tu|We|Th|Fr|Sa|Su)\s*-\s*(Mo|Tu|We|Th|Fr|Sa|Su)/gi;
+      let m;
+      while ((m = rangeRe.exec(dayPart))) {
+        sawDaySpec = true;
+        let i = DAY_NAMES.indexOf(m[1].slice(0, 2).replace(/^./, (c) => c.toUpperCase()));
+        const end = DAY_NAMES.indexOf(m[2].slice(0, 2).replace(/^./, (c) => c.toUpperCase()));
+        if (i < 0 || end < 0) continue;
+        for (let guard = 0; guard < 8; guard++) {
+          days.add(DAY_NAMES[i]);
+          if (i === end) break;
+          i = (i + 1) % 7;
+        }
+      }
+      const singleRe = /\b(Mo|Tu|We|Th|Fr|Sa|Su)\b/gi;
+      while ((m = singleRe.exec(dayPart.replace(rangeRe, " ")))) {
+        sawDaySpec = true;
+        days.add(m[1].slice(0, 2).replace(/^./, (c) => c.toUpperCase()));
+      }
+      // A rule naming no days applies to every day; one naming days applies
+      // only to those.
+      if (sawDaySpec && !days.has(dayCode)) return;
+
+      // The last closing time in the rule, so a place that shuts for lunch is
+      // reported as closing in the evening rather than at noon.
+      const timeRe = /(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})/g;
+      let t;
+      while ((t = timeRe.exec(rule))) {
+        const close = Number(t[3]) * 60 + Number(t[4]);
+        // A range crossing midnight is a pub, and "closes in 45 minutes" is
+        // not the useful thing to say about a pub.
+        const open = Number(t[1]) * 60 + Number(t[2]);
+        if (close <= open) continue;
+        if (best == null || close > best) best = close;
+      }
+    });
+    return best;
   }
 
   // Rough walking time between two stops. Deliberately straight-line distance
@@ -12266,6 +12438,318 @@
     `;
   }
 
+  // ---------- Telling you the thing before you need it ----------
+  // Today already worked out which stop is next, whether somewhere might be
+  // shut, and what the sky is doing - and could do nothing whatever with any
+  // of it unless you happened to be holding the phone with the app open. On
+  // a day out that is the one thing you are not doing.
+  //
+  // Everything here is scheduled locally from the stored plan, so it fires in
+  // a glen with no signal exactly as it does at home. Nothing is sent
+  // anywhere and nothing is scheduled at all until you ask for it.
+  const NOTIFY_KEY = "notify-v1";
+  const NOTIFY_FINGERPRINT_KEY = "notify-fingerprint-v1";
+
+  // Fixed id blocks, so a reschedule can cancel precisely what it replaces
+  // rather than clearing the lot and hoping.
+  const NOTIFY_IDS = { morning: 1000, leave: 2000, rain: 3000, closing: 4000 };
+  const NOTIFY_BLOCK = 900;
+
+  function loadNotifySettings() {
+    const s = readJson(NOTIFY_KEY, null);
+    return {
+      enabled: !!(s && s.enabled),
+      morning: (s && s.morning) || "07:30",
+      leave: !s || s.leave !== false,
+      rain: !s || s.rain !== false,
+      closing: !s || s.closing !== false,
+    };
+  }
+
+  function saveNotifySettings(patch) {
+    localStorage.setItem(NOTIFY_KEY, JSON.stringify(Object.assign(loadNotifySettings(), patch)));
+  }
+
+  function notifyPlugin() {
+    return nativePlugin("LocalNotifications");
+  }
+
+  // A browser has no local notifications and never will; the settings row says
+  // so rather than offering a switch that does nothing.
+  function notificationsPossible() {
+    return !!notifyPlugin();
+  }
+
+  async function askForNotificationPermission() {
+    const plugin = notifyPlugin();
+    if (!plugin) return false;
+    try {
+      const current = await plugin.checkPermissions();
+      if (current && current.display === "granted") return true;
+      const asked = await plugin.requestPermissions();
+      return !!(asked && asked.display === "granted");
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // The stops of a planned day, in the order they will be walked, with the
+  // place each one refers to attached.
+  function dayStops(dayId) {
+    const plan = loadPlan();
+    const byId = {};
+    loadPicks().forEach((p) => {
+      byId[p.id] = p;
+    });
+    return itemsInDayOrder(plan.items[dayId] || [])
+      .map((it) => ({ item: it, pick: byId[it.pickId] }))
+      .filter((x) => x.pick);
+  }
+
+  function atTimeOn(date, minutes) {
+    const when = new Date(date);
+    when.setHours(0, 0, 0, 0);
+    when.setMinutes(minutes);
+    return when;
+  }
+
+  function minutesFromClock(hhmm) {
+    const m = /^(\d{1,2}):(\d{2})$/.exec(String(hhmm || "").trim());
+    return m ? Number(m[1]) * 60 + Number(m[2]) : 7 * 60 + 30;
+  }
+
+  // Somewhere that is mostly weather. Used only to decide whether a wet
+  // forecast is worth interrupting somebody over - a rainy day matters if you
+  // were going up a hill and does not if you were going to a museum.
+  const OUTDOOR_RE =
+    /walk|trail|hill|mountain|glen|beach|coast|loch|falls?|waterfall|garden|park|zoo|farm|forest|wood|viewpoint|island|harbour|pier|castle ruin|ruins?/i;
+
+  function looksOutdoor(pick) {
+    if (!pick) return false;
+    return OUTDOOR_RE.test(`${pick.category || ""} ${pick.name || ""} ${pick.description || ""}`);
+  }
+
+  // Everything that would be worth saying, as plain objects. Kept separate
+  // from the scheduling so it can be checked without a phone in the room.
+  function plannedNotifications(now) {
+    const settings = loadNotifySettings();
+    const out = [];
+    if (!settings.enabled) return out;
+
+    const at = now || new Date();
+    const plan = loadPlan();
+    const morningMins = minutesFromClock(settings.morning);
+
+    plan.days.forEach((day, dayIndex) => {
+      const date = dateForDayLabel(day.label);
+      if (!date) return; // an undated day has no time to fire at
+      const stops = dayStops(day.id);
+      if (!stops.length) return;
+
+      const dayCode = dayCodeFromLabel(day.label);
+      // The same forecast Today reads, through the same function - reaching
+      // into the cache by hand would be a second answer to a question the app
+      // already answers, and the two would drift.
+      const f = forecastForDay(day.label, dayWeatherAnchor(day.id));
+      const forecast = f && !f.tooFar ? f.day : null;
+
+      // ---- The morning brief ----
+      const first = stops[0];
+      // `booking` is set when a result said the place usually needs booking
+      // ahead; `booked` is you ticking it off. Only the pair is worth saying.
+      const unbooked = stops.filter((s) => s.pick.booking && !s.pick.booked).length;
+      const bits = [
+        first.item.time ? `${first.pick.name} at ${first.item.time}` : first.pick.name,
+        stops.length > 1 ? `then ${stops.length - 1} more` : null,
+      ].filter(Boolean);
+      if (forecast) {
+        const look = weatherLook(forecast.code == null ? 3 : forecast.code);
+        bits.push(
+          `${look.label}${forecast.max != null ? `, ${forecast.max}°/${forecast.min}°` : ""}` +
+            (forecast.rainChance != null && forecast.rainChance >= 40 ? `, rain ${forecast.rainChance}%` : "")
+        );
+      }
+      if (unbooked) bits.push(`${unbooked} still to book`);
+      out.push({
+        id: NOTIFY_IDS.morning + (dayIndex % NOTIFY_BLOCK),
+        at: atTimeOn(date, morningMins),
+        title: shortDayLabel(day.label),
+        body: bits.join(" · "),
+        tab: "today",
+      });
+
+      // ---- Rain on a day spent outdoors ----
+      const outdoors = stops.filter((s) => looksOutdoor(s.pick));
+      if (
+        settings.rain &&
+        forecast &&
+        forecast.rainChance != null &&
+        forecast.rainChance >= 60 &&
+        outdoors.length
+      ) {
+        out.push({
+          // Half an hour before the brief, so it is the first thing read
+          // rather than a correction to something already read.
+          id: NOTIFY_IDS.rain + (dayIndex % NOTIFY_BLOCK),
+          at: atTimeOn(date, Math.max(0, morningMins - 30)),
+          title: `Rain today — ${forecast.rainChance}%`,
+          body:
+            `${outdoors.length} of today's stops ${outdoors.length === 1 ? "is" : "are"} outdoors ` +
+            `(${outdoors[0].pick.name}${outdoors.length > 1 ? " and others" : ""}). ` +
+            `Worth having something indoors ready.`,
+          tab: "today",
+          rainy: true,
+        });
+      }
+
+      // ---- Time to leave for the next one ----
+      if (settings.leave) {
+        stops.forEach((stop, i) => {
+          if (!i) return; // nothing is known about where the day starts from
+          const mins = timeToMinutes(stop.item.time);
+          if (mins == null) return;
+          const leg = walkLeg(stops[i - 1].pick, stop.pick);
+          if (!leg) return;
+          // Ten minutes to gather everybody up, which with a small child is
+          // an underestimate.
+          const leaveAt = mins - leg.mins - 10;
+          if (leaveAt <= 0) return;
+          out.push({
+            id: NOTIFY_IDS.leave + ((dayIndex * 20 + i) % NOTIFY_BLOCK),
+            at: atTimeOn(date, leaveAt),
+            title: `Time to head for ${stop.pick.name}`,
+            body:
+              `${stop.item.time} · about ${formatDuration(leg.mins)} ${leg.driving ? "drive" : "walk"} ` +
+              `from ${stops[i - 1].pick.name}.`,
+            tab: "today",
+          });
+        });
+      }
+
+      // ---- It shuts sooner than you think ----
+      if (settings.closing && dayCode) {
+        stops.forEach((stop, i) => {
+          const closes = closingMinutesOnDay(stop.pick.openingHours, dayCode);
+          if (closes == null) return;
+          const warnAt = closes - 45;
+          if (warnAt <= 0) return;
+          // Only worth saying if you were still going to be there: a warning
+          // about a place you left at eleven is noise.
+          const arriving = timeToMinutes(stop.item.time);
+          if (arriving != null && arriving > closes) return;
+          out.push({
+            id: NOTIFY_IDS.closing + ((dayIndex * 20 + i) % NOTIFY_BLOCK),
+            at: atTimeOn(date, warnAt),
+            title: `${stop.pick.name} closes at ${clockFromMinutes(closes)}`,
+            body: `About 45 minutes left. Hours are worth a check before you rely on them.`,
+            tab: "today",
+          });
+        });
+      }
+    });
+
+    // Nothing in the past, and nothing so far out that the plan will have
+    // changed twice before it fires.
+    const horizon = at.getTime() + 21 * 86400000;
+    return out
+      .filter((n) => n.at.getTime() > at.getTime() && n.at.getTime() < horizon)
+      .sort((a, b) => a.at - b.at)
+      // Android will not hold an unlimited number of pending alarms, and a
+      // fortnight of a busy plan can run to hundreds.
+      .slice(0, 60);
+  }
+
+  function clockFromMinutes(mins) {
+    return `${String(Math.floor(mins / 60)).padStart(2, "0")}:${String(mins % 60).padStart(2, "0")}`;
+  }
+
+  // What is scheduled is compared against this before anything is torn down
+  // and rebuilt, so opening the app twenty times a day does not rewrite the
+  // whole alarm list twenty times.
+  function notifyFingerprint(list) {
+    return list.map((n) => `${n.id}@${n.at.getTime()}:${n.title}`).join("|");
+  }
+
+  let rescheduling = false;
+
+  async function rescheduleNotifications(force) {
+    const plugin = notifyPlugin();
+    if (!plugin || rescheduling) return;
+    rescheduling = true;
+    try {
+      const wanted = plannedNotifications();
+      const print = notifyFingerprint(wanted);
+      if (!force && print === (localStorage.getItem(NOTIFY_FINGERPRINT_KEY) || "")) return;
+
+      // Clear what this app scheduled, and only that.
+      try {
+        const pending = await plugin.getPending();
+        const mine = ((pending && pending.notifications) || []).filter((n) => Number(n.id) >= 1000);
+        if (mine.length) await plugin.cancel({ notifications: mine.map((n) => ({ id: n.id })) });
+      } catch (e) {
+        /* nothing pending, or an older plugin - scheduling still works */
+      }
+
+      if (wanted.length) {
+        await plugin.schedule({
+          notifications: wanted.map((n) => ({
+            id: n.id,
+            title: n.title,
+            body: n.body,
+            schedule: { at: n.at, allowWhileIdle: true },
+            extra: { tab: n.tab, rainy: !!n.rainy },
+          })),
+        });
+      }
+      localStorage.setItem(NOTIFY_FINGERPRINT_KEY, print);
+    } catch (e) {
+      // A phone that refuses to schedule is not a reason for a broken app.
+      // The screen still says everything these would have said.
+    } finally {
+      rescheduling = false;
+    }
+  }
+
+  async function cancelAllNotifications() {
+    const plugin = notifyPlugin();
+    if (!plugin) return;
+    try {
+      const pending = await plugin.getPending();
+      const mine = ((pending && pending.notifications) || []).filter((n) => Number(n.id) >= 1000);
+      if (mine.length) await plugin.cancel({ notifications: mine.map((n) => ({ id: n.id })) });
+    } catch (e) {
+      /* nothing to cancel */
+    }
+    localStorage.setItem(NOTIFY_FINGERPRINT_KEY, "");
+  }
+
+  // Tapping one has to land somewhere that answers it, or it is just a buzz.
+  function wireNotificationTaps() {
+    const plugin = notifyPlugin();
+    if (!plugin || !plugin.addListener) return;
+    try {
+      plugin.addListener("localNotificationActionPerformed", (event) => {
+        const extra = (event && event.notification && event.notification.extra) || {};
+        if (extra.rainy) {
+          const current = currentPlanDay();
+          const anchor = current ? dayWeatherAnchor(current.day.id) : null;
+          explore.open = true;
+          explore.category = "rainy";
+          explore.customQuery = "";
+          if (anchor && anchor.lat != null) {
+            explore.centre = { name: anchor.name, lat: anchor.lat, lon: anchor.lon };
+          }
+          markExploreStale();
+          showView("picks");
+          return;
+        }
+        showView(extra.tab || "today");
+      });
+    } catch (e) {
+      /* an older plugin without listeners still fires the notifications */
+    }
+  }
+
   // ---------- Today ----------
   // The screen the app opens on, and the only one that matters while you're
   // actually out: what's next, how far, is it open. Everything else in the
@@ -12437,6 +12921,13 @@
         const prev = idx > 0 ? byId[items[idx - 1].pickId] : null;
         const leg = walkLeg(prev, p);
         const mayBeClosed = closedOnDay(p.openingHours, dayCode);
+        // Today knew a castle was open on a Tuesday and said nothing at all
+        // about it being seven in the evening and the castle shutting at five.
+        // That is the version of the question you have in the car park.
+        const closesAt = closingMinutesOnDay(p.openingHours, dayCode);
+        const minsNow = new Date().getHours() * 60 + new Date().getMinutes();
+        const shutNow = current.isToday && closesAt != null && minsNow >= closesAt;
+        const shutSoon = current.isToday && !shutNow && closesAt != null && closesAt - minsNow <= 60;
         const isNext = idx === nextIdx;
         const done = (current.isToday || current.isPast) && (nextIdx < 0 || idx < nextIdx);
 
@@ -12461,6 +12952,10 @@
             ${
               mayBeClosed
                 ? `<div class="plan-warn">${icon('alert', { size: 15, cls: 'ico-inline' })} May be closed today — check before setting off.</div>`
+                : shutNow
+                ? `<div class="plan-warn">${icon('alert', { size: 15, cls: 'ico-inline' })} Shut for the day — closes at ${esc(clockFromMinutes(closesAt))}.</div>`
+                : shutSoon
+                ? `<div class="plan-warn">${icon('alert', { size: 15, cls: 'ico-inline' })} Closes at ${esc(clockFromMinutes(closesAt))} — about ${formatDuration(closesAt - minsNow)} left.</div>`
                 : ""
             }
             ${p.note ? `<div class="today-note">${icon('note', { size: 15, cls: 'ico-inline' })} ${esc(p.note)}</div>` : ""}
@@ -13188,9 +13683,23 @@
   // no timeout has no visible symptom except a spinner that stays forever,
   // and there is no way to wait for forever. These read; none of them changes
   // anything.
-  window.__tripTest = { geocodeCandidates, findPhoto, isOffline, chooseTiles, offlineStops, formatBytes };
+  window.__tripTest = {
+    geocodeCandidates,
+    findPhoto,
+    isOffline,
+    chooseTiles,
+    offlineStops,
+    formatBytes,
+    plannedNotifications,
+    closingMinutesOnDay,
+  };
 
   setUpNativeShell();
+  wireNotificationTaps();
+  // The plan can be a fortnight long and the forecast changes daily, so what
+  // was scheduled last week is not what should fire tomorrow.
+  scheduleReschedule();
+  window.addEventListener("focus", scheduleReschedule);
 
   refreshForBoard();
 

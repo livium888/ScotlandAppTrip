@@ -64,6 +64,7 @@ const SUITES = [
   "test_anchorstrict.mjs",
   "test_anchorone.mjs",
   "test_nosignal.mjs",
+  "test_notify.mjs",
 ];
 
 const MIME = {

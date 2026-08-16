@@ -62,6 +62,17 @@
          passed throughout because Chromium honours setOffline regardless. -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
+    <!-- Reminders about the day: the morning brief, time to leave for the next
+         stop, rain on a day you'll be outdoors, somewhere closing soon. All
+         worked out on the phone from the stored plan, so they fire in a glen
+         with no signal. POST_NOTIFICATIONS is required from Android 13 on;
+         the two alarm permissions are what make a reminder land at the minute
+         it was set for rather than whenever the phone next wakes up, which
+         for "you have 45 minutes before it shuts" is the whole point. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+
     <!-- "Where I am" in Explore needs these. Without them the browser
          geolocation call has nothing to grant and the button silently does
          nothing, which is exactly how it behaved before they were added.
