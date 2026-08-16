@@ -58,6 +58,7 @@ const SUITES = [
   "test_ordering.mjs",
   "test_budget.mjs",
   "test_gestures.mjs",
+  "test_welcome.mjs",
 ];
 
 const MIME = {

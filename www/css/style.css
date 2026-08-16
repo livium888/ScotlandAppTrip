@@ -3146,3 +3146,70 @@ html, body {
 /* The sheet follows a thumb back down, and springs if you let go early. */
 .modal-sheet { transition: transform var(--med) var(--ease-out); }
 .modal-handle { cursor: grab; touch-action: none; }
+
+/* ---------- The first time you open it ---------- */
+.welcome-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: var(--bg);
+  display: none;
+  flex-direction: column;
+  padding: calc(28px + var(--safe-top)) 22px calc(18px + var(--safe-bottom));
+}
+.welcome-overlay.open { display: flex; }
+.welcome-body { flex: 1; overflow-y: auto; }
+.welcome-dots { display: flex; gap: 6px; margin-bottom: 26px; }
+.welcome-dot {
+  width: 26px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--border);
+  transition: background var(--med) var(--ease);
+}
+.welcome-dot.on { background: var(--accent); }
+.welcome-kicker {
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.welcome-title {
+  font-size: 29px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1.14;
+  margin: 8px 0 10px;
+  color: var(--text);
+}
+.welcome-sub { font-size: 14.5px; line-height: 1.5; color: var(--text-muted); margin: 0 0 22px; }
+.welcome-label {
+  display: block;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin: 16px 0 6px;
+}
+.welcome-input {
+  width: 100%;
+  font-family: inherit;
+  font-size: 16px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 15px;
+  min-height: 50px;
+}
+.welcome-input:focus { outline: none; border-color: var(--accent); }
+.welcome-chips { margin-top: 14px; }
+.welcome-chips .search-chip.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+  font-weight: 650;
+}
+.welcome-foot { display: flex; gap: 10px; padding-top: 14px; }
+.welcome-foot .modal-btn { flex: 1; }
+.welcome-foot .modal-btn[disabled] { opacity: 0.45; }

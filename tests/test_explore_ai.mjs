@@ -46,6 +46,14 @@ const chooseFolder = async () => {
 
 const browser = await chromium.launch(LAUNCH_OPTS);
 const page = await browser.newPage();
+
+// The app now meets a first-time user with three questions before anything
+// else. This suite is about a trip already under way, so it answers the door
+// on the way in - re-applied on every navigation, since these tests clear
+// storage and reload.
+await page.addInitScript(() => {
+  try { localStorage.setItem('onboarded-v1', '1'); } catch (e) { /* nothing to do */ }
+});
 page.on('pageerror', (e) => { console.log('PAGEERROR:', e.message); failures++; });
 
 let geminiFail = false;

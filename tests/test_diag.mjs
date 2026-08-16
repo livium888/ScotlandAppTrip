@@ -16,6 +16,11 @@ const browser = await chromium.launch(LAUNCH_OPTS);
 // ---------- 1. Key test surfaces a real Google error ----------
 {
   const page = await browser.newPage();
+  // The app meets a first-time user with three questions before anything else;
+  // these checks are about a trip already under way.
+  await page.addInitScript(() => {
+    try { localStorage.setItem('onboarded-v1', '1'); } catch (e) { /* nothing to do */ }
+  });
   page.on('pageerror', (e) => { console.log('PAGEERROR:', e.message); failures++; });
   await page.route(/generativelanguage\.googleapis\.com/, (route) =>
     route.fulfill({ status: 403, contentType: 'application/json', body: JSON.stringify({
@@ -43,6 +48,11 @@ const browser = await chromium.launch(LAUNCH_OPTS);
 // ---------- 2. Invalid key message ----------
 {
   const page = await browser.newPage();
+  // The app meets a first-time user with three questions before anything else;
+  // these checks are about a trip already under way.
+  await page.addInitScript(() => {
+    try { localStorage.setItem('onboarded-v1', '1'); } catch (e) { /* nothing to do */ }
+  });
   await page.route(/generativelanguage\.googleapis\.com/, (route) =>
     route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({
       error: { code: 400, status: 'INVALID_ARGUMENT', message: 'API key not valid. Please pass a valid API key.' },
@@ -61,6 +71,11 @@ const browser = await chromium.launch(LAUNCH_OPTS);
 // ---------- 3. Model discovery + success ----------
 {
   const page = await browser.newPage();
+  // The app meets a first-time user with three questions before anything else;
+  // these checks are about a trip already under way.
+  await page.addInitScript(() => {
+    try { localStorage.setItem('onboarded-v1', '1'); } catch (e) { /* nothing to do */ }
+  });
   page.on('pageerror', (e) => { console.log('PAGEERROR:', e.message); failures++; });
   let listCalls = 0; let genPath = '';
   await page.route(/generativelanguage\.googleapis\.com/, (route) => {
@@ -99,6 +114,11 @@ const browser = await chromium.launch(LAUNCH_OPTS);
 // ---------- 4. Explore by location + category ----------
 {
   const page = await browser.newPage();
+  // The app meets a first-time user with three questions before anything else;
+  // these checks are about a trip already under way.
+  await page.addInitScript(() => {
+    try { localStorage.setItem('onboarded-v1', '1'); } catch (e) { /* nothing to do */ }
+  });
   page.on('pageerror', (e) => { console.log('PAGEERROR:', e.message); failures++; });
   await page.route(/nominatim\.openstreetmap\.org/, (route) =>
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([{

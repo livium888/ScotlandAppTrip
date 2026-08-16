@@ -12192,6 +12192,222 @@
     topbarText.setAttribute("aria-label", "Switch board");
   }
 
+
+  // ---------- The first time you open it ----------
+  // A new install landed on somebody else's trip: a board called "Scotland
+  // with Ally", an Edinburgh guide, and an empty Picks tab whose advice was a
+  // bulleted list of four things you could go and do. Every one of those four
+  // needs to know where you are going, and nothing had asked.
+  //
+  // So it asks. Three questions, one screen each, all of them skippable - and
+  // at the end the app knows the place, the dates and who is coming, which is
+  // enough for the AI features to be worth pressing.
+  const ONBOARDED_KEY = "onboarded-v1";
+  const welcomeOverlay = document.getElementById("welcomeOverlay");
+
+  const WHO_OPTIONS = [
+    "Just me",
+    "Two of us",
+    "Family with young kids",
+    "Family with teenagers",
+    "A group of friends",
+  ];
+
+  let welcome = null;
+
+  function needsWelcome() {
+    if (localStorage.getItem(ONBOARDED_KEY)) return false;
+    // Anyone with a trip already in progress has answered these questions by
+    // doing, and being asked now would be an insult rather than a welcome.
+    //
+    // What counts is what has been *stored*, not what loadPlan() hands back:
+    // the bundled board reports a full week of days it was shipped with, so
+    // asking it whether the app is empty always came back "no" - on an
+    // install that had never been opened.
+    const state = readJson(BOARDS_KEY, null);
+    if (!state || !Array.isArray(state.boards)) return true;
+    if (state.boards.length > 1) return false;
+    const id = state.activeId || (state.boards[0] && state.boards[0].id);
+    if (!id) return true;
+    const picks = readJson(boardKey(id, "picks"), null);
+    const plan = readJson(boardKey(id, "plan"), null);
+    return !(picks && picks.length) && !(plan && plan.days && plan.days.length);
+  }
+
+  function openWelcome() {
+    welcome = { step: 0, where: "", start: "", nights: "", who: "" };
+    renderWelcome();
+  }
+
+  function finishWelcome(seed) {
+    localStorage.setItem(ONBOARDED_KEY, String(Date.now()));
+    const where = (welcome.where || "").trim();
+    if (where) {
+      const state = loadBoards();
+      const board = state.boards.find((b) => b.id === state.activeId) || state.boards[0];
+      board.name = where;
+      board.destination = where;
+      // The bundled Edinburgh guide belongs to one particular trip and is
+      // noise on anybody else's.
+      board.hasGuide = /edinburgh|scotland/i.test(where) ? board.hasGuide : false;
+      saveBoards(state);
+      saveTripSettings({ destination: where });
+    }
+    if (welcome.who) saveTripSettings({ travellers: welcome.who });
+    if (welcome.start) {
+      const nights = Math.max(1, Math.min(21, Number(welcome.nights) || 1));
+      const [y, m, d] = welcome.start.split("-").map(Number);
+      for (let i = 0; i < nights; i++) ensureDayFor(new Date(y, m - 1, d + i));
+    }
+    welcome = null;
+    welcomeOverlay.classList.remove("open");
+    welcomeOverlay.innerHTML = "";
+    refreshForBoard();
+    if (seed === "idea") openTripIdea();
+    else if (seed === "search") openSearchOverlay("");
+  }
+
+  function welcomeStep() {
+    const w = welcome;
+    if (w.step === 0) {
+      return {
+        kicker: "Welcome",
+        title: "Where are you going?",
+        sub: "Everything else follows from this — what it searches, what it suggests, what it costs.",
+        body: `
+          <input class="welcome-input" id="welcomeWhere" type="text" value="${esc(w.where)}"
+                 placeholder="Edinburgh, the Highlands, Cornwall…" autocomplete="off" />
+          <div class="search-chips welcome-chips">
+            ${["Edinburgh", "The Highlands", "Skye", "The Lake District", "Cornwall", "Snowdonia"]
+              .map((x) => `<button class="search-chip" data-welcome-where="${esc(x)}">${esc(x)}</button>`)
+              .join("")}
+          </div>
+        `,
+        can: !!w.where.trim(),
+      };
+    }
+    if (w.step === 1) {
+      return {
+        kicker: "When",
+        title: "When are you going?",
+        sub: "This is what makes Today work, and what the budget counts. You can change it later.",
+        body: `
+          <label class="welcome-label" for="welcomeStart">First day</label>
+          <input class="welcome-input" id="welcomeStart" type="date" value="${esc(w.start)}" />
+          <label class="welcome-label" for="welcomeNights">How many days</label>
+          <input class="welcome-input" id="welcomeNights" type="number" min="1" max="21"
+                 inputmode="numeric" value="${esc(w.nights)}" placeholder="3" />
+        `,
+        can: true,
+      };
+    }
+    return {
+      kicker: "Who",
+      title: "Who's coming?",
+      sub: "It changes the answers: a four-year-old and a group of friends want different afternoons.",
+      body: `
+        <div class="search-chips welcome-chips">
+          ${WHO_OPTIONS.map(
+            (x) =>
+              `<button class="search-chip${w.who === x ? " on" : ""}" data-welcome-who="${esc(x)}">${esc(
+                x
+              )}</button>`
+          ).join("")}
+        </div>
+        <input class="welcome-input" id="welcomeWho" type="text" value="${esc(w.who)}"
+               placeholder="Or say it in your own words" autocomplete="off" />
+      `,
+      can: true,
+    };
+  }
+
+  function renderWelcome() {
+    if (!welcome) return;
+    const step = welcomeStep();
+    const last = welcome.step === 2;
+    welcomeOverlay.innerHTML = `
+      <div class="welcome-body">
+        <div class="welcome-dots">
+          ${[0, 1, 2]
+            .map((i) => `<span class="welcome-dot${i === welcome.step ? " on" : ""}"></span>`)
+            .join("")}
+        </div>
+        <div class="welcome-kicker">${esc(step.kicker)}</div>
+        <h1 class="welcome-title">${esc(step.title)}</h1>
+        <p class="welcome-sub">${esc(step.sub)}</p>
+        ${step.body}
+      </div>
+      <div class="welcome-foot">
+        ${
+          welcome.step > 0
+            ? `<button class="modal-btn" data-welcome-back="1">Back</button>`
+            : `<button class="modal-btn" data-welcome-skip="1">Skip</button>`
+        }
+        <button class="modal-btn modal-btn-primary" data-welcome-next="1" ${step.can ? "" : "disabled"}>
+          ${last ? "Start" : "Next"}
+        </button>
+      </div>
+    `;
+    welcomeOverlay.classList.add("open");
+    wireWelcome();
+  }
+
+  function readWelcomeInputs() {
+    const where = document.getElementById("welcomeWhere");
+    const start = document.getElementById("welcomeStart");
+    const nights = document.getElementById("welcomeNights");
+    const who = document.getElementById("welcomeWho");
+    if (where) welcome.where = where.value;
+    if (start) welcome.start = start.value;
+    if (nights) welcome.nights = nights.value;
+    if (who) welcome.who = who.value;
+  }
+
+  function wireWelcome() {
+    welcomeOverlay.querySelectorAll("[data-welcome-where]").forEach((b) =>
+      b.addEventListener("click", () => {
+        welcome.where = b.getAttribute("data-welcome-where");
+        renderWelcome();
+      })
+    );
+    welcomeOverlay.querySelectorAll("[data-welcome-who]").forEach((b) =>
+      b.addEventListener("click", () => {
+        welcome.who = b.getAttribute("data-welcome-who");
+        renderWelcome();
+      })
+    );
+    const where = document.getElementById("welcomeWhere");
+    if (where) {
+      where.addEventListener("input", () => {
+        welcome.where = where.value;
+        const next = welcomeOverlay.querySelector("[data-welcome-next]");
+        if (next) next.disabled = !where.value.trim();
+      });
+    }
+    const skip = welcomeOverlay.querySelector("[data-welcome-skip]");
+    if (skip) skip.addEventListener("click", () => finishWelcome());
+    const back = welcomeOverlay.querySelector("[data-welcome-back]");
+    if (back)
+      back.addEventListener("click", () => {
+        readWelcomeInputs();
+        welcome.step -= 1;
+        renderWelcome();
+      });
+    const next = welcomeOverlay.querySelector("[data-welcome-next]");
+    if (next)
+      next.addEventListener("click", () => {
+        readWelcomeInputs();
+        if (welcome.step === 2) {
+          // Straight into the thing that fills an empty trip, rather than
+          // back to the empty trip.
+          finishWelcome("idea");
+          return;
+        }
+        welcome.step += 1;
+        renderWelcome();
+      });
+  }
+
   // The chrome carries its icons in markup as data-ico names; this draws them
   // once at startup. Screens draw their own as they render.
   paintIcons(document);
@@ -12243,4 +12459,6 @@
   setUpNativeShell();
 
   refreshForBoard();
+
+  if (needsWelcome()) openWelcome();
 })();
