@@ -32,17 +32,26 @@ await page.addInitScript(() => {
   localStorage.setItem('onboarded-v1', '1');
   const scheduled = [];
   let cancelled = [];
-  let permission = 'granted';
+  // What the phone would answer if asked, and what it has actually been
+  // granted. Android reports the granted state from checkPermissions ever
+  // after, so a stub that always said "prompt" would be modelling a phone
+  // that forgets it said yes.
+  let willGrant = 'granted';
+  let state = 'prompt';
   window.__notif = {
     scheduled,
     get cancelled() { return cancelled; },
-    setPermission: (p) => { permission = p; },
+    // Revoking is what a phone does when somebody turns notifications off in
+    // Android's own settings: the granted state goes with it, otherwise this
+    // would model a phone that grants permission once and can never take it
+    // back - which is not a phone.
+    setPermission: (p) => { willGrant = p; state = p === 'granted' ? 'granted' : 'denied'; },
   };
   window.Capacitor = {
     Plugins: {
       LocalNotifications: {
-        checkPermissions: async () => ({ display: 'prompt' }),
-        requestPermissions: async () => ({ display: permission }),
+        checkPermissions: async () => ({ display: state }),
+        requestPermissions: async () => { state = willGrant; return { display: willGrant }; },
         schedule: async ({ notifications }) => { notifications.forEach((n) => scheduled.push(n)); },
         getPending: async () => ({ notifications: scheduled.map((n) => ({ id: n.id })) }),
         cancel: async ({ notifications }) => {
@@ -324,6 +333,22 @@ check('and at four it says how long is left',
 const morning = await todayAt(10);
 check('but says nothing at ten in the morning, when there is nothing to say',
   !/Shut for the day|Closes at 17:00/.test(morning), morning.slice(0, 400));
+
+// ---------- A restored backup does not lie about being on ----------
+//
+// The switch travels in a backup; the phone's permission does not. A switch
+// reading "on" while nothing ever fires is worse than one reading "off".
+await page.evaluate(() => {
+  localStorage.setItem('notify-v1', JSON.stringify({ enabled: true }));
+  localStorage.removeItem('notify-fingerprint-v1');
+});
+await page.reload({ waitUntil: 'load' });
+await page.waitForTimeout(2500);
+check('a switch restored onto a phone that never granted permission turns itself off',
+  await page.evaluate(() => !JSON.parse(localStorage.getItem('notify-v1')).enabled),
+  await page.evaluate(() => localStorage.getItem('notify-v1')));
+check('and nothing was scheduled in the meantime',
+  await page.evaluate(() => window.__notif.scheduled.length) === 0);
 
 await browser.close();
 console.log(failures === 0 ? '\nALL TESTS PASSED' : `\n${failures} FAILED`);

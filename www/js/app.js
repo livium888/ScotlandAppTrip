@@ -177,13 +177,204 @@
     };
   }
 
+  // ---------- Who is actually coming ----------
+  // This was one free-text box - "family of 3, 4-year-old who walks" - pasted
+  // into the top of every prompt. It read well and could be used for nothing
+  // else: the app could not tell you whether a four-year-old would last two
+  // hours in a distillery, could not notice that the 13:30 stop lands in the
+  // middle of a nap, and split a budget for a family of five the same way it
+  // split one for a couple, because it had a sentence rather than a family.
+  //
+  // A list of people is the same information in a form the app can use. The
+  // sentence still exists and is still what goes into a prompt - it is just
+  // written from the list rather than typed - and anyone who never opens this
+  // screen keeps exactly what they had.
+  const PEOPLE_KEY = "people-v1";
+
+  function loadPeople() {
+    const list = readJson(PEOPLE_KEY, null);
+    return Array.isArray(list) ? list.filter((p) => p && typeof p === "object") : [];
+  }
+
+  function savePeople(list) {
+    store(PEOPLE_KEY, JSON.stringify(list));
+  }
+
+  function personLabel(p) {
+    const name = (p.name || "").trim();
+    if (name) return name;
+    if (p.age != null) return p.age < 18 ? `Child, ${p.age}` : `Adult, ${p.age}`;
+    return "Someone";
+  }
+
+  function isChild(p) {
+    return p.age != null && p.age < 16;
+  }
+
+  function youngestAge() {
+    const ages = loadPeople()
+      .map((p) => p.age)
+      .filter((a) => a != null);
+    return ages.length ? Math.min.apply(null, ages) : null;
+  }
+
+  // The sentence a prompt gets. Written from the list when there is one, and
+  // otherwise whatever was typed in the old box - so nothing that already
+  // worked stops working.
+  function whoDescription() {
+    const people = loadPeople();
+    const typed = loadTripSettings().travellers.trim();
+    if (!people.length) return typed;
+
+    const adults = people.filter((p) => !isChild(p));
+    const children = people.filter(isChild);
+    const bits = [];
+    if (adults.length) bits.push(`${adults.length} adult${adults.length === 1 ? "" : "s"}`);
+    if (children.length) {
+      const ages = children
+        .map((c) => c.age)
+        .filter((a) => a != null)
+        .sort((a, b) => a - b);
+      bits.push(
+        `${children.length} child${children.length === 1 ? "" : "ren"}` +
+          (ages.length ? ` (aged ${ages.join(", ")})` : "")
+      );
+    }
+    let line = bits.join(" and ");
+
+    // Only the things that change an answer. "Likes museums" is a preference
+    // and belongs in the preferences box; "cannot manage steps" is a fact
+    // that rules places out.
+    const notes = [];
+    if (people.some((p) => p.buggy)) notes.push("a buggy to get around with");
+    if (people.some((p) => p.naps)) {
+      const napper = people.find((p) => p.naps);
+      notes.push(`${personLabel(napper).toLowerCase()} still naps in the early afternoon`);
+    }
+    if (people.some((p) => p.mobility)) notes.push("limited walking - steps and rough ground are a problem");
+    const diets = people.map((p) => (p.diet || "").trim()).filter(Boolean);
+    if (diets.length) notes.push(`dietary: ${Array.from(new Set(diets)).join(", ")}`);
+
+    if (notes.length) line += `. ${notes.join("; ")}`;
+    // Anything typed in the old box that the list cannot express is kept
+    // rather than quietly dropped.
+    if (typed && !people.length) line += `. ${typed}`;
+    return line;
+  }
+
+  // One row per person. Everything edits in place - a sheet to add somebody
+  // to a list of four would be three taps for two words.
+  function peopleRows() {
+    const people = loadPeople();
+    if (!people.length) return "";
+    return people
+      .map(
+        (p, i) => `
+        <div class="person-row" data-person="${i}">
+          <div class="person-top">
+            <input class="settings-input person-name" data-person-field="name" data-person="${i}"
+                   type="text" value="${esc(p.name || "")}" placeholder="Name (optional)" />
+            <input class="settings-input person-age" data-person-field="age" data-person="${i}"
+                   type="number" min="0" max="120" inputmode="numeric"
+                   value="${p.age == null ? "" : esc(String(p.age))}" placeholder="Age" />
+            <button class="person-remove" data-remove-person="${i}" aria-label="Remove ${esc(personLabel(p))}">${icon(
+          "close",
+          { size: 15 }
+        )}</button>
+          </div>
+          <div class="person-flags">
+            <label><input type="checkbox" data-person-field="naps" data-person="${i}"${
+          p.naps ? " checked" : ""
+        } /> <span>Naps in the afternoon</span></label>
+            <label><input type="checkbox" data-person-field="buggy" data-person="${i}"${
+          p.buggy ? " checked" : ""
+        } /> <span>In a buggy</span></label>
+            <label><input type="checkbox" data-person-field="mobility" data-person="${i}"${
+          p.mobility ? " checked" : ""
+        } /> <span>Steps and rough ground are hard</span></label>
+          </div>
+          <input class="settings-input person-diet" data-person-field="diet" data-person="${i}"
+                 type="text" value="${esc(p.diet || "")}" placeholder="Anything they can't eat (optional)" />
+        </div>`
+      )
+      .join("");
+  }
+
+  // ---------- Will a four-year-old last here ----------
+  // The app happily suggested a two-hour distillery tour to a family with a
+  // toddler and then, on the same screen, a soft play. It had no way to tell
+  // them apart, because it had no idea there was a toddler.
+  //
+  // Deliberately a small number of confident readings rather than a score for
+  // everything: a wrong warning about a place that is in fact perfect for a
+  // three-year-old teaches people to ignore the warnings.
+  const HARD_WITH_SMALL_CHILD = [
+    [/distillery|whisky tour|brewery tour|wine tasting/i, "a tour with nothing to touch and no way out of the middle of it"],
+    [/munro|summit|scramble|ridge|peak/i, "a serious climb"],
+    [/fine dining|tasting menu|michelin/i, "a long sit-down meal"],
+    [/art gallery|fine art|sculpture gallery/i, "quiet rooms and nothing to touch"],
+    [/cathedral|abbey|minster/i, "quiet, and the interest is all in the reading"],
+  ];
+
+  const GOOD_WITH_SMALL_CHILD =
+    /soft play|playground|play park|zoo|farm|aquarium|beach|park|adventure|hands-on|interactive|science centre|discovery|maze|steam railway|castle/i;
+
+  // Answers null when there is nothing confident to say, which is most of the
+  // time and is the right answer.
+  function childVerdict(pick) {
+    const age = youngestAge();
+    if (age == null || age > 7) return null;
+    const hay = `${pick.category || ""} ${pick.name || ""} ${pick.description || ""}`;
+    const hard = HARD_WITH_SMALL_CHILD.find(([re]) => re.test(hay));
+    if (hard) return { ok: false, why: hard[1], age };
+    if (GOOD_WITH_SMALL_CHILD.test(hay)) return { ok: true, why: null, age };
+    return null;
+  }
+
+  // A warning is only worth printing when it would change what you do, so
+  // both of these answer with an empty string most of the time.
+  function childWarning(pick) {
+    const verdict = childVerdict(pick);
+    if (!verdict || verdict.ok) return "";
+    return `<div class="plan-warn child-warn">${icon("alert", { size: 15, cls: "ico-inline" })} ${
+      verdict.age
+    } may not last — ${esc(verdict.why)}.</div>`;
+  }
+
+  function napWarning(time) {
+    if (!clashesWithNap(time)) return "";
+    const who = napper();
+    return `<div class="plan-warn nap-warn">${icon("clock", { size: 15, cls: "ico-inline" })} Lands in ${esc(
+      personLabel(who)
+    )}'s nap.</div>`;
+  }
+
+  // ---------- Naps ----------
+  // Whoever planned the day knew about the nap. The app did not, so it put
+  // the two-hour castle at half past one and said nothing.
+  const NAP_START = 13 * 60;
+  const NAP_END = 15 * 60;
+
+  function napper() {
+    return loadPeople().find((p) => p.naps) || null;
+  }
+
+  // A stop that starts inside the nap window, for a day that has one.
+  function clashesWithNap(time) {
+    if (!napper()) return false;
+    const mins = timeToMinutes(time);
+    if (mins == null) return false;
+    return mins >= NAP_START && mins < NAP_END;
+  }
+
   // Everything the user has told us about how they want results, in one
   // block that every prompt builder uses - so a preference set once applies
   // to searching, exploring and planning without being typed three times.
   function aiContextBlock() {
     const s = loadTripSettings();
     const lines = [];
-    if (s.travellers.trim()) lines.push(`Travellers: ${s.travellers.trim()}`);
+    const who = whoDescription();
+    if (who) lines.push(`Travellers: ${who}`);
     if (s.preferences.trim()) lines.push(`What matters to us: ${s.preferences.trim()}`);
     return lines.length ? `\n${lines.join("\n")}` : "";
   }
@@ -215,7 +406,7 @@
 
   function saveTripSettings(patch) {
     const next = Object.assign(loadTripSettings(), patch);
-    localStorage.setItem(TRIP_KEY, JSON.stringify(next));
+    store(TRIP_KEY, JSON.stringify(next));
     return next;
   }
 
@@ -683,6 +874,72 @@
     plan: "trip-plan-v1",
   };
 
+  // ---------- Writing to the phone ----------
+  // Thirty-three calls to localStorage.setItem, not one of them guarded. When
+  // storage fills, setItem throws, the throw lands in whatever handler was
+  // running, and the app says "Something went wrong" - which is not what
+  // happened and gives nobody anything to do. The edit is simply lost, and
+  // the next one will be too.
+  //
+  // Nothing here can invent room, but it can say what is true, and it can
+  // make room out of the things that are only worth keeping while there is
+  // space for them.
+  let quotaWarned = false;
+
+  function isQuotaError(e) {
+    if (!e) return false;
+    // Different browsers name it differently, and Safari's is a number.
+    return (
+      e.name === "QuotaExceededError" ||
+      e.name === "NS_ERROR_DOM_QUOTA_REACHED" ||
+      e.code === 22 ||
+      e.code === 1014
+    );
+  }
+
+  // Derived data with a shelf life: a forecast, a coordinate lookup, the last
+  // few searches. All of it can be fetched again; none of it is anything
+  // somebody typed.
+  function dropExpendable() {
+    let freed = false;
+    // Named rather than referenced: these constants are declared further down
+    // the file, and a quota failure during the very first load would hit them
+    // before they exist. The names do not change; the ordering might.
+    ["weather-cache-v1", "destination-coords-v1", "recent-searches-v1"].forEach((k) => {
+      if (localStorage.getItem(k) !== null) {
+        localStorage.removeItem(k);
+        freed = true;
+      }
+    });
+    return freed;
+  }
+
+  // Answers whether the write actually happened, so a caller that cares can
+  // ask. Most do not, and for those the point is that the app keeps working
+  // and says out loud that this one did not save.
+  function store(key, value) {
+    try {
+      localStorage.setItem(key, value);
+      return true;
+    } catch (e) {
+      if (!isQuotaError(e)) throw e;
+      // One attempt at making room, then one honest retry.
+      if (dropExpendable()) {
+        try {
+          localStorage.setItem(key, value);
+          return true;
+        } catch (again) {
+          if (!isQuotaError(again)) throw again;
+        }
+      }
+      if (!quotaWarned) {
+        quotaWarned = true;
+        toast("This phone is out of storage — that change was not saved. Export a backup, then clear some space.");
+      }
+      return false;
+    }
+  }
+
   function readJson(key, fallback) {
     try {
       const v = JSON.parse(localStorage.getItem(key));
@@ -696,6 +953,26 @@
     return `board:${id}:${part}`;
   }
 
+  // Every part of a board, in one place. There were two hardcoded lists of
+  // these - one in the backup, one in deleteBoard - and neither had been
+  // updated since the day it was written. Four parts added later were in
+  // neither: your search area, the costing, the trip idea and which sections
+  // you had folded. So a backup silently left them behind and a deleted board
+  // left them on the phone for ever, and both bugs had the same shape: a list
+  // of parts kept somewhere other than next to the parts.
+  const BOARD_PARTS = [
+    "picks",
+    "folders",
+    "plan",
+    "budget",
+    "packing",
+    "notes",
+    "search-anchor",
+    "budget-est",
+    "idea",
+    "collapsed",
+  ];
+
   function loadBoards() {
     const state = readJson(BOARDS_KEY, null);
     if (state && Array.isArray(state.boards) && state.boards.length) return state;
@@ -703,7 +980,7 @@
   }
 
   function saveBoards(state) {
-    localStorage.setItem(BOARDS_KEY, JSON.stringify(state));
+    store(BOARDS_KEY, JSON.stringify(state));
   }
 
   // Turns the old single-trip storage into the first board. Runs once. The
@@ -732,9 +1009,9 @@
     const legacyFolders = readJson(LEGACY.folders, null);
     const legacyPlan = readJson(LEGACY.plan, null);
 
-    if (legacyPicks !== null) localStorage.setItem(boardKey(id, "picks"), JSON.stringify(legacyPicks));
-    if (legacyFolders !== null) localStorage.setItem(boardKey(id, "folders"), JSON.stringify(legacyFolders));
-    if (legacyPlan !== null) localStorage.setItem(boardKey(id, "plan"), JSON.stringify(legacyPlan));
+    if (legacyPicks !== null) store(boardKey(id, "picks"), JSON.stringify(legacyPicks));
+    if (legacyFolders !== null) store(boardKey(id, "folders"), JSON.stringify(legacyFolders));
+    if (legacyPlan !== null) store(boardKey(id, "plan"), JSON.stringify(legacyPlan));
 
     saveBoards(state);
     return state;
@@ -782,9 +1059,7 @@
     state.boards = state.boards.filter((b) => b.id !== id);
     if (state.activeId === id) state.activeId = state.boards[0].id;
     saveBoards(state);
-    ["picks", "folders", "plan", "budget", "packing", "notes"].forEach((part) =>
-      localStorage.removeItem(boardKey(id, part))
-    );
+    BOARD_PARTS.forEach((part) => localStorage.removeItem(boardKey(id, part)));
     return true;
   }
 
@@ -800,7 +1075,7 @@
   }
 
   function savePicks(picks) {
-    localStorage.setItem(boardKey(activeBoard().id, "picks"), JSON.stringify(picks));
+    store(boardKey(activeBoard().id, "picks"), JSON.stringify(picks));
   }
 
   // Folders are user-owned organisation, separate from geography - a pick's
@@ -817,7 +1092,7 @@
   }
 
   function saveFolders(folders) {
-    localStorage.setItem(boardKey(activeBoard().id, "folders"), JSON.stringify(folders));
+    store(boardKey(activeBoard().id, "folders"), JSON.stringify(folders));
   }
 
   function addFolder(name) {
@@ -882,7 +1157,7 @@
   }
 
   function saveBudgetExtras(rows) {
-    localStorage.setItem(boardKey(activeBoard().id, "budget"), JSON.stringify(rows));
+    store(boardKey(activeBoard().id, "budget"), JSON.stringify(rows));
   }
 
   // ---------- A budget that fills itself in ----------
@@ -903,7 +1178,7 @@
   }
 
   function saveBudgetEstimate(est) {
-    localStorage.setItem(boardKey(activeBoard().id, "budget-est"), JSON.stringify(est));
+    store(boardKey(activeBoard().id, "budget-est"), JSON.stringify(est));
   }
 
   // Miles you will actually drive, taken from the plan rather than guessed:
@@ -931,7 +1206,7 @@
 
   function budgetPrompt(names, days, miles) {
     const s = loadTripSettings();
-    const who = s.travellers.trim() || "two adults";
+    const who = whoDescription() || "two adults";
     return (
       `Typical 2026 UK visitor costs, in pounds, for: ${who}.\n` +
       `Destination: ${s.destination || "Scotland"}. Trip length: ${days || 1} day(s).` +
@@ -1010,6 +1285,30 @@
 
   // Assembles what the screen shows: every line, where its number came from,
   // and whether you have overridden it. A price you typed always wins.
+  // "£1,240" for a family of five and "£1,240" for a couple are the same
+  // number and completely different facts. The app had one figure and no idea
+  // how many people it was for, so it could not say the second thing. A
+  // child's share is not an adult's - most of the difference is admission,
+  // where a child is roughly half - so the split is weighted rather than a
+  // straight division, and it says so.
+  function budgetSplitLine(low, high) {
+    const people = loadPeople();
+    if (people.length < 2) return "";
+    const adults = people.filter((p) => !isChild(p)).length;
+    const children = people.length - adults;
+    const mid = (low + high) / 2;
+    if (!mid) return "";
+    // One share per adult, half a share per child.
+    const shares = adults + children * 0.5;
+    if (!shares) return "";
+    const perAdult = Math.round(mid / shares);
+    const bits = [`${money(perAdult)} an adult`];
+    if (children) bits.push(`${money(Math.round(perAdult / 2))} a child`);
+    return `<div class="budget-hero-split">${esc(bits.join(" · "))} <span class="budget-split-note">across ${
+      people.length
+    } of you</span></div>`;
+  }
+
   function budgetLines() {
     const est = loadBudgetEstimate();
     const picks = loadPicks().filter((p) => !p.major);
@@ -1094,12 +1393,12 @@
     // was already ticked under the old global key.
     const checked = readJson(STORAGE_KEY, {}) || {};
     const seeded = PACKING.map((text, i) => ({ text, done: !!checked[i] }));
-    localStorage.setItem(boardKey(board.id, "packing"), JSON.stringify(seeded));
+    store(boardKey(board.id, "packing"), JSON.stringify(seeded));
     return seeded;
   }
 
   function savePacking(items) {
-    localStorage.setItem(boardKey(activeBoard().id, "packing"), JSON.stringify(items));
+    store(boardKey(activeBoard().id, "packing"), JSON.stringify(items));
   }
 
   function loadBoardNotes() {
@@ -1107,7 +1406,7 @@
   }
 
   function saveBoardNotes(text) {
-    localStorage.setItem(boardKey(activeBoard().id, "notes"), JSON.stringify(text));
+    store(boardKey(activeBoard().id, "notes"), JSON.stringify(text));
   }
 
   function haversineKm(lat1, lon1, lat2, lon2) {
@@ -2211,6 +2510,11 @@
   // A function, not a constant: PLAN_KEY is declared further down the file,
   // so reading it while this module is still evaluating would hit the
   // temporal dead zone and throw before the app ever renders.
+  // Bumped only when the layout of a backup file changes in a way an older
+  // build could not read correctly. Adding a key is not that - an older build
+  // ignores what it does not recognise.
+  const BACKUP_VERSION = 1;
+
   function backupKeys() {
     // Every board's data, not just the open one - a backup that quietly
     // dropped the boards you weren't looking at would be worse than none.
@@ -2219,16 +2523,12 @@
     // The weather cache is deliberately not in here: it's derived data with a
     // shelf life of hours, and restoring last week's forecast onto a new
     // phone would be worse than fetching it again.
-    const keys = [BOARDS_KEY, TRIP_KEY, STORAGE_KEY, RECENT_KEY, LEGACY.picks, LEGACY.folders, LEGACY.plan];
+    // Who is travelling belongs in a backup for the same reason the picks do:
+    // it is typed once and nobody would think to type it again after a
+    // reinstall, and half the app's answers change without it.
+    const keys = [BOARDS_KEY, TRIP_KEY, STORAGE_KEY, RECENT_KEY, PEOPLE_KEY, NOTIFY_KEY, LEGACY.picks, LEGACY.folders, LEGACY.plan];
     loadBoards().boards.forEach((b) => {
-      keys.push(
-        boardKey(b.id, "picks"),
-        boardKey(b.id, "folders"),
-        boardKey(b.id, "plan"),
-        boardKey(b.id, "budget"),
-        boardKey(b.id, "packing"),
-        boardKey(b.id, "notes")
-      );
+      BOARD_PARTS.forEach((part) => keys.push(boardKey(b.id, part)));
     });
     return keys;
   }
@@ -2256,7 +2556,7 @@
       data[k] = k === TRIP_KEY ? redactSecrets(v) : v;
     });
     return JSON.stringify(
-      { format: "scotland-trip-backup", version: 1, exportedAt: new Date().toISOString(), data },
+      { format: "scotland-trip-backup", version: BACKUP_VERSION, exportedAt: new Date().toISOString(), data },
       null,
       2
     );
@@ -2296,6 +2596,86 @@
     return !at || Date.now() - at > BACKUP_STALE_MS;
   }
 
+  // ---------- The backup nobody has to remember to take ----------
+  // Everything lives in this phone's localStorage, which a reinstall, a
+  // "clear app data" or a lost phone takes with it. The app's whole answer to
+  // that was a banner asking you to press Export, once a week, for ever - and
+  // the one person guaranteed not to press it is the one who most needs to
+  // have.
+  //
+  // On the phone the app can simply write the file itself, into Documents,
+  // where it survives the app being uninstalled and where a person can find
+  // it without the app's help. A browser gets nothing here, because a browser
+  // cannot silently write to disk and should not try - the Export button is
+  // already there.
+  const AUTO_BACKUP_KEY = "auto-backup-at-v1";
+  const AUTO_BACKUP_EVERY_MS = 24 * 60 * 60 * 1000;
+  const AUTO_BACKUP_KEEP = 3;
+
+  function backupFilename(when) {
+    const d = new Date(when);
+    const stamp = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+      d.getDate()
+    ).padStart(2, "0")}`;
+    return `trip-backup-${stamp}.json`;
+  }
+
+  async function autoBackup() {
+    const fs = nativePlugin("Filesystem");
+    if (!fs) return { ok: false, reason: "no filesystem" };
+    // Nothing worth saving yet is not a failure, it is Tuesday.
+    if (loadPicks().length < 3) return { ok: false, reason: "nothing to save" };
+    const last = readJson(AUTO_BACKUP_KEY, null);
+    if (typeof last === "number" && Date.now() - last < AUTO_BACKUP_EVERY_MS) {
+      return { ok: false, reason: "done recently" };
+    }
+
+    const json = buildBackup();
+    const name = backupFilename(Date.now());
+    try {
+      await fs.writeFile({
+        path: name,
+        data: json,
+        directory: "DOCUMENTS",
+        encoding: "utf8",
+        recursive: true,
+      });
+    } catch (e) {
+      // A phone that will not let the app write is not a broken app, and it
+      // is not worth a message either - the banner already asks for a manual
+      // export, and that is still true.
+      return { ok: false, reason: "write refused" };
+    }
+
+    store(AUTO_BACKUP_KEY, JSON.stringify(Date.now()));
+    // A backup taken automatically is a backup, so the banner should stop
+    // asking. Overwriting the manual timestamp is deliberate: the question it
+    // answers is "when was this trip last saved anywhere", not "when did you
+    // last press a button".
+    store(LAST_BACKUP_KEY, JSON.stringify(Date.now()));
+    await trimOldBackups(fs, name);
+    return { ok: true, name };
+  }
+
+  // Three is enough to recover from "I deleted something yesterday and only
+  // noticed now", and few enough that a year of them is not sitting on a
+  // phone nobody looks at.
+  async function trimOldBackups(fs, keepNewest) {
+    try {
+      const listing = await fs.readdir({ path: "", directory: "DOCUMENTS" });
+      const mine = ((listing && listing.files) || [])
+        .map((f) => (typeof f === "string" ? f : f.name))
+        .filter((n) => /^trip-backup-\d{4}-\d{2}-\d{2}\.json$/.test(n))
+        .sort();
+      const doomed = mine.filter((n) => n !== keepNewest).slice(0, Math.max(0, mine.length - AUTO_BACKUP_KEEP));
+      for (const name of doomed) {
+        await fs.deleteFile({ path: name, directory: "DOCUMENTS" }).catch(() => {});
+      }
+    } catch (e) {
+      /* an old plugin without readdir just leaves them all, which is fine */
+    }
+  }
+
   async function exportBackup() {
     const json = buildBackup();
     // A Blob download is the reliable route in a WebView; the share sheet is
@@ -2311,7 +2691,7 @@
       a.click();
       document.body.removeChild(a);
       setTimeout(() => URL.revokeObjectURL(url), 5000);
-      localStorage.setItem(LAST_BACKUP_KEY, JSON.stringify(Date.now()));
+      store(LAST_BACKUP_KEY, JSON.stringify(Date.now()));
       return { ok: true, message: `Saved ${backupFilename()} to your downloads.` };
     } catch (e) {
       return { ok: false, message: `Couldn't save the file: ${e.message || e}` };
@@ -2355,6 +2735,18 @@
     if (!parsed || parsed.format !== "scotland-trip-backup" || !parsed.data) {
       return { ok: false, message: "That doesn't look like a trip backup file." };
     }
+    // The version has been written into every backup since the first one and
+    // read by nothing. A file from a future build could be laid out
+    // differently, and quietly restoring half of it is how somebody loses a
+    // trip - so a version this build does not know about is refused, in words
+    // that say what to do about it.
+    const version = Number(parsed.version) || 1;
+    if (version > BACKUP_VERSION) {
+      return {
+        ok: false,
+        message: `That backup was made by a newer version of the app (file ${version}, this build reads ${BACKUP_VERSION}). Update the app, then import it.`,
+      };
+    }
     // Replaces rather than merges - merging two sets of picks silently
     // duplicates them, and a restore is almost always "put it back how it was".
     // Restore every key in the file rather than only the ones this device
@@ -2371,19 +2763,33 @@
     })();
 
     Object.keys(parsed.data).forEach((k) => {
-      if (k === BOARDS_KEY || k === TRIP_KEY || k === STORAGE_KEY || /^board:/.test(k) || /^scotland-trip-|^trip-plan-/.test(k)) {
+      // RECENT_KEY was exported and then silently refused here, which is the
+      // worst of both: it took up room in the file and was thrown away on
+      // arrival. It is small, it is yours, and a restored phone that has
+      // forgotten every search you ever ran is a restored phone that feels
+      // like somebody else's.
+      if (
+        k === BOARDS_KEY ||
+        k === TRIP_KEY ||
+        k === STORAGE_KEY ||
+        k === PEOPLE_KEY ||
+        k === NOTIFY_KEY ||
+        k === RECENT_KEY ||
+        /^board:/.test(k) ||
+        /^scotland-trip-|^trip-plan-/.test(k)
+      ) {
         if (k === TRIP_KEY) {
           try {
             const restored = JSON.parse(parsed.data[k]) || {};
             if (localSettings.geminiKey) restored.geminiKey = localSettings.geminiKey;
             if (localSettings.googleKey) restored.googleKey = localSettings.googleKey;
-            localStorage.setItem(k, JSON.stringify(restored));
+            store(k, JSON.stringify(restored));
             return;
           } catch (e) {
             /* fall through to a plain restore */
           }
         }
-        localStorage.setItem(k, parsed.data[k]);
+        store(k, parsed.data[k]);
       }
     });
     return { ok: true, message: `Restored ${countBackup(parsed)}.` };
@@ -2629,10 +3035,22 @@
               </p>
             </div>
 
-            <label class="settings-label" for="setTravellers">Who's travelling</label>
-            <input class="settings-input" type="text" id="setTravellers" value="${esc(s.travellers)}"
-                   placeholder="e.g. family of 3, 4-year-old who walks" />
-            <p class="settings-hint">Used to tailor AI suggestions and day planning.</p>
+            <label class="settings-label">Who's travelling</label>
+            <p class="settings-hint">
+              An age and a couple of facts are enough. It changes what gets suggested,
+              warns when somewhere is a long sit-down for a three-year-old, notices when
+              a stop lands in the middle of a nap, and splits the budget properly.
+            </p>
+            <div id="peopleList">${peopleRows()}</div>
+            <button class="modal-btn" id="addPersonBtn" style="width:100%;margin-top:10px;">＋ Add someone</button>
+            ${
+              loadPeople().length
+                ? `<p class="settings-hint" style="margin-top:10px;"><b>Prompts will say:</b> ${esc(whoDescription())}</p>`
+                : `<label class="settings-label" for="setTravellers" style="margin-top:14px;">Or just describe it</label>
+                   <input class="settings-input" type="text" id="setTravellers" value="${esc(s.travellers)}"
+                          placeholder="e.g. family of 3, 4-year-old who walks" />
+                   <p class="settings-hint">Fine for the AI, but a list above is what the rest of it can actually use.</p>`
+            }
 
             <label class="settings-label" for="setPreferences">What matters to you</label>
             <textarea class="settings-input notes-box" id="setPreferences" rows="3"
@@ -2708,10 +3126,15 @@
 
             <label class="settings-label">Backup</label>
             <p class="settings-hint">
-              Everything is stored only on this phone. Export a copy you can keep or send
-              to another device — a reinstall or a lost phone loses the lot otherwise.
-              API keys are deliberately left out of the file, so it's safe to send;
-              you'll enter the key again on the other device.
+              Everything is stored only on this phone. ${
+                notificationsPossible()
+                  ? `The app saves a copy into your Documents folder once a day by itself, keeping
+                     the last ${AUTO_BACKUP_KEEP} — that survives the app being uninstalled, but not a lost phone.`
+                  : ""
+              }
+              Export a copy you can keep or send to another device — a reinstall or a lost
+              phone loses the lot otherwise. API keys are deliberately left out of the file,
+              so it's safe to send; you'll enter the key again on the other device.
             </p>
             <p class="settings-hint${backupIsOverdue() ? " backup-overdue" : ""}"><b>${esc(backupAgeLine())}</b></p>
             <div class="settings-btn-row">
@@ -2775,6 +3198,61 @@
         dlBtn.textContent = "⬇ Download map area";
         if (tileResult) tileResult.textContent = res.message;
         showTileCount();
+      });
+    }
+
+    // ---- Who's travelling ----
+    // The list redraws itself rather than the whole sheet, so a half-typed
+    // name is not thrown away every time a checkbox is ticked.
+    const peopleList = document.getElementById("peopleList");
+    const redrawPeople = () => {
+      if (!peopleList) return;
+      peopleList.innerHTML = peopleRows();
+      wirePeople();
+    };
+
+    function wirePeople() {
+      if (!peopleList) return;
+      peopleList.querySelectorAll("[data-person-field]").forEach((el) => {
+        const commit = () => {
+          const list = loadPeople();
+          const person = list[Number(el.getAttribute("data-person"))];
+          if (!person) return;
+          const field = el.getAttribute("data-person-field");
+          if (el.type === "checkbox") person[field] = el.checked;
+          else if (field === "age") {
+            const n = Number(el.value);
+            person.age = el.value.trim() === "" || !Number.isFinite(n) ? null : Math.max(0, Math.min(120, n));
+          } else person[field] = el.value;
+          savePeople(list);
+        };
+        // Saved on every keystroke, not on blur. Saving costs nothing here -
+        // commit writes to storage and does not redraw, so it cannot interrupt
+        // typing - and blur is not reliably what happens next: typing an age
+        // and then closing the sheet removes a focused element, which fires no
+        // blur at all, and the age was simply gone.
+        el.addEventListener(el.type === "checkbox" ? "change" : "input", commit);
+      });
+      peopleList.querySelectorAll("[data-remove-person]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const list = loadPeople();
+          list.splice(Number(btn.getAttribute("data-remove-person")), 1);
+          savePeople(list);
+          redrawPeople();
+        });
+      });
+    }
+    wirePeople();
+
+    const addPerson = document.getElementById("addPersonBtn");
+    if (addPerson) {
+      addPerson.addEventListener("click", () => {
+        const list = loadPeople();
+        list.push({ name: "", age: null, naps: false, buggy: false, mobility: false, diet: "" });
+        savePeople(list);
+        redrawPeople();
+        const last = peopleList && peopleList.querySelector(".person-row:last-child .person-name");
+        if (last) last.focus();
       });
     }
 
@@ -2952,7 +3430,10 @@
         // Only a real model name, never the "tap the button" placeholder the
         // disabled picker shows before it's been populated.
         geminiModel: selectedGeminiModel() || loadTripSettings().geminiModel,
-        travellers: document.getElementById("setTravellers").value,
+        // The box is only rendered when there is no people list, so this is
+        // its current value or whatever was there before - never blank
+        // because the field happened not to be on screen.
+        travellers: (document.getElementById("setTravellers") || { value: loadTripSettings().travellers }).value,
         preferences: document.getElementById("setPreferences").value.trim(),
       });
       closePlaceModal();
@@ -3523,6 +4004,33 @@
     { icon: "🚻", label: "Baby change", query: "toilets with baby changing facilities" },
   ];
 
+  // "a young child" is what the app said when it did not know. It does know
+  // now, if anybody has been added, and "a 3-year-old" gets a noticeably
+  // different answer to "a 9-year-old" from the same question.
+  function kidsTitle() {
+    const kids = loadPeople().filter(isChild);
+    const named = kids.map((k) => (k.name || "").trim()).filter(Boolean);
+    if (named.length === 1) return `For ${named[0]}`;
+    if (named.length === 2) return `For ${named[0]} and ${named[1]}`;
+    return "For the kids";
+  }
+
+  function forOurKids(query) {
+    const ages = loadPeople()
+      .filter(isChild)
+      .map((p) => p.age)
+      .filter((a) => a != null)
+      .sort((a, b) => a - b);
+    if (!ages.length) return query;
+    const said =
+      ages.length === 1
+        ? `a ${ages[0]}-year-old`
+        : `children aged ${ages.join(" and ")}`;
+    return query
+      .replace(/a young child|young children/g, said)
+      .replace(/young children/g, said);
+  }
+
   function renderKids() {
     const picks = loadPicks().filter((p) => !p.major);
     const mine = picks.filter(isForKids);
@@ -3538,7 +4046,7 @@
 
     let html = `
       <div class="kids-head">
-        <h1 class="kids-title">For the kids</h1>
+        <h1 class="kids-title">${esc(kidsTitle())}</h1>
         <p class="kids-sub">${
           mine.length
             ? `${mine.length} place${mine.length === 1 ? "" : "s"} they'll actually enjoy`
@@ -3550,7 +4058,7 @@
       <div class="kids-finds">
         ${KID_SEARCHES.map(
           (k) =>
-            `<button class="kids-find" data-kid-search="${esc(k.query)}">
+            `<button class="kids-find" data-kid-search="${esc(forOurKids(k.query))}">
                <span class="kids-find-icon">${k.icon}</span>
                <span class="kids-find-label">${esc(k.label)}</span>
              </button>`
@@ -3693,7 +4201,7 @@
   }
 
   function savePlan(plan) {
-    localStorage.setItem(boardKey(activeBoard().id, "plan"), JSON.stringify(plan));
+    store(boardKey(activeBoard().id, "plan"), JSON.stringify(plan));
     // Reminders are worked out from the plan, so the plan changing is the one
     // event that always invalidates them. Debounced because dragging a stop
     // around a day writes it a dozen times in a second, and the fingerprint
@@ -4963,6 +5471,8 @@
                   ? `<div class="plan-warn">${icon('alert', { size: 15, cls: 'ico-inline' })} May be closed this day — hours say "${esc(p.openingHours)}". Check before going.</div>`
                   : ""
               }
+              ${napWarning(it.time)}
+              ${childWarning(p)}
               ${
                 it.time
                   ? ""
@@ -5258,7 +5768,7 @@
   }
 
   function saveSort(key) {
-    localStorage.setItem(SORT_KEY, JSON.stringify(key));
+    store(SORT_KEY, JSON.stringify(key));
   }
 
   // "Nearest" needs somewhere to be near. The first scheduled stop is the
@@ -5425,11 +5935,11 @@
     const i = list.indexOf(label);
     if (i < 0) list.push(label);
     else list.splice(i, 1);
-    localStorage.setItem(boardKey(activeBoard().id, "collapsed"), JSON.stringify(list));
+    store(boardKey(activeBoard().id, "collapsed"), JSON.stringify(list));
   }
 
   function setAllCollapsed(labels, collapsed) {
-    localStorage.setItem(boardKey(activeBoard().id, "collapsed"), JSON.stringify(collapsed ? labels : []));
+    store(boardKey(activeBoard().id, "collapsed"), JSON.stringify(collapsed ? labels : []));
   }
 
   // A heading you can fold, with the count still on it - the count is what
@@ -5582,6 +6092,7 @@
                 days ? ` · around ${money(Math.round((low + high) / 2 / days))} a day` : ""
               }`
         }</div>
+        ${budgetSplitLine(low, high)}
       </div>
     `;
 
@@ -5591,7 +6102,7 @@
           <h2>Let it work the trip out</h2>
           <p>It reads the places you've saved, the days you've planned and the driving between
              them, then estimates what the lot comes to for ${esc(
-               loadTripSettings().travellers.trim() || "your group"
+               whoDescription() || "your group"
              )}. Every line says where its number came from, and you can correct any of them.</p>
           <button class="modal-btn modal-btn-primary" id="budgetEstimate" style="width:100%;margin-top:12px;">${
             budgetWorking ? "Working it out…" : `${icon("sparkle", { size: 17, cls: "ico-inline" })} Cost my trip`
@@ -5693,7 +6204,7 @@
     if (est) {
       html += `<p class="settings-hint">Estimated ${esc(
         daysAgoLabel(new Date(est.at))
-      )} for ${esc(loadTripSettings().travellers.trim() || "your group")}. Tap any line to put your own price on it.</p>`;
+      )} for ${esc(whoDescription() || "your group")}. Tap any line to put your own price on it.</p>`;
     }
 
     if (board.hasGuide) {
@@ -5796,7 +6307,7 @@
   }
 
   function saveChecked(state) {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    store(STORAGE_KEY, JSON.stringify(state));
   }
 
   // ---------- Notes & packing ----------
@@ -6923,7 +7434,7 @@
     if (radius) {
       radius.addEventListener("change", () => {
         explore.radius = Number(radius.value);
-        localStorage.setItem(RADIUS_KEY, JSON.stringify(explore.radius));
+        store(RADIUS_KEY, JSON.stringify(explore.radius));
         markExploreStale();
         renderPicks();
       });
@@ -7544,7 +8055,7 @@
     const stored = readJson(boardKey(activeBoard().id, "idea"), null) || {};
     const brief = Object.assign(blankBrief(), stored.brief || {});
     if (!Array.isArray(brief.interests)) brief.interests = [];
-    if (!brief.who) brief.who = loadTripSettings().travellers || "";
+    if (!brief.who) brief.who = whoDescription() || "";
     const options = normaliseIdeaOptions(stored.options);
     return {
       brief,
@@ -7562,7 +8073,7 @@
 
   function saveIdea() {
     if (!tripIdea) return;
-    localStorage.setItem(
+    store(
       boardKey(activeBoard().id, "idea"),
       JSON.stringify({
         brief: tripIdea.brief,
@@ -8611,7 +9122,7 @@
         : "No distance limit given - keep it to what the time allows"
     );
     facts.push(days ? `Time available: ${days === 1 ? "one day" : `${days} days`}` : "Time available: a day out");
-    const who = (b.who || settings.travellers || "").trim();
+    const who = (b.who || whoDescription() || "").trim();
     if (who) facts.push(`Travellers: ${who}`);
     if (settings.preferences.trim()) facts.push(`What matters to us: ${settings.preferences.trim()}`);
     if (b.interests.length) {
@@ -9225,7 +9736,7 @@
     if (!q) return;
     const list = loadRecentSearches().filter((x) => x.toLowerCase() !== q.toLowerCase());
     list.unshift(q);
-    localStorage.setItem(RECENT_KEY, JSON.stringify(list.slice(0, 6)));
+    store(RECENT_KEY, JSON.stringify(list.slice(0, 6)));
   }
 
   function openSearchOverlay(prefill) {
@@ -10285,7 +10796,7 @@
   }
 
   function saveAnchor(anchor) {
-    localStorage.setItem(boardKey(activeBoard().id, ANCHOR_PART), JSON.stringify(anchor || "anywhere"));
+    store(boardKey(activeBoard().id, ANCHOR_PART), JSON.stringify(anchor || "anywhere"));
   }
 
   // A first guess from what is already saved, so the very first search is
@@ -12298,7 +12809,7 @@
         .then((days) => {
           const c = loadWeatherCache();
           c[key] = { fetchedAt: Date.now(), days };
-          localStorage.setItem(WEATHER_KEY, JSON.stringify(c));
+          store(WEATHER_KEY, JSON.stringify(c));
           if (onUpdate) onUpdate();
         })
         .catch(() => {
@@ -12354,7 +12865,7 @@
           if (!geo) return;
           const c = readJson(DEST_COORDS_KEY, {}) || {};
           c[dest.toLowerCase()] = { lat: geo.lat, lon: geo.lon };
-          localStorage.setItem(DEST_COORDS_KEY, JSON.stringify(c));
+          store(DEST_COORDS_KEY, JSON.stringify(c));
           if (onUpdate) onUpdate();
         })
         .catch(() => {})
@@ -12467,7 +12978,7 @@
   }
 
   function saveNotifySettings(patch) {
-    localStorage.setItem(NOTIFY_KEY, JSON.stringify(Object.assign(loadNotifySettings(), patch)));
+    store(NOTIFY_KEY, JSON.stringify(Object.assign(loadNotifySettings(), patch)));
   }
 
   function notifyPlugin() {
@@ -12677,6 +13188,20 @@
     if (!plugin || rescheduling) return;
     rescheduling = true;
     try {
+      // A backup restored onto a new phone brings the switch across but not
+      // the OS permission, and a switch that reads "on" while nothing ever
+      // fires is worse than one that reads "off".
+      if (loadNotifySettings().enabled) {
+        try {
+          const state = await plugin.checkPermissions();
+          if (state && state.display && state.display !== "granted") {
+            saveNotifySettings({ enabled: false });
+            return;
+          }
+        } catch (e) {
+          /* a plugin that cannot be asked is assumed to be fine */
+        }
+      }
       const wanted = plannedNotifications();
       const print = notifyFingerprint(wanted);
       if (!force && print === (localStorage.getItem(NOTIFY_FINGERPRINT_KEY) || "")) return;
@@ -12701,7 +13226,7 @@
           })),
         });
       }
-      localStorage.setItem(NOTIFY_FINGERPRINT_KEY, print);
+      store(NOTIFY_FINGERPRINT_KEY, print);
     } catch (e) {
       // A phone that refuses to schedule is not a reason for a broken app.
       // The screen still says everything these would have said.
@@ -12720,7 +13245,7 @@
     } catch (e) {
       /* nothing to cancel */
     }
-    localStorage.setItem(NOTIFY_FINGERPRINT_KEY, "");
+    store(NOTIFY_FINGERPRINT_KEY, "");
   }
 
   // Tapping one has to land somewhere that answers it, or it is just a buzz.
@@ -12958,6 +13483,8 @@
                 ? `<div class="plan-warn">${icon('alert', { size: 15, cls: 'ico-inline' })} Closes at ${esc(clockFromMinutes(closesAt))} — about ${formatDuration(closesAt - minsNow)} left.</div>`
                 : ""
             }
+            ${napWarning(it.time)}
+            ${childWarning(p)}
             ${p.note ? `<div class="today-note">${icon('note', { size: 15, cls: 'ico-inline' })} ${esc(p.note)}</div>` : ""}
             <div class="today-actions">
               <button class="modal-btn modal-btn-primary" data-open-maps="${esc(
@@ -13460,7 +13987,7 @@
   }
 
   function finishWelcome(seed) {
-    localStorage.setItem(ONBOARDED_KEY, String(Date.now()));
+    store(ONBOARDED_KEY, String(Date.now()));
     const where = (welcome.where || "").trim();
     if (where) {
       const state = loadBoards();
@@ -13692,10 +14219,26 @@
     formatBytes,
     plannedNotifications,
     closingMinutesOnDay,
+    whoDescription,
+    childVerdict,
+    clashesWithNap,
+    forOurKids,
+    aiContextBlock,
+    importBackup,
+    buildBackup,
+    store,
+    autoBackup,
+    deleteBoard,
+    BOARD_PARTS,
   };
 
   setUpNativeShell();
   wireNotificationTaps();
+  // Late and quiet: this is housekeeping, and nothing on the first screen
+  // should wait for a file write.
+  setTimeout(() => {
+    autoBackup().catch(() => {});
+  }, 4000);
   // The plan can be a fortnight long and the forecast changes daily, so what
   // was scheduled last week is not what should fire tomorrow.
   scheduleReschedule();

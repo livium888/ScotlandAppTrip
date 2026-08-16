@@ -3284,3 +3284,53 @@ html, body {
   border-left: 2px solid var(--line);
 }
 #notifyDetail .settings-toggle { font-size: 13px; color: var(--text-muted); }
+
+/* ---------- Who's travelling ---------- */
+/* A card per person rather than a table: on a phone a table of five people
+   with four columns is a horizontal scroll, and the fields differ in kind -
+   a name and an age belong together, the flags below them. */
+.person-row {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm, 10px);
+  padding: 10px;
+  margin-top: 10px;
+  background: var(--surface-2, var(--card));
+}
+.person-top { display: flex; gap: 8px; align-items: center; }
+.person-top .settings-input { margin: 0; }
+.person-name { flex: 1; min-width: 0; }
+.person-age { width: 76px; flex: none; }
+.person-remove {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.person-remove:active { background: var(--line); }
+.person-flags { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; }
+.person-flags label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+.person-flags input { width: 18px; height: 18px; flex: none; }
+.person-diet { margin: 0; }
+
+/* A warning about the youngest person on the trip, on a place row and in a
+   day. Same weight as the other plan warnings - it is the same kind of thing. */
+.child-warn, .nap-warn { display: flex; align-items: center; gap: 6px; }
+.budget-hero-split {
+  margin-top: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+.budget-split-note { font-weight: 400; font-size: 12px; color: var(--text-muted); }

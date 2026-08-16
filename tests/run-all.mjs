@@ -65,6 +65,8 @@ const SUITES = [
   "test_anchorone.mjs",
   "test_nosignal.mjs",
   "test_notify.mjs",
+  "test_people.mjs",
+  "test_storage.mjs",
 ];
 
 const MIME = {
