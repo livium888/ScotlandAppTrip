@@ -3213,3 +3213,18 @@ html, body {
 .welcome-foot { display: flex; gap: 10px; padding-top: 14px; }
 .welcome-foot .modal-btn { flex: 1; }
 .welcome-foot .modal-btn[disabled] { opacity: 0.45; }
+
+/* ---------- Stacking ---------- */
+/* The tab bar is fixed but had no z-index, so it sat at the bottom of the
+   root stacking order and won only by being last in the document. That held
+   until the design work put positioned, z-indexed things inside the scroller:
+   rows at z-index 1 so the swipe actions could sit behind them, sticky
+   section headings at 2. Nothing contained those, so they competed with the
+   bar directly and buried it - visible through the cards, and deaf to a tap.
+
+   Two fixes, because either alone would leave the trap set. The bar gets a
+   real place in the order, above every screen and below every sheet; and the
+   scroller becomes a stacking context of its own, so nothing inside it can
+   ever reach past it again however it is styled. */
+.view { position: relative; z-index: 0; }
+.tabbar { z-index: 40; }

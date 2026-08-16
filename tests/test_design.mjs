@@ -215,6 +215,76 @@ await page.waitForTimeout(500);
 check('nor does the next one', await page.evaluate(() => window.__anims === 0),
   await page.evaluate(() => String(window.__anims)));
 
+// ---------- The tab bar stays on top ----------
+// It is fixed but had no z-index, so it won its place only by being last in
+// the document. That held until the design work put positioned, z-indexed
+// things inside the scroller - rows at 1 so swipe actions could sit behind
+// them, sticky headings at 2 - and nothing contained them, so they competed
+// with the bar directly and buried it: visible through the cards, and deaf
+// to a tap. "No matter what section you go to, the bottom bar is fully
+// hidden."
+await page.evaluate(() => {
+  const picks = JSON.parse(localStorage.getItem('board:b-d:picks'));
+  for (let i = 0; i < 20; i++) {
+    picks.push({ id: `f${i}`, name: `Filler ${i}`, city: 'Edinburgh', category: 'Pub',
+      lat: 55.9, lon: -3.1, addedAt: 10 + i, photoChecked: true });
+  }
+  localStorage.setItem('board:b-d:picks', JSON.stringify(picks));
+});
+await page.reload({ waitUntil: 'load' });
+await page.waitForTimeout(500);
+
+const barIsOnTop = () => page.evaluate(() => {
+  const bar = document.getElementById('tabbar');
+  const b = bar.getBoundingClientRect();
+  // Every tab, not just the middle: one buried corner is still a dead button.
+  return Array.from(bar.querySelectorAll('.tab')).every((t) => {
+    const r = t.getBoundingClientRect();
+    const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+    return !!(hit && hit.closest('#tabbar'));
+  }) && b.bottom <= window.innerHeight + 1;
+});
+
+for (const tab of ['today', 'kids', 'itinerary', 'picks', 'budget', 'tips']) {
+  await page.evaluate((t) => document.querySelector(`[data-view="${t}"]`)?.click(), tab);
+  await page.waitForTimeout(250);
+  check(`the tab bar is reachable on ${tab}`, await barIsOnTop());
+}
+
+// And with a long list scrolled underneath it, which is when the buried bar
+// actually showed itself.
+await page.evaluate(() => document.querySelector('[data-view="picks"]').click());
+await page.waitForTimeout(300);
+await page.evaluate(() => { document.getElementById('view').scrollTop = 500; });
+await page.waitForTimeout(300);
+check('and still reachable with a long list scrolled under it', await barIsOnTop());
+check('a tap there really lands on the tab', await page.evaluate(() => {
+  const t = document.querySelector('[data-view="tips"]');
+  const r = t.getBoundingClientRect();
+  const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+  // Whatever is topmost there may be the icon inside the button; what matters
+  // is that it belongs to the tab and that the tap reaches it.
+  const tab = hit && hit.closest ? hit.closest('.tab') : null;
+  if (!tab) return false;
+  tab.click();
+  return document.getElementById('view').dataset.activeTab === 'tips';
+}));
+
+// Nothing inside a screen can reach past the scroller, however it is styled -
+// which is the trap that was set, rather than any one rule that sprang it.
+check('a screen cannot paint over the bar however its contents are stacked',
+  await page.evaluate(() => {
+    const view = document.getElementById('view');
+    const probe = document.createElement('div');
+    probe.style.cssText = 'position:fixed;inset:0;z-index:99999;';
+    view.appendChild(probe);
+    const t = document.querySelector('[data-view="today"]').getBoundingClientRect();
+    const hit = document.elementFromPoint(t.x + t.width / 2, t.y + t.height / 2);
+    const contained = !!(hit && hit.closest('#tabbar'));
+    probe.remove();
+    return contained;
+  }));
+
 await browser.close();
 console.log(failures === 0 ? '\nALL TESTS PASSED' : `\n${failures} FAILED`);
 process.exit(failures ? 1 : 0);
