@@ -1310,7 +1310,7 @@
     if (!pick || pick.lat != null) return;
     try {
       const candidates = (await geocodeCandidates(pick.name, pick.city, loadAnchor())).filter((c) =>
-        withinAnchor(loadAnchor(), c.lat, c.lon, ANCHOR_GRACE)
+        confirmedWithinAnchor(loadAnchor(), c.lat, c.lon, ANCHOR_GRACE)
       );
       const geo = candidates.length ? candidates[0] : null;
       picks = loadPicks();
@@ -1795,7 +1795,7 @@
 
     const [candidates, wiki] = await Promise.all([
       geocodeCandidates(pick.name, pick.city, loadAnchor())
-        .then((list) => list.filter((c) => withinAnchor(loadAnchor(), c.lat, c.lon, ANCHOR_GRACE)))
+        .then((list) => list.filter((c) => confirmedWithinAnchor(loadAnchor(), c.lat, c.lon, ANCHOR_GRACE)))
         .catch(() => []),
       wikiEnrich(pick.name).catch(() => null),
     ]);
@@ -7814,10 +7814,16 @@
   function ideaStopHtml(oi, di, si, stop, radius) {
     const kind = ideaKind(stop.kind);
     const saved = loadPicks().some((p) => p.id === pickId("custom", stop.name));
-    const miles = stop.crowMiles != null ? stop.crowMiles : stop.claimedMiles;
-    const over = radius && stop.crowMiles != null && stop.crowMiles > radius;
+    // A measured distance and one the model simply asserted used to print
+    // identically, so "12 mi out" might have been arithmetic or invention with
+    // no way to tell. Measured is stated plainly; claimed is hedged.
+    const measured = stop.crowMiles != null;
+    const miles = measured ? stop.crowMiles : stop.claimedMiles;
+    const over = radius && measured && stop.crowMiles > radius;
     const path = `${oi}|${di}|${si}`;
-    const meta = [stop.area, miles != null ? `${miles} mi out` : ""].filter(Boolean).join(" · ");
+    const meta = [stop.area, miles != null ? `${measured ? "" : "~"}${miles} mi out` : ""]
+      .filter(Boolean)
+      .join(" · ");
 
     // The actions sit under the text rather than beside it. Stacked in a
     // column they were three rows deep, which made every stop 145px tall - a
@@ -7918,7 +7924,8 @@
       const meta = [
         `${option.days.length} day${option.days.length === 1 ? "" : "s"}`,
         `${stopCount} stop${stopCount === 1 ? "" : "s"}`,
-        option.miles ? `about ${option.miles} miles` : "",
+        // The model's own arithmetic, never measured - hedged accordingly.
+        option.miles ? `roughly ${option.miles} miles by its reckoning` : "",
       ]
         .filter(Boolean)
         .join(" · ");
@@ -8211,8 +8218,14 @@
     const main = ideaOverlay.querySelector(`[data-idea-preview="${stop.path}"]`);
     if (!main) return;
     const row = main.closest(".idea-stop");
-    const miles = stop.crowMiles != null ? stop.crowMiles : stop.claimedMiles;
-    const meta = [stop.area, miles != null ? `${miles} mi out` : ""].filter(Boolean).join(" · ");
+    // A measured distance and one the model simply asserted used to print
+    // identically, so "12 mi out" might have been arithmetic or invention with
+    // no way to tell. Measured is stated plainly; claimed is hedged.
+    const measured = stop.crowMiles != null;
+    const miles = measured ? stop.crowMiles : stop.claimedMiles;
+    const meta = [stop.area, miles != null ? `${measured ? "" : "~"}${miles} mi out` : ""]
+      .filter(Boolean)
+      .join(" · ");
 
     let metaEl = main.querySelector(".idea-stop-meta");
     if (!metaEl && meta) {
@@ -8947,6 +8960,7 @@
   }
 
   function openSearchOverlay(prefill) {
+    clearAnchorInForce();
     searchAnchor = loadAnchor();
     if (prefill !== undefined) pickSearch = { query: prefill, status: "idle", results: [] };
     renderSearchOverlay();
@@ -8969,6 +8983,22 @@
   // The anchor in force on the search screen. Read from storage when the
   // screen opens so it can be shown before anything is typed.
   let searchAnchor = null;
+  // The anchor a query derived for itself (a postcode, a coordinate pair) is
+  // not saved over your standing area - a one-off look somewhere else should
+  // not silently repoint every search after it - but it IS what this search
+  // ran against, so everything that happens to these results must use it.
+  // Held here so loadAnchor() can hand it to lookups that come later:
+  // opening a result, saving one, enriching one in the background.
+  let anchorInForce = null;
+
+  function useAnchorForThisSearch(anchor) {
+    searchAnchor = anchor;
+    anchorInForce = anchor;
+  }
+
+  function clearAnchorInForce() {
+    anchorInForce = null;
+  }
 
   async function runSearch(query, guidance, seed) {
     const q = (query || "").trim();
@@ -8991,7 +9021,13 @@
       // the query is an anchor in its own right and beats the standing one.
       const anchor = await anchorForQuery(q);
       if (generation !== searchGeneration) return;
-      searchAnchor = anchor;
+      // Held in one place, not two. This used to set a module-level variable
+      // that the header read while everything downstream kept reading storage
+      // - so typing a postcode or a coordinate as the query showed you one
+      // area and then saved, previewed and re-geocoded the results against a
+      // different one. A search that says it is looking somewhere has to be
+      // the same search that later places what it found.
+      useAnchorForThisSearch(anchor);
       const found = await searchPlaces(q, extra, anchor);
       if (generation !== searchGeneration) return;
       const results = seed
@@ -9036,7 +9072,7 @@
       r.needsPlacing = false;
       let placedElsewhere = false;
 
-      if (geo && anchor && !withinAnchor(anchor, geo.lat, geo.lon, ANCHOR_GRACE)) {
+      if (geo && anchor && !confirmedWithinAnchor(anchor, geo.lat, geo.lon, ANCHOR_GRACE)) {
         // A place the model itself put somewhere else is a wrong answer and
         // goes. One it called local might be genuinely unmapped, so it keeps
         // its name - but not that coordinate.
@@ -9323,14 +9359,20 @@
           }
         </form>
       </div>
-      <button class="search-anchor" data-anchor-open="1">
-        <span class="search-anchor-pin">📍</span>
+      <button class="search-anchor${searchAnchor && searchAnchor.derived ? " guessed" : ""}" data-anchor-open="1">
+        <span class="search-anchor-pin">${icon("pin", { size: 15 })}</span>
         <span class="search-anchor-text">${
           searchAnchor
-            ? `Searching within <b>${esc(String(anchorMiles(searchAnchor)))} miles</b> of <b>${esc(searchAnchor.name)}</b>`
+            ? `${
+                // A guessed area used to be indistinguishable from one you
+                // chose, so nobody could tell that the thing deciding what
+                // "nearby" meant had been invented from the middle of their
+                // saved places.
+                searchAnchor.derived ? "Guessing you mean within" : "Searching within"
+              } <b>${esc(String(anchorMiles(searchAnchor)))} miles</b> of <b>${esc(searchAnchor.name)}</b>`
             : `Searching <b>anywhere</b>`
         }</span>
-        <span class="search-anchor-change">Change</span>
+        <span class="search-anchor-change">${searchAnchor && searchAnchor.derived ? "Set it" : "Change"}</span>
       </button>
       <div class="suggest-list" id="pickSuggestList" role="listbox" hidden></div>
       <div class="search-body">${body}</div>
@@ -9619,8 +9661,14 @@
       if (el) el.textContent = text;
     };
     const apply = (anchor) => {
-      searchAnchor = anchor;
-      saveAnchor(anchor);
+      // Choosing one makes it yours rather than a guess.
+      const chosen = anchor ? Object.assign({}, anchor) : null;
+      if (chosen) {
+        delete chosen.derived;
+        delete chosen.spread;
+      }
+      useAnchorForThisSearch(chosen);
+      saveAnchor(chosen);
       closePlaceModal();
       renderSearchOverlay();
       // Changing where to look is only ever done because the last answer was
@@ -9731,8 +9779,15 @@
         const base = searchAnchor || derivedAnchor();
         if (!base) return;
         const next = ANCHOR_MILES.find((m) => m > anchorMiles(base)) || anchorMiles(base) * 2;
-        searchAnchor = Object.assign({}, base, { miles: next });
-        saveAnchor(searchAnchor);
+        // Through the same door as every other anchor change, or the search
+        // that re-runs a line later reads the old one back out of
+        // loadAnchor() and undoes this. And widening on purpose makes it
+        // yours: it stops being a guess the moment you act on it.
+        const widened = Object.assign({}, base, { miles: next });
+        delete widened.derived;
+        delete widened.spread;
+        useAnchorForThisSearch(widened);
+        saveAnchor(widened);
         runSearch(pickSearch.query);
       })
     );
@@ -9925,6 +9980,9 @@
   // and an anchor typed as a town is a point standing in for a place with
   // width.
   const ANCHOR_GRACE = 1.5;
+  // Past this, the centre of your saved places is not a place - it is the
+  // middle of the gap between them - so no area is guessed at all.
+  const DERIVED_ANCHOR_MAX_SPREAD = 60;
 
   // A full UK postcode, or just the outward half - "PH16" is what people
   // remember and is already enough to pin a search to a few square miles.
@@ -9948,6 +10006,9 @@
   }
 
   function loadAnchor() {
+    // A search that derived its own area owns every lookup that follows from
+    // its results, or the two disagree - see useAnchorForThisSearch.
+    if (anchorInForce) return anchorInForce;
     const stored = readJson(boardKey(activeBoard().id, ANCHOR_PART), null);
     if (stored === "anywhere") return null;
     if (stored && typeof stored === "object" && stored.lat != null) return stored;
@@ -9968,17 +10029,40 @@
 
     const majors = picks.filter((p) => p.major);
     if (majors.length === 1) {
-      return { name: majors[0].name, lat: majors[0].lat, lon: majors[0].lon, miles: DEFAULT_ANCHOR_MILES };
+      return {
+        name: majors[0].name,
+        lat: majors[0].lat,
+        lon: majors[0].lon,
+        miles: DEFAULT_ANCHOR_MILES,
+        derived: true,
+      };
     }
 
+    // The centre of everything saved, and a radius that used to stretch to
+    // reach the furthest of them - up to 150 miles.
+    //
+    // That was the root of every wrong-place report. Places saved across
+    // Scotland plus one in London put this centroid in the Midlands with a
+    // circle wide enough to contain both, and since this is what loadAnchor()
+    // returns whenever nothing has been set - the default state of every
+    // board - every proximity check in the app was being asked the wrong
+    // question. Chelsea really was inside the area being searched.
+    //
+    // A guessed area is now never wider than one you would have chosen, and
+    // it is marked so the screen can say it is a guess and offer to fix it.
+    // Places further out than that are reachable by setting an area on
+    // purpose, which is a decision rather than an accident.
     const lat = picks.reduce((n, p) => n + p.lat, 0) / picks.length;
     const lon = picks.reduce((n, p) => n + p.lon, 0) / picks.length;
-    // Wide enough to hold everything already saved, plus room to find
-    // something new next to the furthest of them.
-    const furthest = Math.max(...picks.map((p) => toMiles(haversineKm(lat, lon, p.lat, p.lon))));
-    const miles = Math.min(150, Math.max(DEFAULT_ANCHOR_MILES, Math.ceil(furthest) + 15));
     const name = nearestMajorPlace(lat, lon) || suggestedFolderFor(lat, lon) || activeBoard().destination || "your places";
-    return { name, lat, lon, miles };
+
+    // Spread out far enough that the centroid is not near anything in
+    // particular - the average of Edinburgh and Skye is a field - so anchoring
+    // there would be worse than not anchoring at all. Say so instead.
+    const spread = Math.max(...picks.map((p) => toMiles(haversineKm(lat, lon, p.lat, p.lon))));
+    if (spread > DERIVED_ANCHOR_MAX_SPREAD) return null;
+
+    return { name, lat, lon, miles: DEFAULT_ANCHOR_MILES, derived: true, spread: Math.round(spread) };
   }
 
   function anchorMiles(anchor) {
@@ -10004,24 +10088,23 @@
     return `${b.west},${b.north},${b.east},${b.south}`;
   }
 
-  // Permissive by design, and used where "do not reject this" is the right
-  // default - a saved place with no coordinates should not vanish from a list.
-  function withinAnchor(anchor, lat, lon, grace) {
+  // Permissive: unknown coordinates pass. Correct for DISPLAYING things that
+  // are already yours - a saved place the geocoder never managed to place
+  // should not vanish out of your own list - and wrong for deciding what a
+  // search may offer. Named for what it does, because the previous name made
+  // those two readings look identical at the call site.
+  function withinAnchorOrUnknown(anchor, lat, lon, grace) {
     if (!anchor || lat == null || lon == null) return true;
     return toMiles(haversineKm(anchor.lat, anchor.lon, lat, lon)) <= anchorMiles(anchor) * (grace || 1);
   }
 
-  // The strict one, for deciding what a search is allowed to offer as nearby.
+  // The strict one: what a search is allowed to offer as nearby. Unknown
+  // coordinates are not "within" - if we cannot place it, we cannot claim it.
   //
-  // The permissive version answers "true" for a result with no coordinates,
-  // which is right in a list and catastrophic in a filter - and the search
-  // filter was using it. So anything the geocoder could not place sailed
-  // through the check that exists to keep the search local, and was shown as
-  // if it were round the corner. Worse, geocodeWithinAnchor deliberately
-  // *refuses* coordinates that fall outside the area and returns null, which
-  // turned a result known to be in London into a result with no coordinates -
-  // which then passed. The two rules combined to guarantee the exact thing
-  // they were each written to prevent.
+  // This was written during an earlier attempt at the wrong-place bug,
+  // documented at length as the fix, and then called from nowhere for days
+  // while the permissive version stayed in the filter. Every call site that
+  // decides what to SHOW now uses this one.
   function confirmedWithinAnchor(anchor, lat, lon, grace) {
     if (!anchor) return true;
     if (lat == null || lon == null) return false;
@@ -10045,7 +10128,7 @@
     const bound = anchor === undefined ? loadAnchor() : anchor;
     const geo = await geocodePlace(name, hint, bound).catch(() => null);
     if (!geo) return null;
-    if (bound && !withinAnchor(bound, geo.lat, geo.lon, ANCHOR_GRACE)) return null;
+    if (bound && !confirmedWithinAnchor(bound, geo.lat, geo.lon, ANCHOR_GRACE)) return null;
     return geo;
   }
 
@@ -10189,7 +10272,11 @@
     // coordinates yet is unplaced rather than wrong. The strict check belongs
     // there, once the answer is actually in.
     const results = found.filter((r) => {
-      if (!r.outsideAnchor && withinAnchor(anchor, r.lat, r.lon, ANCHOR_GRACE)) return true;
+      // Permissive on purpose, and only here: an AI result arrives as a name
+      // with no coordinates and is geocoded a moment later by
+      // placeSearchResults, which applies the strict rule once the answer is
+      // actually in. Anything still unplaced after that is dropped there.
+      if (withinAnchorOrUnknown(anchor, r.lat, r.lon, ANCHOR_GRACE)) return true;
       lastSearchOutside++;
       return false;
     });
@@ -11305,7 +11392,7 @@
       wikiEnrich(candidate.name).catch(() => null),
       needsGeo
         ? geocodeCandidates(candidate.name, geographicHint(candidate), loadAnchor())
-            .then((list) => list.filter((c) => withinAnchor(loadAnchor(), c.lat, c.lon, ANCHOR_GRACE)))
+            .then((list) => list.filter((c) => confirmedWithinAnchor(loadAnchor(), c.lat, c.lon, ANCHOR_GRACE)))
             .catch(() => [])
         : Promise.resolve([]),
     ]);

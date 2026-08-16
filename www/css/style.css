@@ -3259,3 +3259,8 @@ html, body {
   justify-content: center;
 }
 .area-fold:active { opacity: 0.6; }
+
+/* A guessed search area reads differently from one you chose, because it is a
+   different kind of claim. */
+.search-anchor.guessed { border-style: dashed; }
+.search-anchor.guessed .search-anchor-change { color: var(--accent); font-weight: 650; }
