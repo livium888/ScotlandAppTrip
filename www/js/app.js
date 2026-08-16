@@ -6062,7 +6062,11 @@
   // Category browsing via Gemini. OSM is thinnest exactly here - independent
   // cafés and restaurants are the least-mapped things in it - so the model
   // names candidates and OSM is then used only to place them.
+  // How many suggestions the last search threw away, and why.
+  let exploreDropped = { unplaced: 0, tooFar: 0 };
+
   async function exploreWithGemini(centre, category, radiusMetres, key) {
+    exploreDropped = { unplaced: 0, tooFar: 0 };
     const who = aiContextBlock();
     const miles = toMiles(radiusMetres / 1000);
     const distance = miles < 1 ? `${Math.round(miles * 1760)} yards` : `${Math.round(miles)} miles`;
@@ -6112,6 +6116,10 @@
     // service that asks for about one request a second, and firing a burst at
     // it is both rude and a good way to get blocked.
     const out = [];
+    // Kept so the screen can say why the list is shorter than it looks -
+    // silently returning three of six reads as the AI being useless.
+    const unplaced = [];
+    const tooFar = [];
     for (const item of parsed.slice(0, 6)) {
       if (!item || !item.name) continue;
       let geo = null;
@@ -6125,15 +6133,26 @@
       } catch (e) {
         geo = null;
       }
-      if (geo) {
-        // The model can name somewhere in the right country but the wrong
-        // city. Anything absurdly outside the requested radius is dropped
-        // rather than shown as "nearby".
-        const km = haversineKm(centre.lat, centre.lon, geo.lat, geo.lon);
-        // A quarter over the asked-for radius, plus a little slack for
-        // geocoding. The old 3x + 2km was a 150-mile net at a 50-mile
-        // radius, which caught nothing at all.
-        if (km > (radiusMetres / 1000) * 1.25 + 2) continue;
+      // The distance check only ever ran when the place had been found, so
+      // anything the geocoder could not place fell straight past it and was
+      // listed anyway - with no coordinates, under a heading promising
+      // results within N miles. That is how a place in Chelsea appeared in a
+      // ten-mile search around Stirling: the model named it, Nominatim could
+      // not put it anywhere near, and the app showed it regardless.
+      //
+      // In a search that means "near here", somewhere you cannot place is not
+      // a weaker answer, it is not an answer. Drop it and say so.
+      if (!geo) {
+        unplaced.push(item.name);
+        continue;
+      }
+      // The model can also name somewhere in the right country but the wrong
+      // city, so anything outside the requested radius goes too. A quarter
+      // over the asked-for radius, plus a little slack for geocoding.
+      const km = haversineKm(centre.lat, centre.lon, geo.lat, geo.lon);
+      if (km > (radiusMetres / 1000) * 1.25 + 2) {
+        tooFar.push(item.name);
+        continue;
       }
       // A rating is only carried through if it looks like a rating. It is
       // also flagged as coming from the model rather than from a ratings API,
@@ -6158,7 +6177,19 @@
       });
       await new Promise((r) => setTimeout(r, 1100));
     }
-    if (!out.length) throw new Error("None of the suggestions could be placed on the map");
+    if (!out.length) {
+      throw new Error(
+        unplaced.length || tooFar.length
+          ? `Nothing suggested could be confirmed near here — ${[
+              unplaced.length ? `${unplaced.length} couldn't be found on the map` : "",
+              tooFar.length ? `${tooFar.length} turned out to be too far away` : "",
+            ]
+              .filter(Boolean)
+              .join(", ")}. Try a wider radius.`
+          : "None of the suggestions could be placed on the map"
+      );
+    }
+    exploreDropped = { unplaced: unplaced.length, tooFar: tooFar.length };
     return out.sort((a, b) => {
       if (a.lat == null) return 1;
       if (b.lat == null) return -1;
@@ -6490,6 +6521,22 @@
       }…</p>`;
     }
     if (explore.status === "error") body += `<pre class="settings-result bad">${esc(explore.error)}</pre>`;
+
+    // A list shortened because suggestions could not be confirmed near here
+    // should say so. Silently returning three of six looks like a thin AI
+    // rather than a careful one.
+    if (explore.status === "done" && explore.usedAi && (exploreDropped.unplaced || exploreDropped.tooFar)) {
+      const bits = [];
+      if (exploreDropped.unplaced) {
+        bits.push(
+          `${exploreDropped.unplaced} couldn't be found on the map`
+        );
+      }
+      if (exploreDropped.tooFar) bits.push(`${exploreDropped.tooFar} turned out to be too far away`);
+      body += `<p class="settings-hint">${esc(
+        `Left out: ${bits.join(", ")}. Only places that could actually be located are shown.`
+      )}</p>`;
+    }
 
     // Showing the question makes a disappointing answer fixable: you can see
     // whether the model was asked the wrong thing before blaming the model.

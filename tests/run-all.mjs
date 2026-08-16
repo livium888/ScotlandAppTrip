@@ -60,6 +60,7 @@ const SUITES = [
   "test_gestures.mjs",
   "test_welcome.mjs",
   "test_location.mjs",
+  "test_nearby.mjs",
 ];
 
 const MIME = {
