@@ -9004,6 +9004,7 @@
         guidance: extra,
         anchor,
         outside: lastSearchOutside,
+        unplaced: lastSearchUnplaced,
         placing: results.some((r) => r.needsPlacing),
       };
       renderSearchOverlay();
@@ -9033,16 +9034,40 @@
       }
       if (generation !== searchGeneration) return;
       r.needsPlacing = false;
+      let placedElsewhere = false;
 
       if (geo && anchor && !withinAnchor(anchor, geo.lat, geo.lon, ANCHOR_GRACE)) {
-        // Same rule as everywhere else: a place the model itself put somewhere
-        // else is a wrong answer and goes; one it called local is probably
-        // unmapped, and keeps its name but not that coordinate.
+        // A place the model itself put somewhere else is a wrong answer and
+        // goes. One it called local might be genuinely unmapped, so it keeps
+        // its name - but not that coordinate.
         if (!claimsToBeNear(r.area, anchor)) {
           pickSearch.results = pickSearch.results.filter((x) => x !== r);
           pickSearch.outside = (pickSearch.outside || 0) + 1;
+          continue;
         }
+        // Kept for now because the model called it local, but the coordinate
+        // is not usable. Remembered so that if nothing else places it, it is
+        // reported as what it was - found, but not here - rather than as
+        // never found at all.
+        placedElsewhere = true;
         geo = null;
+      }
+
+      // And this is the case that kept London on a Stirling screen. Placement
+      // has now had its turn: the geocoder either found nothing, or found
+      // somewhere outside and had the coordinate taken off it above. Either
+      // way the result is sitting in a list headed "within N miles of here"
+      // with nothing behind it saying so, and it stayed there for good,
+      // because every later check treats "no coordinates" as "no objection".
+      //
+      // In a search anchored to a place, that is not good enough. Unplaceable
+      // is not nearby.
+      if (!geo && anchor && r.lat == null) {
+        pickSearch.results = pickSearch.results.filter((x) => x !== r);
+        if (placedElsewhere) pickSearch.outside = (pickSearch.outside || 0) + 1;
+        else pickSearch.unplaced = (pickSearch.unplaced || 0) + 1;
+        renderSearchOverlay();
+        continue;
       }
       if (geo) {
         r.lat = geo.lat;
@@ -9124,11 +9149,25 @@
       }</div>`;
       body += suggestionChips("Or ask for something else");
     } else if (!results.length) {
-      body += `<div class="card"><p class="pick-status">No matches for “${esc(
-        pickSearch.query
-      )}” — try a shorter or more general name.</p>${
-        lastSearchError ? `<pre class="settings-result bad">${esc(lastSearchError)}</pre>` : ""
-      }</div>`;
+      // When everything suggested was dropped, "no matches" on its own is a
+      // lie by omission - there were matches, they just could not be shown to
+      // be near you, and that is a different problem with a different fix.
+      const dropped = (pickSearch.outside || 0) + (pickSearch.unplaced || 0);
+      body += `<div class="card"><p class="pick-status">${
+        dropped
+          ? `Nothing could be confirmed within ${esc(
+              String(anchorMiles(pickSearch.anchor))
+            )} miles of ${esc(
+              (pickSearch.anchor && pickSearch.anchor.name) || "here"
+            )}. ${esc(String(dropped))} suggestion${dropped === 1 ? " was" : "s were"} left out — ${
+              pickSearch.unplaced
+                ? "couldn't be found on the map"
+                : "too far away"
+            }.`
+          : `No matches for “${esc(pickSearch.query)}” — try a shorter or more general name.`
+      }</p>${
+        dropped ? `<button class="link-btn" data-anchor-wider="1">Look further out</button>` : ""
+      }${lastSearchError ? `<pre class="settings-result bad">${esc(lastSearchError)}</pre>` : ""}</div>`;
       body += suggestionChips("Or ask for something else");
     } else {
       if (lastSearchError) {
@@ -9233,6 +9272,18 @@
             ${esc((pickSearch.anchor && pickSearch.anchor.name) || "here")} to be what you meant, so
             ${pickSearch.outside === 1 ? "it is" : "they are"} not shown.
             <button class="link-btn" data-anchor-wider="1">Look further out</button>
+          </p>
+        `;
+      }
+      // Said separately, because it is a different fact: these were not too
+      // far away, they were never found at all - and something nobody can put
+      // on a map cannot be offered as being near you.
+      if (pickSearch.unplaced) {
+        body += `
+          <p class="settings-hint search-outside">
+            ${esc(String(pickSearch.unplaced))} suggestion${pickSearch.unplaced === 1 ? "" : "s"}
+            couldn't be found on the map, so ${pickSearch.unplaced === 1 ? "it is" : "they are"} not shown —
+            there is no way to tell whether ${pickSearch.unplaced === 1 ? "it is" : "they are"} anywhere near you.
           </p>
         `;
       }
@@ -9953,8 +10004,27 @@
     return `${b.west},${b.north},${b.east},${b.south}`;
   }
 
+  // Permissive by design, and used where "do not reject this" is the right
+  // default - a saved place with no coordinates should not vanish from a list.
   function withinAnchor(anchor, lat, lon, grace) {
     if (!anchor || lat == null || lon == null) return true;
+    return toMiles(haversineKm(anchor.lat, anchor.lon, lat, lon)) <= anchorMiles(anchor) * (grace || 1);
+  }
+
+  // The strict one, for deciding what a search is allowed to offer as nearby.
+  //
+  // The permissive version answers "true" for a result with no coordinates,
+  // which is right in a list and catastrophic in a filter - and the search
+  // filter was using it. So anything the geocoder could not place sailed
+  // through the check that exists to keep the search local, and was shown as
+  // if it were round the corner. Worse, geocodeWithinAnchor deliberately
+  // *refuses* coordinates that fall outside the area and returns null, which
+  // turned a result known to be in London into a result with no coordinates -
+  // which then passed. The two rules combined to guarantee the exact thing
+  // they were each written to prevent.
+  function confirmedWithinAnchor(anchor, lat, lon, grace) {
+    if (!anchor) return true;
+    if (lat == null || lon == null) return false;
     return toMiles(haversineKm(anchor.lat, anchor.lon, lat, lon)) <= anchorMiles(anchor) * (grace || 1);
   }
 
@@ -10088,10 +10158,14 @@
   // OpenStreetMap says the name is a town, city, village or island it goes to
   // the top of the results as an area you can save in one tap.
   let lastSearchOutside = 0;
+  // Counted apart from "too far": one is a place we located and rejected,
+  // the other is a place we never located at all.
+  let lastSearchUnplaced = 0;
 
   async function searchPlaces(query, guidance, anchor) {
     lastSearchError = "";
     lastSearchOutside = 0;
+    lastSearchUnplaced = 0;
     // Started first and awaited last, so it costs nothing in wall-clock time
     // against a search that takes seconds.
     const areaPromise = lookupPlacesThemselves(query, anchor).catch(() => []);
@@ -10110,6 +10184,10 @@
     // while anchored to Pitlochry should still offer the Newports, or the
     // screen would be empty with a footnote - and the bounded-first lookup has
     // already put the local one on top when there is one.
+    // Permissive here on purpose: an AI result arrives as a name and is
+    // geocoded a moment later by placeSearchResults, so anything without
+    // coordinates yet is unplaced rather than wrong. The strict check belongs
+    // there, once the answer is actually in.
     const results = found.filter((r) => {
       if (!r.outsideAnchor && withinAnchor(anchor, r.lat, r.lon, ANCHOR_GRACE)) return true;
       lastSearchOutside++;

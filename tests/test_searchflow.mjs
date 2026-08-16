@@ -193,24 +193,29 @@ geoCalls = [];
 await runQuery('cafe');
 
 const listed = await names();
-// The suggestion is kept - it may be a real place nobody has mapped - but it
-// is not given the far-away coordinate.
-check('the suggestion is still offered', listed.some((n) => /Blue Door/.test(n)), JSON.stringify(listed));
-check('and it is not placed 350 miles away',
+// This expectation is deliberately reversed from what it was.
+//
+// It used to assert that the suggestion is KEPT - on the reasoning that it
+// might be a real place nobody has mapped, so it should survive without the
+// far-away coordinate. That reasoning has a hole big enough to drive London
+// through: the model labels its suggestions with the area it was asked about,
+// so "area: Pitlochry" is not evidence of anything, and a name that geocodes
+// only to somewhere 350 miles south is evidence against. Kept results then sat
+// in the list with no coordinates for good, because every later check reads
+// "no coordinates" as "no objection".
+//
+// Reported three times as London appearing in Scottish searches, so the trade
+// is settled the other way: near me has to mean near me. The cost is real -
+// a genuinely unmapped local cafe is now lost from the results - and the
+// screen says how many went and why rather than quietly showing fewer.
+check('a suggestion that can only be placed 350 miles away is not offered',
+  !listed.some((n) => /Blue Door/.test(n)), JSON.stringify(listed));
+check('and the screen says one was dropped rather than quietly showing less',
+  await page.evaluate(() => /left out/i.test(document.getElementById('searchOverlay').textContent)),
+  await page.evaluate(() => document.getElementById('searchOverlay').textContent.slice(0, 300)));
+check('nothing is placed 350 miles away',
   !(await page.evaluate(() => /Oxford/.test(document.getElementById('searchOverlay').textContent))),
   await page.evaluate(() => document.getElementById('searchOverlay').textContent.slice(0, 200)));
-
-// Opening it runs its own lookup, which used to be the unbounded one.
-await page.evaluate(() => document.querySelector('[data-preview-candidate]').click());
-await page.waitForSelector('#placeModal.open', { timeout: 4000 });
-await page.waitForTimeout(1800);
-check('opening it does not place it there either',
-  !(await page.evaluate(() => /Oxford/.test(document.getElementById('placeModal').textContent))),
-  await page.evaluate(() => document.getElementById('placeModal').textContent.slice(0, 200)));
-check('and it draws no map rather than a wrong one', await page.evaluate(() =>
-  !document.getElementById('previewMap')));
-await page.evaluate(() => document.querySelector('#placeModal .modal-close').click());
-await page.waitForTimeout(300);
 
 // ---------- Scenario: saving one ----------
 // The save re-resolves anything without coordinates. Unbounded, that is how a

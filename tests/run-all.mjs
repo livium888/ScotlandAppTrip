@@ -61,6 +61,7 @@ const SUITES = [
   "test_welcome.mjs",
   "test_location.mjs",
   "test_nearby.mjs",
+  "test_anchorstrict.mjs",
 ];
 
 const MIME = {
