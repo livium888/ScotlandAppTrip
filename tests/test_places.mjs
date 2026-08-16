@@ -163,8 +163,10 @@ check('the chosen order is remembered', await page.evaluate(() =>
 await page.evaluate(() => document.querySelector('[data-sort="area"]').click());
 await page.waitForTimeout(300);
 const sections = await page.evaluate(() =>
+  // A heading now carries a fold caret and a count alongside its label, so
+  // the whitespace between them has to come out before comparing.
   Array.from(document.querySelectorAll('.section-label, .area-head-name')).map((e) =>
-    e.textContent.trim().replace(/\d+$/, '')));
+    e.textContent.replace(/\s+/g, ' ').replace(/\s*\d+\s*$/, '').trim()));
 check('every folder is a heading of its own', sections.includes('Edinburgh') && sections.includes('Stirling'), JSON.stringify(sections));
 // Everything saved is on screen at once - counted against storage rather than
 // a literal, since a guide entry was saved earlier in this run.

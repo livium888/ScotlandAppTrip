@@ -48,9 +48,9 @@ const layout = () => page.evaluate(() => {
           : el.querySelector('.pick-row-name').textContent.trim();
         if (current) current.rows.push(name);
       } else {
-        // The count sits in its own span next to the label, so read the
-        // label rather than trying to peel digits off the end of "Sat 15 2".
-        const label = el.querySelector('span:first-child');
+        // The count sits in its own span next to the label, and a foldable
+        // heading also carries a caret, so read the label itself.
+        const label = el.querySelector('.fold-label') || el.querySelector('span:first-child');
         current = { head: (label ? label.textContent : el.textContent).trim(), rows: [] };
         out.push(current);
       }

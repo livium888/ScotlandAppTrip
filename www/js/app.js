@@ -2021,6 +2021,25 @@
     `;
   }
 
+  // Folding, delegated once so it works on whichever list drew the heading.
+  view.addEventListener("click", (e) => {
+    const fold = e.target.closest && e.target.closest("[data-fold]");
+    const all = e.target.closest && e.target.closest("[data-fold-all]");
+    if (!fold && !all) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const redraw = () => VIEWS[view.dataset.activeTab].render();
+    if (all) {
+      const labels = Array.from(view.querySelectorAll("[data-fold]")).map((b) =>
+        b.getAttribute("data-fold")
+      );
+      setAllCollapsed(labels, all.getAttribute("data-fold-all") === "close");
+    } else {
+      toggleCollapsed(fold.getAttribute("data-fold"));
+    }
+    redraw();
+  });
+
   // One set of listeners on the view, for every list it will ever draw.
   view.addEventListener("touchstart", onRowTouchStart, { passive: true });
   view.addEventListener("touchmove", onRowTouchMove, { passive: false });
@@ -3371,10 +3390,13 @@
       if (view.dataset.activeTab === "kids") renderKids();
     });
 
-    groupPicks(mine, sortKey).forEach((s) => {
-      html += `<div class="section-label list-head"><span>${esc(s.label)}</span><span class="list-head-count">${
-        s.count
-      }</span></div>`;
+    const kidSections = groupPicks(mine, sortKey);
+    const kidCollapsed = loadCollapsed();
+    html += foldAllBar(kidSections.map((x) => x.label));
+    kidSections.forEach((s) => {
+      const folded = kidCollapsed.includes(s.label);
+      html += sectionHead(s.label, s.count, folded);
+      if (folded) return;
       s.rows.forEach((r) => {
         const p = r.pick;
         const days = sortKey === "day" && !s.loose ? [] : onDays[p.id] || [];
@@ -5119,6 +5141,55 @@
       }));
   }
 
+  // ---------- Folding a long list ----------
+  // With five saved places the sections are a nicety. With fifty they are the
+  // only thing between you and a scroll that never ends, so they fold - and
+  // which ones you folded is remembered, because a list you have tidied
+  // should stay tidy.
+  function loadCollapsed() {
+    const v = readJson(boardKey(activeBoard().id, "collapsed"), []);
+    return Array.isArray(v) ? v : [];
+  }
+
+  function toggleCollapsed(label) {
+    const list = loadCollapsed();
+    const i = list.indexOf(label);
+    if (i < 0) list.push(label);
+    else list.splice(i, 1);
+    localStorage.setItem(boardKey(activeBoard().id, "collapsed"), JSON.stringify(list));
+  }
+
+  function setAllCollapsed(labels, collapsed) {
+    localStorage.setItem(boardKey(activeBoard().id, "collapsed"), JSON.stringify(collapsed ? labels : []));
+  }
+
+  // A heading you can fold, with the count still on it - the count is what
+  // makes a folded section useful rather than just hidden.
+  function sectionHead(label, count, folded) {
+    return `
+      <button class="section-label list-head section-fold${folded ? " folded" : ""}"
+              data-fold="${esc(label)}" aria-expanded="${folded ? "false" : "true"}">
+        <span class="fold-caret">${icon(folded ? "forward" : "down", { size: 15 })}</span>
+        <span class="fold-label">${esc(label)}</span>
+        <span class="list-head-count">${count}</span>
+      </button>
+    `;
+  }
+
+  // Only worth offering past the point where scrolling becomes the problem.
+  function foldAllBar(labels) {
+    if (labels.length < 3) return "";
+    const collapsed = loadCollapsed();
+    const allFolded = labels.every((l) => collapsed.includes(l));
+    return `
+      <div class="fold-all">
+        <button class="link-btn" data-fold-all="${allFolded ? "open" : "close"}">
+          ${allFolded ? "Open all" : "Fold all"}
+        </button>
+      </div>
+    `;
+  }
+
   // The control that chooses it. One row, always visible, always saying which
   // one is on - it was a saved preference with no label, so the list order
   // changed between visits with nothing on screen to explain why.
@@ -5963,11 +6034,13 @@
     explore.error = "";
     renderPicks();
 
-    const useCentre = (lat, lon) => {
-      explore.centre = { name: "Where I am", lat, lon };
+    const useCentre = (lat, lon, accuracy) => {
+      const note = fixAccuracyNote(accuracy);
+      explore.centre = { name: "Where I am", lat, lon, accuracy };
       explore.status = "idle";
       markExploreStale();
       renderPicks();
+      if (note) toast(`Found you ${note}`);
     };
     const fail = (msg) => {
       explore.status = "error";
@@ -5975,34 +6048,15 @@
       renderPicks();
     };
 
-    const geo = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Geolocation;
-    if (geo) {
-      try {
-        let perm = await geo.checkPermissions();
-        if (perm.location !== "granted" && perm.coarseLocation !== "granted") {
-          perm = await geo.requestPermissions({ permissions: ["location", "coarseLocation"] });
-        }
-        if (perm.location === "denied" && perm.coarseLocation === "denied") {
-          fail("Location permission was declined. Enable it for this app in Android settings, or set the area by searching instead.");
-          return;
-        }
-        const pos = await geo.getCurrentPosition({ enableHighAccuracy: false, timeout: 15000 });
-        useCentre(pos.coords.latitude, pos.coords.longitude);
-      } catch (e) {
-        fail(`Couldn't get your location: ${(e && e.message) || e}`);
-      }
-      return;
+    // This had its own copy of the geolocation call, asking for a coarse fix
+    // - so the one place whose whole job is "search around exactly here" was
+    // the least accurate in the app. One implementation now, the careful one.
+    try {
+      const fix = await currentPosition();
+      useCentre(fix.lat, fix.lon, fix.accuracy);
+    } catch (e) {
+      fail(`Couldn't get your location: ${(e && e.message) || e}`);
     }
-
-    if (!navigator.geolocation) {
-      fail("This device didn't offer location access. Search for the area instead.");
-      return;
-    }
-    navigator.geolocation.getCurrentPosition(
-      (pos) => useCentre(pos.coords.latitude, pos.coords.longitude),
-      (err) => fail(`Couldn't get your location: ${err.message}`),
-      { enableHighAccuracy: false, timeout: 15000, maximumAge: 60000 }
-    );
   }
 
   // Category browsing via Gemini. OSM is thinnest exactly here - independent
@@ -6738,10 +6792,19 @@
   // as any other saved place, but the thing you actually want from a town is
   // what's around it, so that gets its own control rather than three taps
   // through the sheet.
-  function renderMajorHeader(p, count) {
+  function renderMajorHeader(p, count, folded) {
     const meta = count ? `${count} place${count === 1 ? "" : "s"} saved here` : "Nothing saved here yet";
     return `
       <div class="area-head">
+        ${
+          count
+            ? `<button class="area-fold${folded ? " folded" : ""}" data-fold="${esc(p.name)}"
+                       aria-label="${folded ? "Open" : "Fold"} ${esc(p.name)}"
+                       aria-expanded="${folded ? "false" : "true"}">${icon(folded ? "forward" : "down", {
+                size: 16,
+              })}</button>`
+            : ""
+        }
         <button class="area-head-main" data-open-pick="${esc(p.id)}">
           <span class="area-head-icon">${icon('globe', { size: 15, cls: 'ico-inline' })}</span>
           <span class="area-head-text">
@@ -10709,6 +10772,13 @@
         );
     });
 
+    // Where you are, if the app already knows. Finding your location in
+    // Explore and then opening this map showed everything except you - the
+    // marker only ever existed as a side effect of pressing the locate
+    // button, so the one place you had just established was the one place
+    // missing from the map of everywhere.
+    if (lastFix) drawMeOnAllMap(lastFix);
+
     // Popup buttons only exist once a popup is open, so they're wired then.
     allMap.on("popupopen", (ev) => {
       const root = ev.popup.getElement();
@@ -10727,7 +10797,10 @@
     });
 
     const bounds = L.latLngBounds(mappable.map((e) => [e.p.lat, e.p.lon]));
-    if (mappable.length === 1) allMap.setView(bounds.getCenter(), 15);
+    // Include yourself in the frame, or the marker exists on a part of the
+    // map nothing ever scrolls to - which looks exactly like not being there.
+    if (lastFix) bounds.extend([lastFix.lat, lastFix.lon]);
+    if (mappable.length === 1 && !lastFix) allMap.setView(bounds.getCenter(), 15);
     else allMap.fitBounds(bounds.pad(0.2));
     // The overlay is only laid out once it's visible, so Leaflet's idea of
     // the canvas size is stale until the next frame.
@@ -10739,21 +10812,47 @@
     if (locate) locate.addEventListener("click", () => showMeOnAllMap(locate));
   }
 
+  // One marker, drawn once - and the circle around it is how far out the fix
+  // might be, which is a fact worth seeing rather than a dot pretending to
+  // know exactly.
+  let meLayer = null;
+
+  function drawMeOnAllMap(fix) {
+    if (!allMap || !fix) return;
+    if (meLayer) {
+      allMap.removeLayer(meLayer);
+      meLayer = null;
+    }
+    const group = L.layerGroup();
+    if (fix.accuracy != null && fix.accuracy > FIX_GOOD_ENOUGH_M) {
+      L.circle([fix.lat, fix.lon], {
+        radius: fix.accuracy,
+        color: "#1a73e8",
+        weight: 1,
+        fillColor: "#1a73e8",
+        fillOpacity: 0.08,
+      }).addTo(group);
+    }
+    L.circleMarker([fix.lat, fix.lon], {
+      radius: 8,
+      color: "#fff",
+      weight: 3,
+      fillColor: "#1a73e8",
+      fillOpacity: 1,
+    })
+      .addTo(group)
+      .bindTooltip(fix.accuracy != null ? `You are here, ${fixAccuracyNote(fix.accuracy)}` : "You are here");
+    group.addTo(allMap);
+    meLayer = group;
+  }
+
   async function showMeOnAllMap(btn) {
     if (!allMap) return;
     btn.disabled = true;
     try {
       const pos = await currentPosition();
       if (!allMap) return;
-      L.circleMarker([pos.lat, pos.lon], {
-        radius: 8,
-        color: "#fff",
-        weight: 3,
-        fillColor: "#1a73e8",
-        fillOpacity: 1,
-      })
-        .addTo(allMap)
-        .bindTooltip("You are here"); // fixed string, nothing to escape
+      drawMeOnAllMap(pos);
       allMap.setView([pos.lat, pos.lon], Math.max(allMap.getZoom(), 14));
     } catch (e) {
       toast((e && e.message) || "Couldn't get your location");
@@ -10762,7 +10861,29 @@
     }
   }
 
-  // Native geolocation when running in the app, the browser's otherwise.
+  // ---------- Where you actually are ----------
+  // Both callers asked for enableHighAccuracy: false, and the browser path
+  // would accept a fix up to a minute old. On Android that means the network
+  // fix - cell masts and wifi - which in a town is a few hundred metres out
+  // and in open country can be kilometres. Everything downstream then
+  // inherits that error: the search anchor, the distances, "what's near me".
+  // Hence "it never works accurate".
+  //
+  // So: the real satellite fix, no cached answer, and - because a GPS fix
+  // arrives rough and improves over the next few seconds - keep listening
+  // briefly and take the best one rather than the first one.
+  const FIX_GOOD_ENOUGH_M = 40;
+  const FIX_WAIT_MS = 8000;
+
+  // The last fix, kept so the map and the anchor can show where you are
+  // without asking the hardware again.
+  let lastFix = null;
+
+  function rememberFix(fix) {
+    lastFix = { ...fix, at: Date.now() };
+    return lastFix;
+  }
+
   function currentPosition() {
     const geo = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Geolocation;
     if (geo) {
@@ -10774,18 +10895,66 @@
         if (perm.location === "denied" && perm.coarseLocation === "denied") {
           throw new Error("Location permission was declined — enable it in Android settings.");
         }
-        const pos = await geo.getCurrentPosition({ enableHighAccuracy: false, timeout: 15000 });
-        return { lat: pos.coords.latitude, lon: pos.coords.longitude };
+        const first = await geo.getCurrentPosition({ enableHighAccuracy: true, timeout: 20000, maximumAge: 0 });
+        let best = {
+          lat: first.coords.latitude,
+          lon: first.coords.longitude,
+          accuracy: first.coords.accuracy,
+        };
+        if (best.accuracy != null && best.accuracy <= FIX_GOOD_ENOUGH_M) return rememberFix(best);
+
+        // Watch for a few seconds: the first fix is the worst one you will
+        // get, and standing still for five seconds usually halves it.
+        await new Promise((resolve) => {
+          let watchId = null;
+          const stop = () => {
+            if (watchId != null) geo.clearWatch({ id: watchId }).catch(() => {});
+            resolve();
+          };
+          const timer = setTimeout(stop, FIX_WAIT_MS);
+          geo.watchPosition({ enableHighAccuracy: true, timeout: FIX_WAIT_MS }, (pos, err) => {
+            if (err || !pos) return;
+            const a = pos.coords.accuracy;
+            if (best.accuracy == null || (a != null && a < best.accuracy)) {
+              best = { lat: pos.coords.latitude, lon: pos.coords.longitude, accuracy: a };
+            }
+            if (a != null && a <= FIX_GOOD_ENOUGH_M) {
+              clearTimeout(timer);
+              stop();
+            }
+          })
+            .then((id) => {
+              watchId = id;
+            })
+            .catch(() => {
+              clearTimeout(timer);
+              resolve();
+            });
+        });
+        return rememberFix(best);
       })();
     }
     return new Promise((resolve, reject) => {
       if (!navigator.geolocation) return reject(new Error("This device didn't offer location access."));
       navigator.geolocation.getCurrentPosition(
-        (pos) => resolve({ lat: pos.coords.latitude, lon: pos.coords.longitude }),
+        (pos) =>
+          resolve(
+            rememberFix({ lat: pos.coords.latitude, lon: pos.coords.longitude, accuracy: pos.coords.accuracy })
+          ),
         (err) => reject(new Error(`Couldn't get your location: ${err.message}`)),
-        { enableHighAccuracy: false, timeout: 15000, maximumAge: 60000 }
+        { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 }
       );
     });
+  }
+
+  // How far out the fix might be, said plainly. A location the app is not
+  // sure about is worth knowing about before you search a mile around it.
+  function fixAccuracyNote(accuracy) {
+    if (accuracy == null) return "";
+    const m = Math.round(accuracy);
+    if (m <= FIX_GOOD_ENOUGH_M) return `to within ${m}m`;
+    if (m < 1000) return `give or take ${m}m`;
+    return `only to within ${(m / 1000).toFixed(1)}km — move outside for a better fix`;
   }
 
   // ---------- Choosing a place by pointing at it ----------
@@ -11147,13 +11316,15 @@
       if (!sections.length) {
         html += `<div class="card"><p class="pick-status">Nothing to show in this order.</p></div>`;
       }
+      const collapsed = loadCollapsed();
+      html += foldAllBar(sections.map((x) => x.label));
       sections.forEach((s) => {
         const major = s.area ? majorByName[s.area] : null;
+        const folded = collapsed.includes(s.label);
         html += major
-          ? renderMajorHeader(major, s.count)
-          : `<div class="section-label list-head"><span>${esc(s.label)}</span><span class="list-head-count">${
-              s.count
-            }</span></div>`;
+          ? renderMajorHeader(major, s.count, folded)
+          : sectionHead(s.label, s.count, folded);
+        if (folded) return;
         s.rows.forEach((r) => {
           html += renderPickRow(r.pick, r.away, r.meta, sortKey === "day" && !s.loose);
         });
