@@ -1,12 +1,18 @@
-# ScotlandAppTrip
+# Wayfare
 
-An Android app for our family trip to Scotland, **18–24 Aug 2026** — Edinburgh (festival season), plus day trips to Stirling and Glasgow. Built for a family of 3 with a 4-year-old who walks (no stroller).
+An Android trip planner. Save places, arrange them into days, and take the lot
+with you — it keeps working when the signal doesn't.
 
-The app is a trip planner with six tabs:
+It began as an app for one family's week in Scotland, and everything specific
+to that trip has since been taken out. What is left works anywhere: you tell it
+where you're going and who's coming, and the rest follows from that.
+
+The app has six tabs:
 
 - **Today** — the day's stops in time order, with the next one flagged, walking
   times between them, and the forecast at the top
-- **Trip** — summary, cities, budget total
+- **Kids** — the places they'll actually enjoy, and searches worded for the age
+  of the child you have
 - **Itinerary** — day-by-day plan; drop saved places into days and give them times
 - **Picks** — everything you've saved, grouped by area, filtered by All / To do /
   Eat, plus search and "explore around a place"
@@ -34,7 +40,7 @@ worth keeping; the app tells you how long it's been.
 Every push to this repo builds a debug APK automatically via GitHub Actions:
 
 1. Go to the repo's **Actions** tab → **Build Android APK** → latest run.
-2. Download the `scotland-trip-app-debug-apk` artifact (a zip containing `app-debug.apk`).
+2. Download the `wayfare-debug-apk` artifact (a zip containing `app-debug.apk`).
 3. Copy the APK to your Android phone and open it to install (you'll need to allow "install from unknown sources" for the app you use to open it, since it isn't from the Play Store).
 
 ## Project structure

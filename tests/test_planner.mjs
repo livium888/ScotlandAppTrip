@@ -128,10 +128,17 @@ check('rating shown on card', cardText.includes('4.6'), cardText.slice(0, 200));
 // ---- Planner ----
 await page.evaluate(() => document.querySelector('[data-view="itinerary"]').click());
 await page.waitForTimeout(200);
-check('itinerary has Suggested/My plan toggle', await page.evaluate(() => !!document.querySelector('[data-plan-mode="mine"]')));
-
-await page.evaluate(() => document.querySelector('[data-plan-mode="mine"]').click());
-await page.waitForTimeout(200);
+// The toggle went with the bundled itinerary it switched to. There is one
+// plan now, which is yours, so the check is that it is simply there.
+check('the itinerary is your plan, with no toggle to somebody else\'s',
+  await page.evaluate(() => !document.querySelector('[data-plan-mode]')));
+// Every board now starts with no days at all - the seven that used to be
+// here came from the bundled trip - so the day has to be made before there
+// is anywhere to put a place.
+check('an empty plan offers a way to start one', await page.evaluate(() =>
+  !!document.querySelector('[data-quick-day]')));
+await page.evaluate(() => document.querySelector('[data-quick-day]').click());
+await page.waitForTimeout(400);
 check('my plan shows day slots', await page.evaluate(() => !!document.querySelector('[data-plan-add]')));
 
 // add the saved pick to day 1

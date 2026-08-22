@@ -1,6 +1,10 @@
 apply plugin: 'com.android.application'
 
 android {
+    // The app is called Wayfare; this string is not its name, it is how
+    // Android identifies the app. Changing it would install a second, empty
+    // app alongside the existing one rather than upgrading it, stranding
+    // every saved pick, plan and budget in the old one. It stays.
     namespace = "com.livium888.scotlandtrip"
     compileSdk = rootProject.ext.compileSdkVersion
     defaultConfig {

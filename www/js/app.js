@@ -6,6 +6,17 @@
   const topbarTitle = document.getElementById("topbarTitle");
   const topbarSub = document.getElementById("topbarSub");
 
+  // ---------- A note on the names below ----------
+  // The app is called Wayfare. Several storage keys, the backup format string
+  // and one board id still say "scotland", and they are staying that way.
+  //
+  // A storage key is not a label, it is an address. Every install out there
+  // has its packing list, picks and folders filed under these exact strings,
+  // and every backup file ever exported carries the old format name inside
+  // it. Renaming them would orphan all of it to make a file read more
+  // tidily - a cost paid entirely by the user for a benefit only a developer
+  // would ever see. Same reasoning for the Android applicationId, which is
+  // how the phone knows the new build is an upgrade rather than a second app.
   const STORAGE_KEY = "scotland-trip-packing-v1";
 
   // Escapes for BOTH text content and attribute values, because it is used for
@@ -25,8 +36,17 @@
     return String(s).replace(/[&<>"'`]/g, (c) => ESCAPES[c]);
   }
 
+  // There was a lookup table with Edinburgh, Stirling and Glasgow in it, and
+  // one grey for everywhere else - so every town on every other trip was the
+  // same colour. The name is hashed to a hue instead: any town gets its own,
+  // and gets the same one every time.
   function cityColor(city) {
-    return CITY_COLORS[city] || CITY_COLORS.Travel;
+    const name = String(city || "").trim();
+    if (!name) return "hsl(210 8% 45%)";
+    let h = 0;
+    for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) % 360;
+    // Kept away from the extremes so it reads as ink on both themes.
+    return `hsl(${h} 42% 42%)`;
   }
 
   // Opening the exact place, not the road outside it.
@@ -126,10 +146,6 @@
       .map((s) => s.replace(POSTCODE_FULL, "").replace(/\s+/g, " ").trim())
       .filter((s) => s && !postcodeIn(s) && !/^united kingdom$/i.test(s));
     return parts.length > 1 ? parts[parts.length - 1] : null;
-  }
-
-  function findPlace(name) {
-    return PLACES.find((p) => p.name === name) || EATS.find((e) => e.name === name);
   }
 
   // ---------- Trip settings ----------
@@ -988,6 +1004,9 @@
   // rebuilt, because losing a curated list would be far worse than any
   // tidiness gained.
   function migrateToBoards() {
+    // The id is historic and deliberately unchanged: it is what every
+    // existing install's picks, plan and budget are filed under, and
+    // renaming it would orphan the lot for a tidiness nobody can see.
     const id = "b-scotland";
     const state = {
       activeId: id,
@@ -997,9 +1016,9 @@
           name: TRIP.title,
           destination: DEFAULT_DESTINATION,
           dated: true,
-          // Only this board shows the bundled Edinburgh guide; new boards
-          // start clean rather than pretending to be about Scotland.
-          hasGuide: true,
+          // Kept on the record so boards and backups written before the
+          // bundled guide was removed still load. Nothing reads it now.
+          hasGuide: false,
           createdAt: Date.now(),
         },
       ],
@@ -1087,8 +1106,7 @@
   function loadFolders() {
     const f = readJson(boardKey(activeBoard().id, "folders"), null);
     if (Array.isArray(f) && f.length) return f;
-    // A brand-new board has no business defaulting to Scottish cities.
-    return activeBoard().hasGuide ? ["Edinburgh", "Stirling", "Glasgow"] : ["Saved"];
+    return ["Saved"];
   }
 
   function saveFolders(folders) {
@@ -1108,10 +1126,6 @@
 
   function pickId(source, name) {
     return `${source}:${name}`;
-  }
-
-  function isPicked(source, name) {
-    return loadPicks().some((p) => p.id === pickId(source, name));
   }
 
   // Places you eat at want a different screen from places you visit: opening
@@ -1209,7 +1223,8 @@
     const who = whoDescription() || "two adults";
     return (
       `Typical 2026 UK visitor costs, in pounds, for: ${who}.\n` +
-      `Destination: ${s.destination || "Scotland"}. Trip length: ${days || 1} day(s).` +
+      (s.destination ? `Destination: ${s.destination}. ` : "") +
+      `Trip length: ${days || 1} day(s).` +
       (miles ? ` Roughly ${miles} miles of driving in total.` : "") +
       `\n\nFor each place listed below give the realistic total cost for this group to visit ` +
       `once - admission for everyone, or a typical spend if it is somewhere to eat or drink. ` +
@@ -1388,11 +1403,17 @@
     const board = activeBoard();
     const stored = readJson(boardKey(board.id, "packing"), null);
     if (Array.isArray(stored)) return stored;
-    if (!board.hasGuide) return [];
-    // Seed the Scotland board from the bundled list, carrying over whatever
-    // was already ticked under the old global key.
+    // A short generic list beats an empty screen: nobody types "chargers"
+    // into nothing, they close it. Anything already ticked under the old
+    // global key is carried over.
     const checked = readJson(STORAGE_KEY, {}) || {};
     const seeded = PACKING.map((text, i) => ({ text, done: !!checked[i] }));
+    // And the few lines that depend on who is actually coming, from the
+    // people list rather than from a guess about families in general.
+    const people = loadPeople();
+    if (people.some((x) => x.buggy)) seeded.push({ text: "Buggy, and the rain cover for it", done: false });
+    if (people.some(isChild)) seeded.push({ text: "A comfort toy for the long legs", done: false });
+    if (people.some((x) => x.naps)) seeded.push({ text: "Whatever makes a nap happen away from home", done: false });
     store(boardKey(board.id, "packing"), JSON.stringify(seeded));
     return seeded;
   }
@@ -1425,23 +1446,6 @@
   // the least-distant of the three Scottish anchors.
   const CITY_MATCH_KM = 40;
 
-  function nearestCity(lat, lon) {
-    if (lat == null || lon == null) return null;
-    let best = null;
-    let bestDist = Infinity;
-    Object.keys(CITY_COORDS).forEach((city) => {
-      const c = CITY_COORDS[city];
-      const d = haversineKm(lat, lon, c.lat, c.lon);
-      if (d < bestDist) {
-        bestDist = d;
-        best = city;
-      }
-    });
-    // Too far from anywhere we know about - let the caller ask instead of
-    // silently filing it somewhere wrong.
-    return bestDist <= CITY_MATCH_KM ? best : null;
-  }
-
   // ---------- Major places: somewhere you go *to*, not *in* ----------
   //
   // A town, a village, an island. Saving one alongside a café was always the
@@ -1450,8 +1454,8 @@
   // sitting in one, and it collects what you save near it - so the list reads
   // as places-within-areas rather than one flat run of names.
   //
-  // The bundled CITY_COORDS anchors still work exactly as before; these are
-  // the ones you add yourself, for the towns the app was never told about.
+  // Every town the app knows about is one you saved: there used to be three
+  // hardcoded Scottish anchors doing this job, which worked nowhere else.
   const MAJOR_PLACE_KINDS =
     /^(city|town|village|hamlet|suburb|borough|municipality|locality|island|isle|administrative|county|region|province|state)$/i;
 
@@ -1488,7 +1492,7 @@
   // then the bundled city anchors. Yours wins because you chose it - the
   // built-in list only knows Edinburgh, Glasgow and Stirling.
   function suggestedFolderFor(lat, lon) {
-    return nearestMajorPlace(lat, lon) || nearestCity(lat, lon);
+    return nearestMajorPlace(lat, lon);
   }
 
   // ---------- Is the answer obvious enough not to ask? ----------
@@ -1601,39 +1605,6 @@
     );
   }
 
-  function togglePick(source, item) {
-    const id = pickId(source, item.name);
-    let picks = loadPicks();
-    const existing = picks.find((p) => p.id === id);
-    if (existing) {
-      picks = picks.filter((p) => p.id !== id);
-      savePicks(picks);
-      return;
-    }
-    const pick = {
-      id,
-      source,
-      name: item.name,
-      city: item.city || null,
-      category: item.category || item.meal || "Custom",
-      notes: item.notes || "",
-      description: "",
-      website: item.website || "",
-      mapsQuery: item.mapsQuery || item.name,
-      lat: null,
-      lon: null,
-      enrichStatus: item.website ? "done" : "idle",
-      addedAt: Date.now(),
-    };
-    picks.push(pick);
-    savePicks(picks);
-    if (pick.enrichStatus === "idle") {
-      enrichPick(pick.id); // full enrich: geocode + Wikipedia (custom/no-website items)
-    } else {
-      ensureGeocoded(pick.id); // already has a website/notes - just fetch coordinates for the map
-    }
-  }
-
   // Bookmarked catalog items (Places/Eats) already have good website/notes,
   // so enrichPick() is skipped for them - but the map and "explore nearby"
   // still need coordinates, so fetch those quietly without touching the
@@ -1714,19 +1685,6 @@
     if (!p) return;
     p.city = city;
     savePicks(picks);
-  }
-
-  function wirePickToggles(rerender) {
-    view.querySelectorAll("[data-toggle-pick]").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const source = btn.getAttribute("data-toggle-pick");
-        const name = btn.getAttribute("data-name");
-        const item = source === "places" ? PLACES.find((p) => p.name === name) : EATS.find((e) => e.name === name);
-        if (!item) return;
-        togglePick(source, item);
-        rerender();
-      });
-    });
   }
 
   // Free, no-API-key enrichment: Nominatim (OpenStreetMap) for coordinates
@@ -2222,53 +2180,6 @@
   // ---------- Place detail modal ----------
 
   const placeModal = document.getElementById("placeModal");
-
-  function openPlaceModal(name) {
-    const p = findPlace(name);
-    if (!p) return;
-    const mapsUrl = pickGoogleUrl(p);
-    const subtitle = [p.category || p.meal, p.area].filter(Boolean).join(" · ");
-
-    placeModal.innerHTML = `
-      <div class="modal-backdrop" data-close="1">
-        <div class="modal-sheet" role="dialog" aria-label="${esc(p.name)}">
-          <div class="modal-handle"></div>
-          <button class="modal-close" data-close="1" aria-label="Close">${icon('close', { size: 17, cls: 'ico-inline' })}</button>
-          <div class="modal-body">
-            <span class="pill" style="background:${cityColor(p.city)}">${esc(p.city)}</span>
-            <h2 class="modal-title">${esc(p.name)}</h2>
-            ${subtitle ? `<div class="modal-subtitle">${esc(subtitle)}</div>` : ""}
-            <div class="modal-price">${esc(p.price)}</div>
-            ${
-              p.nearAttraction
-                ? `<div class="place-distance">${icon('pin', { size: 15, cls: 'ico-inline' })} ${esc(p.distance)} — near ${esc(p.nearAttraction)}</div>`
-                : ""
-            }
-            <p class="modal-notes">${esc(p.notes)}</p>
-            <div class="modal-actions">
-              ${
-                p.website
-                  ? `<a class="modal-btn" href="${esc(safeUrl(p.website))}" target="_blank" rel="noopener">🌐 Official website</a>`
-                  : ""
-              }
-              ${
-                mapsUrl
-                  ? `<a class="modal-btn modal-btn-primary" href="${mapsUrl}" target="_blank" rel="noopener">📍 Open in Google Maps</a>`
-                  : ""
-              }
-            </div>
-          </div>
-        </div>
-      </div>
-    `;
-    placeModal.classList.add("open");
-    makeSheetDraggable(placeModal, closePlaceModal);
-    placeModal.querySelectorAll("[data-close]").forEach((el) => {
-      el.addEventListener("click", (e) => {
-        if (e.target === el) closePlaceModal();
-      });
-    });
-  }
 
   function closePlaceModal() {
     placeModal.classList.remove("open");
@@ -2981,7 +2892,7 @@
 
             <label class="settings-label" for="setDestination">Search region</label>
             <input class="settings-input" type="text" id="setDestination" value="${esc(s.destination)}"
-                   placeholder="e.g. Scotland — blank to search worldwide" />
+                   placeholder="e.g. Cornwall — blank to search worldwide" />
             <p class="settings-hint">Added to searches so "museum" finds one near your trip. Leave blank to search anywhere.</p>
 
             <label class="settings-label" for="setGoogleKey">Google Places API key</label>
@@ -3451,6 +3362,15 @@
   // the chips on the pick card. Asking up front turned the app's most common
   // action into a two-step interruption. Now it files itself and says so,
   // with the folder one tap away if the guess was wrong.
+  // Answers true when it has put a question on screen and is waiting for it
+  // to be answered. Callers that opened a sheet of their own need to know:
+  // the folder question takes over the same modal, so closing it would shut
+  // the question before it was read - but when nothing is asked, leaving the
+  // sheet open strands the user on a screen they have finished with.
+  //
+  // This only surfaced when the default board went down to one folder. With
+  // three, there was always a choice, so a question was always asked and the
+  // sheet always got replaced.
   function quickAdd(candidate, opts) {
     const options = opts || {};
 
@@ -3460,7 +3380,7 @@
       confirmAddCandidate(candidate, candidate.name, { major: true });
       afterSaveRefresh();
       toast(`Added “${candidate.name}” as an area`);
-      return;
+      return false;
     }
 
     const commit = (label) => {
@@ -3472,7 +3392,14 @@
     };
 
     const suggested = candidate.lat != null ? suggestedFolderFor(candidate.lat, candidate.lon) : null;
-    const guessedKind = pickKind({ category: candidate.category || candidate.type, description: candidate.description });
+    // The candidate's own kind wins when it has one. Without this the guess
+    // ran on category and description alone, decided an event was a place,
+    // and wrote that over the kind confirmAddCandidate had just set - so
+    // every event saved itself and immediately stopped being one.
+    const guessedKind =
+      candidate.kind === "event"
+        ? "event"
+        : pickKind({ category: candidate.category || candidate.type, description: candidate.description });
 
     const ask = (folder) => {
       openLabelSheet({
@@ -3503,7 +3430,7 @@
     const confident = options.folder || confidentFolderFor(candidate.lat, candidate.lon);
     if (!confident) {
       ask(null);
-      return;
+      return true;
     }
 
     const id = commit({ folder: confident, major: false, kind: guessedKind });
@@ -3531,6 +3458,8 @@
         },
       });
     });
+    // Filed without asking anything, so nothing is waiting on screen.
+    return false;
   }
 
   // Whatever is behind the save needs to show it: the search list, or the tab.
@@ -3613,11 +3542,19 @@
                 state.major
                   ? `<p class="settings-hint">It will head its own section, and places you save nearby get filed under it.</p>`
                   : `
+              ${
+                // An event is what it is because of its date, not because of
+                // a choice made here. Offering "To do or Eat" would be a
+                // control whose only effect is to stop it being an event.
+                state.kind === "event"
+                  ? `<p class="settings-hint">Saved as something that's on, and it goes in the day it falls on.</p>`
+                  : `
               <label class="settings-label">Shows up in</label>
               <div class="move-row">
                 <button class="move-chip${state.kind === "place" ? " active" : ""}" data-label-kind="place">${icon('castle', { size: 17, cls: 'ico-inline' })} To do</button>
                 <button class="move-chip${state.kind === "eat" ? " active" : ""}" data-label-kind="eat">${icon('food', { size: 17, cls: 'ico-inline' })} Eat</button>
-              </div>
+              </div>`
+              }
 
               <label class="settings-label">Where it goes</label>
               <div class="filter-row" id="labelFolders">
@@ -3773,35 +3710,6 @@
 
   // ---------- Sharing ----------
 
-  function formatDayShareText(day) {
-    const lines = [];
-    lines.push(`🏴 Scotland with Ally — ${day.day}, ${day.date}`);
-    lines.push(`${day.city} — ${day.title}`);
-    lines.push("");
-    lines.push(day.summary);
-    lines.push("");
-    day.items.forEach((it) => {
-      lines.push(`${it.time} — ${it.name}`);
-      lines.push(it.detail);
-      const p = it.place ? findPlace(it.place) : null;
-      if (p && p.website) lines.push(`🌐 ${p.website}`);
-      if (p) lines.push(`📍 ${pickGoogleUrl(p)}`);
-      lines.push("");
-    });
-    return lines.join("\n").trim();
-  }
-
-  function formatFullItineraryShareText() {
-    const lines = [`🏴 ${TRIP.title}`, TRIP.subtitle, TRIP.dates, ""];
-    DAYS.forEach((d) => {
-      lines.push(`— ${d.day}, ${d.date} (${d.city}) —`);
-      lines.push(d.title);
-      d.items.forEach((it) => lines.push(`  ${it.time} ${it.name}`));
-      lines.push("");
-    });
-    return lines.join("\n").trim();
-  }
-
   async function shareText(title, text) {
     const plugins = window.Capacitor && window.Capacitor.Plugins;
     if (plugins && plugins.Share) {
@@ -3925,7 +3833,6 @@
     picks.forEach((p) => (byId[p.id] = p));
 
     const planned = Object.values(plan.items || {}).some((l) => (l || []).length);
-    if (!planned && board.hasGuide) return formatFullItineraryShareText();
 
     const lines = [board.name];
     if (board.destination) lines.push(board.destination);
@@ -4179,25 +4086,17 @@
     );
   }
 
-  // ---------- Personal itinerary planner ----------
-  // The bundled DAYS are a suggested plan and stay read-only; this is the
-  // user's own schedule, built from whatever they've saved in Picks. Days are
-  // seeded from the bundled trip but are editable, so a different trip
-  // entirely is a matter of renaming/adding days.
+  // ---------- Itinerary planner ----------
+  // Your own schedule, built from whatever you have saved in Picks. Every
+  // board starts with no days at all and you name your own.
   const PLAN_KEY = "trip-plan-v1";
 
-  let planMode = "suggested"; // "suggested" | "mine"
 
   function loadPlan() {
     const board = activeBoard();
     const stored = readJson(boardKey(board.id, "plan"), null);
     if (stored && Array.isArray(stored.days)) return stored;
-    // Only the bundled Scotland board starts with its days filled in; any
-    // other board begins empty so the user names their own.
-    return {
-      days: board.hasGuide ? DAYS.map((d, i) => ({ id: `d${i}`, label: `${d.day} · ${d.date}` })) : [],
-      items: {},
-    };
+    return { days: [], items: {} };
   }
 
   function savePlan(plan) {
@@ -5621,114 +5520,12 @@
     }
   }
 
+  // There used to be two itineraries here behind a Suggested/My plan toggle,
+  // because one board shipped with somebody's finished week in it. There is
+  // one plan now, which is yours.
   function renderItinerary() {
-    // The bundled Scotland itinerary is only worth offering on the board it
-    // came with; anywhere else the toggle would show someone else's week.
-    const hasSuggested = activeBoard().hasGuide;
-    const toggle = hasSuggested
-      ? `
-      <div class="filter-row plan-toggle">
-        <button class="filter-chip${planMode === "suggested" ? " active" : ""}" data-plan-mode="suggested">Suggested</button>
-        <button class="filter-chip${planMode === "mine" ? " active" : ""}" data-plan-mode="mine">My plan</button>
-      </div>
-    `
-      : "";
-
-    if (!hasSuggested || planMode === "mine") {
-      view.innerHTML = toggle + renderMyPlan();
-      wirePlanToggle();
-      wireMyPlan();
-      return;
-    }
-
-    view.innerHTML = toggle + renderSuggestedItinerary();
-    wirePlanToggle();
-    wireSuggestedItinerary();
-  }
-
-  function wirePlanToggle() {
-    view.querySelectorAll("[data-plan-mode]").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        planMode = btn.getAttribute("data-plan-mode");
-        renderItinerary();
-      });
-    });
-  }
-
-  function renderSuggestedItinerary() {
-    let html = "";
-    const redraw = () => {
-      if (view.dataset.activeTab === "itinerary") renderItinerary();
-    };
-    DAYS.forEach((d, i) => {
-      // The bundled days name their own city, which is a better anchor than
-      // anything saved - Day 4 is in Glasgow whatever is bookmarked.
-      const city = CITY_COORDS[d.city];
-      const anchor = city
-        ? { name: d.city, lat: city.lat, lon: city.lon }
-        : dayWeatherAnchor(`d${i}`, redraw);
-      const forecast = forecastForDay(`${d.day} · ${d.date}`, anchor, redraw);
-      html += `
-        <div class="card day-card" data-idx="${i}">
-          <div class="day-head" data-toggle="${i}">
-            <div class="day-head-left">
-              <span class="pill" style="background:${cityColor(d.city)}">${esc(d.city)}</span>
-              <span class="day-title">${esc(d.title)}</span>
-              <span class="day-date">${esc(d.day)} · ${esc(d.date)}</span>
-            </div>
-            <span class="chevron">${icon('forward', { size: 16, cls: 'ico-inline' })}</span>
-          </div>
-          ${weatherLine(forecast, { quiet: true })}
-          <div class="day-summary">${esc(d.summary)}</div>
-          <div class="day-items">
-            ${d.items
-              .map(
-                (it) => `
-              <div class="item${it.place ? " item-linked" : ""}"${
-                  it.place ? ` data-place="${esc(it.place)}"` : ""
-                }>
-                <div class="item-time">${esc(it.time)}</div>
-                <div class="item-body">
-                  <div class="item-name">${esc(it.name)}${it.place ? ` <span class="item-arrow">${icon('forward', { size: 13, cls: 'ico-inline' })}</span>` : ""}</div>
-                  <div class="item-detail">${esc(it.detail)}</div>
-                  <span class="item-tag">${esc(it.tag)}</span>
-                </div>
-              </div>
-            `
-              )
-              .join("")}
-            <button class="day-share" data-share-day="${i}">${icon('share', { size: 16, cls: 'ico-inline' })} Share this day</button>
-          </div>
-        </div>
-      `;
-    });
-    return html;
-  }
-
-  function wireSuggestedItinerary() {
-    view.querySelectorAll("[data-toggle]").forEach((el) => {
-      el.addEventListener("click", () => {
-        el.closest(".day-card").classList.toggle("open");
-      });
-    });
-
-    view.querySelectorAll("[data-place]").forEach((el) => {
-      el.addEventListener("click", () => {
-        openPlaceModal(el.getAttribute("data-place"));
-      });
-    });
-
-    view.querySelectorAll("[data-share-day]").forEach((el) => {
-      el.addEventListener("click", (e) => {
-        e.stopPropagation();
-        const d = DAYS[Number(el.getAttribute("data-share-day"))];
-        shareText(`${d.day}: ${d.title}`, formatDayShareText(d));
-      });
-    });
-
-    // open first day by default
-    const first = view.querySelector(".day-card");
-    if (first) first.classList.add("open");
+    view.innerHTML = renderMyPlan();
+    wireMyPlan();
   }
 
   // ---------- Places & Eats ----------
@@ -5995,65 +5792,6 @@
   // screen. Picks absorbed the filter, the sorting and the guide, so they are
   // gone rather than left as an unreachable copy that drifts out of step.
 
-  // A guide entry rendered the same way a saved place is: tappable body that
-  // opens the full details, one control on the right. Previously these were
-  // large cards where only the ♥ responded to a tap, sitting directly below
-  // rows that opened a sheet - two behaviours, no way to tell them apart.
-  function renderGuideRow(item, source, index) {
-    const picked = isPicked(source, item.name);
-    const meta = [item.category || item.meal, item.area, item.price].filter(Boolean).join(" · ");
-    return `
-      <div class="guide-row">
-        <button class="guide-row-main" data-preview-guide="${source}|${index}">
-          <div class="pick-row-name">${esc(item.name)}</div>
-          ${meta ? `<div class="pick-row-meta">${esc(meta)}</div>` : ""}
-          <div class="pick-row-badges">
-            <span class="row-badge">${esc(item.city)}</span>
-            ${picked ? `<span class="row-badge day">saved</span>` : ""}
-          </div>
-          <div class="search-result-more">Details ${icon('forward', { size: 13, cls: 'ico-inline' })}</div>
-        </button>
-        <button class="pick-toggle${picked ? " picked" : ""}" data-toggle-pick="${source}" data-name="${esc(
-      item.name
-    )}" aria-label="${picked ? "Remove from your places" : "Save " + esc(item.name)}">${picked ? "♥" : "♡"}</button>
-      </div>
-    `;
-  }
-
-  // Opens a bundled guide entry in the same sheet a search result uses, so
-  // the whole screen behaves one way. Saving goes through togglePick with the
-  // guide's own source, not quickAdd - otherwise the sheet would save it as
-  // "custom:Name" while the ♥ looks for "places:Name", and you would end up
-  // holding the same place twice with neither control aware of the other.
-  function openGuidePreview(source, index) {
-    const item = (source === "places" ? PLACES : EATS)[index];
-    if (!item) return;
-    const candidate = {
-      name: item.name,
-      displayName: [item.area, item.city].filter(Boolean).join(", "),
-      city: item.city,
-      category: item.category || item.meal || "",
-      description: item.notes || "",
-      website: item.website || "",
-      price: item.price || null,
-      mapsQuery: item.mapsQuery || item.name,
-      guideSource: source,
-    };
-    // Slots into the same list-and-index machinery the search results use.
-    openCandidatePreview(0, [candidate]);
-  }
-
-  function renderGuidePlaces() {
-    return PLACES.map((p, i) => renderGuideRow(p, "places", i)).join("");
-  }
-
-  function renderGuideEats() {
-    return (
-      `<p class="search-hint">Independent, well-reviewed picks near each stop. £ casual · ££ mid-range · £££ a step up.</p>` +
-      EATS.map((e, i) => renderGuideRow(e, "eats", i)).join("")
-    );
-  }
-
   // ---------- Budget ----------
   // Was a fixed table of Scottish estimates that no board could edit and no
   // saved place appeared in. The real question is "what has this trip
@@ -6207,18 +5945,6 @@
       )} for ${esc(whoDescription() || "your group")}. Tap any line to put your own price on it.</p>`;
     }
 
-    if (board.hasGuide) {
-      const bLow = BUDGET.reduce((a, b) => a + b.low, 0);
-      const bHigh = BUDGET.reduce((a, b) => a + b.high, 0);
-      html += `<div class="section-label list-head"><span>Original Scotland estimate</span></div><div class="card">`;
-      BUDGET.forEach((b) => {
-        const range = b.low === b.high ? (b.low === 0 ? "Free" : `£${b.low}`) : `£${b.low}–£${b.high}`;
-        html += `<div class="budget-row"><div class="budget-item">${esc(b.item)}</div><div class="budget-range">${range}</div></div>`;
-      });
-      html += `<div class="budget-total"><b>Estimate for the week</b><span class="budget-range">£${bLow}–£${bHigh}</span></div>`;
-      html += `</div>`;
-    }
-
     view.innerHTML = html;
     wireBudget();
   }
@@ -6349,18 +6075,6 @@
       </form>
     </div>`;
 
-    if (board.hasGuide) {
-      html += `<div class="section-label">Good to know in Scotland</div>`;
-      TIPS.forEach((t) => {
-        html += `
-          <div class="card tip-card">
-            <h2>${esc(t.title)}</h2>
-            <p>${esc(t.body)}</p>
-          </div>
-        `;
-      });
-    }
-
     view.innerHTML = html;
 
     const notesBox = document.getElementById("boardNotes");
@@ -6435,6 +6149,11 @@
     // somewhere instead, and they only work at all because the AI is doing the
     // finding. The OSM fallbacks are honest guesses, hence approx on all of
     // them.
+    // Not a place search at all - runExplore branches on this key - but it
+    // belongs in the list because this is where people look for the questions
+    // that are not "find me a cafe".
+    { key: "events", label: "What's on", icon: "🎪", group: "Worth asking", tag: "amenity", value: "events", approx: true,
+      prompt: "things happening on a particular date - gigs, markets, festivals, theatre, sport" },
     { key: "comfort", label: "Comfort food", icon: "🥧", group: "Worth asking", tag: "amenity", value: "restaurant", approx: true,
       prompt: "comfort food - pies, stew, chips, a proper roast, somewhere warm and filling rather than clever" },
     { key: "locals", label: "Where locals eat", icon: "🍲", group: "Worth asking", tag: "amenity", value: "restaurant", approx: true,
@@ -6532,6 +6251,7 @@
     centre: null, // { name, lat, lon }
     category: "",
     customQuery: "", // used when category === "custom"
+    when: "trip", // which date window, when category === "events"
     showPrompt: false,
     radius: storedRadius(),
     status: "idle", // idle | locating | loading | done | error
@@ -6979,6 +6699,263 @@
     });
   }
 
+  // ---------- What's on ----------
+  // Every other search in this app asks about places, which are permanent: a
+  // castle is there whether you go on Tuesday or in March. An event is the
+  // opposite - it is somewhere for one afternoon and then it is nothing - and
+  // the app had no way to express that, so the answer to "what's on while
+  // we're here" was to put the phone down and open a browser.
+  //
+  // There is no open dataset for this. OpenStreetMap maps things that stay
+  // still. Eventbrite withdrew public event search from third parties,
+  // Songkick and Bandsintown are partner-only, Meetup went paid. So this is a
+  // grounded AI search, with two consequences taken seriously: every event
+  // carries the page it came from, and none of it is presented as certain.
+
+  const EVENT_WINDOWS = [
+    { key: "trip", label: "While we're there" },
+    { key: "weekend", label: "This weekend" },
+    { key: "week", label: "Next 7 days" },
+  ];
+
+  function startOfDay(d) {
+    const x = new Date(d);
+    x.setHours(0, 0, 0, 0);
+    return x;
+  }
+
+  // The window a search covers, as real dates. "While we're there" comes from
+  // the plan rather than from anything typed twice.
+  function eventWindow(key) {
+    const today = startOfDay(new Date());
+    if (key === "trip") {
+      const dated = datedDays(loadPlan().days).filter((x) => x.when);
+      if (dated.length) {
+        const days = dated.map((x) => x.when).sort((a, b) => a - b);
+        // A trip that has already started is asked about from today, not from
+        // the day it began - nobody wants Monday's events on Wednesday.
+        const from = days[0] > today ? days[0] : today;
+        return { from, to: days[days.length - 1], label: "while you're there" };
+      }
+      // No dated plan to read: fall through to the week rather than refusing.
+      key = "week";
+    }
+    if (key === "weekend") {
+      const day = today.getDay(); // 0 Sun … 6 Sat
+      // Sunday is the last day of the weekend, so this weekend is today and
+      // nothing more. Saturday is today and tomorrow. Any other day, it is
+      // the coming Friday through Sunday.
+      if (day === 0) return { from: today, to: today, label: "today" };
+      const from = new Date(today);
+      if (day !== 6) from.setDate(from.getDate() + (5 - day));
+      const to = new Date(from);
+      to.setDate(to.getDate() + (day === 6 ? 1 : 2));
+      return { from, to, label: "this weekend" };
+    }
+    const to = new Date(today);
+    to.setDate(to.getDate() + 7);
+    return { from: today, to, label: "over the next week" };
+  }
+
+  function humanDate(d) {
+    return d.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
+  }
+
+  // Events are picks with a date on them, so everything already built - the
+  // map, the folders, the budget, the plan - works on them unchanged.
+  function normaliseEvent(item, window) {
+    const name = String(item.name || "").trim();
+    if (!name) return null;
+    // An event with no date is not an event, it is a rumour. This is the one
+    // field that cannot be missing.
+    const when = parseEventDate(item.date);
+    if (!when) return null;
+    // Outside the window asked about, it is not an answer to the question.
+    if (when < startOfDay(window.from) || when > endOfWindow(window.to)) return null;
+    return {
+      name,
+      kind: "event",
+      startsAt: when.toISOString(),
+      time: typeof item.time === "string" && /^\d{1,2}:\d{2}$/.test(item.time.trim()) ? item.time.trim() : "",
+      venue: String(item.venue || "").trim(),
+      area: String(item.area || item.venue || "").trim(),
+      description: String(item.what || item.why || "").trim(),
+      price: typeof item.price === "string" && /^(free|£{1,3})$/i.test(item.price.trim()) ? item.price.trim() : null,
+      ticketUrl: /^https?:\/\//i.test(String(item.tickets || "")) ? String(item.tickets) : "",
+      recurring: item.recurring === true,
+    };
+  }
+
+  function endOfWindow(d) {
+    const x = new Date(d);
+    x.setHours(23, 59, 59, 999);
+    return x;
+  }
+
+  // Deliberately strict. A model asked for YYYY-MM-DD mostly gives it, and
+  // anything else - "next Saturday", "late August" - is not a date you can
+  // put in a day of a plan, so it is refused rather than guessed at.
+  function parseEventDate(value) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || "").trim());
+    if (!m) return null;
+    const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+
+  function eventPrompt(centre, window, radiusMetres) {
+    const miles = Math.max(1, Math.round(toMiles(radiusMetres / 1000)));
+    const who = aiContextBlock();
+    return (
+      `What is on near ${centre.name} between ${humanDate(window.from)} and ` +
+      `${humanDate(window.to)} ${window.from.getFullYear()}? ` +
+      `Within about ${miles} miles.${who}\n\n` +
+      `Anything with a date: gigs, theatre, markets, festivals, exhibitions with an ` +
+      `end date, sport, talks, one-off openings, things on at a village hall. ` +
+      `Not permanent attractions - a castle that is open every day is not an event.\n\n` +
+      `Use search to confirm each one is genuinely happening on the date you give, ` +
+      `from the venue's own page or a listings site. Leave out anything you cannot confirm; ` +
+      `six real ones are worth more than twelve guesses.\n\n` +
+      `Reply with ONLY a JSON array, each item ` +
+      `{"name": what it is called, ` +
+      `"date": "YYYY-MM-DD" - the single day it is on, one entry per day if it runs several, ` +
+      `"time": "HH:MM" 24-hour start time, or "" if there isn't one, ` +
+      `"venue": the place it is at, ` +
+      `"area": the town or street, ` +
+      `"what": one short sentence on what it actually is, ` +
+      `"price": "free", "£", "££" or "£££", ` +
+      `"tickets": the booking or information URL, or "", ` +
+      `"recurring": true if this happens every week rather than being a one-off}. ` +
+      `No other text.`
+    );
+  }
+
+  // Kept so the screen can say why a list is shorter than it looks.
+  let eventsDropped = { unplaced: 0, undated: 0, tooFar: 0 };
+
+  async function eventsWithGemini(centre, windowKey, radiusMetres, key) {
+    eventsDropped = { unplaced: 0, undated: 0, tooFar: 0 };
+    const window = eventWindow(windowKey);
+    const prompt = eventPrompt(centre, window, radiusMetres);
+
+    // The same two-attempt shape the trip planner uses, and for the same
+    // reason: grounding is what makes an event real rather than plausible,
+    // but a grounded reply comes back as prose with citations often enough
+    // that asking for JSON that way fails outright. JSON mode is the fallback
+    // and cannot answer in prose - at the cost of the sources.
+    let parsed = null;
+    let sources = [];
+    for (const attempt of [{ grounded: true }, { json: true }]) {
+      const answer = await callGemini(key, prompt, attempt);
+      const list = extractJson(answer.text);
+      if (Array.isArray(list) && list.length) {
+        parsed = list;
+        sources = answer.sources || [];
+        break;
+      }
+    }
+    if (!parsed) throw new Error("Nothing came back that could be read as a list of events.");
+
+    const anchor = { name: centre.name, lat: centre.lat, lon: centre.lon, miles: toMiles(radiusMetres / 1000) };
+    const out = [];
+    for (const item of parsed.slice(0, 12)) {
+      const event = normaliseEvent(item, window);
+      if (!event) {
+        eventsDropped.undated++;
+        continue;
+      }
+      // Placed by its venue, and held to the same standard every other search
+      // in this app is held to: something that cannot be put on the map is
+      // not an answer to "what's on near here".
+      let geo = null;
+      try {
+        geo = await geocodePlace(event.venue || event.name, event.area || centre.name, anchor);
+      } catch (e) {
+        geo = null;
+      }
+      if (!geo) {
+        eventsDropped.unplaced++;
+        continue;
+      }
+      if (!confirmedWithinAnchor(anchor, geo.lat, geo.lon, ANCHOR_GRACE)) {
+        eventsDropped.tooFar++;
+        continue;
+      }
+      out.push(
+        Object.assign(event, {
+          lat: geo.lat,
+          lon: geo.lon,
+          address: geo.address || event.area,
+          website: event.ticketUrl || geo.website || null,
+          // Said out loud on every row. A model inventing a festival is the
+          // obvious way this goes wrong, and the honest answer is not to hide
+          // it but to hand over the page it came from.
+          aiSuggested: true,
+          unverified: true,
+          sources,
+        })
+      );
+      if (!lastGeocodeFromCache) await new Promise((r) => setTimeout(r, 1100));
+    }
+
+    if (!out.length) {
+      const why = [
+        eventsDropped.undated ? `${eventsDropped.undated} had no usable date` : "",
+        eventsDropped.unplaced ? `${eventsDropped.unplaced} couldn't be found on the map` : "",
+        eventsDropped.tooFar ? `${eventsDropped.tooFar} turned out to be too far away` : "",
+      ]
+        .filter(Boolean)
+        .join(", ");
+      throw new Error(
+        why
+          ? `Nothing could be confirmed as on ${window.label} — ${why}.`
+          : `Nothing found on ${window.label} near ${centre.name}.`
+      );
+    }
+    // Soonest first: an event list is a diary, not a ranking.
+    return out.sort((a, b) => new Date(a.startsAt) - new Date(b.startsAt));
+  }
+
+  // Drops a saved event onto the planned day it falls on, if there is one.
+  // Silent when there is not: a trip with no dated days, or an event outside
+  // it, is not a failure, it is just an event you have saved.
+  function addEventToItsDay(pick) {
+    const when = pick && pick.startsAt ? new Date(pick.startsAt) : null;
+    if (!when || Number.isNaN(when.getTime())) return false;
+    const match = datedDays(loadPlan().days).find(
+      (x) => x.when && isoDate(x.when) === isoDate(when)
+    );
+    if (!match) return false;
+    addToPlan(match.d.id, pick.id);
+    if (pick.time) {
+      const plan = loadPlan();
+      const item = (plan.items[match.d.id] || []).find((it) => it.pickId === pick.id);
+      if (item && !item.time) {
+        item.time = pick.time;
+        savePlan(plan);
+      }
+    }
+    toast(`Added to ${shortDayLabel(match.d.label)}`);
+    return true;
+  }
+
+  // An event that has been and gone is clutter. Places are permanent and
+  // events are not, and a list that silently accumulates last month's markets
+  // is worse than no list.
+  function eventIsPast(pick) {
+    if (!pick || !pick.startsAt) return false;
+    const when = new Date(pick.startsAt);
+    if (Number.isNaN(when.getTime())) return false;
+    return endOfWindow(when) < new Date();
+  }
+
+  function eventDateLabel(pick) {
+    if (!pick || !pick.startsAt) return "";
+    const when = new Date(pick.startsAt);
+    if (Number.isNaN(when.getTime())) return "";
+    const day = humanDate(when);
+    return pick.time ? `${day}, ${pick.time}` : day;
+  }
+
   async function runExplore() {
     if (!explore.centre || !explore.category) return;
     explore.status = "loading";
@@ -6988,14 +6965,38 @@
     renderPicks();
 
     const key = loadTripSettings().geminiKey.trim();
+
+    // Events have no fallback. Overpass maps things that stay still and
+    // Nominatim geocodes names; neither has any idea what is on next
+    // Saturday. Saying so is better than running a place search and calling
+    // the result an answer to a different question.
+    if (explore.category === "events" && !key) {
+      explore.status = "error";
+      explore.error =
+        "Finding what's on needs an AI key — there is no free map database of events. " +
+        "Settings has a Gemini key field; the free tier is enough for this.";
+      renderPicks();
+      return;
+    }
+
     if (key) {
       try {
-        explore.results = await exploreWithGemini(explore.centre, explore.category, explore.radius, key);
+        explore.results =
+          explore.category === "events"
+            ? await eventsWithGemini(explore.centre, explore.when, explore.radius, key)
+            : await exploreWithGemini(explore.centre, explore.category, explore.radius, key);
         explore.usedAi = true;
         explore.status = "done";
         renderPicks();
         return;
       } catch (e) {
+        if (explore.category === "events") {
+          // Nothing else can answer this one, so the error is the result.
+          explore.status = "error";
+          explore.error = e && e.message ? e.message : String(e);
+          renderPicks();
+          return;
+        }
         // Recorded rather than swallowed, so a quiet drop to thinner data is
         // visible instead of just looking like a sparse area.
         explore.error = e && e.message ? e.message : String(e);
@@ -7062,7 +7063,10 @@
   function renderExploreCategoryButton() {
     const cat = findCategory(explore.category);
     const label = explore.category === "custom" ? `🔎 ${explore.customQuery}` : cat ? `${cat.icon} ${cat.label}` : "";
-    const tunable = cat && explore.category !== "custom";
+    // Events build their own question from the dates, so there is no category
+    // prompt to rewrite - and a control that silently does nothing is worse
+    // than one that isn't there.
+    const tunable = cat && explore.category !== "custom" && explore.category !== "events";
     return `
       <div class="cat-select-row">
         <button class="cat-select" id="exploreCatBtn">
@@ -7247,18 +7251,37 @@
     if (explore.centre) {
       body += `<p class="explore-centre">Around <b>${esc(explore.centre.name)}</b></p>`;
       body += renderExploreCategoryButton();
-      // The categories are a shortcut, not the whole vocabulary. Describing
-      // what you want was previously reachable only by opening the category
-      // sheet and finding the field at the top of it, which made the list look
-      // like the only thing the app could look for.
-      body += `
-        <form class="search-bar explore-describe" id="exploreDescribeForm">
-          <input type="text" id="exploreDescribeInput"
-                 placeholder="…or describe it — e.g. soft play with parking"
-                 autocomplete="off" value="${explore.category === "custom" ? esc(explore.customQuery) : ""}" />
-          <button type="submit" aria-label="Use this description">Use</button>
-        </form>
-      `;
+      // A place search needs a where and a what. An event search needs a when
+      // as well, and it is the only question that has one - so the chips
+      // appear with the category rather than sitting on every search taking
+      // up room and meaning nothing.
+      if (explore.category === "events") {
+        const w = eventWindow(explore.when);
+        body += `
+          <div class="search-chips event-when">
+            ${EVENT_WINDOWS.map(
+              (x) =>
+                `<button class="search-chip${explore.when === x.key ? " on" : ""}" data-event-when="${esc(
+                  x.key
+                )}">${esc(x.label)}</button>`
+            ).join("")}
+          </div>
+          <p class="explore-note">${esc(humanDate(w.from))} – ${esc(humanDate(w.to))}</p>
+        `;
+      } else {
+        // The categories are a shortcut, not the whole vocabulary. Describing
+        // what you want was previously reachable only by opening the category
+        // sheet and finding the field at the top of it, which made the list look
+        // like the only thing the app could look for.
+        body += `
+          <form class="search-bar explore-describe" id="exploreDescribeForm">
+            <input type="text" id="exploreDescribeInput"
+                   placeholder="…or describe it — e.g. soft play with parking"
+                   autocomplete="off" value="${explore.category === "custom" ? esc(explore.customQuery) : ""}" />
+            <button type="submit" aria-label="Use this description">Use</button>
+          </form>
+        `;
+      }
       body += `
         <div class="explore-radius">
           <label for="exploreRadius">Within</label>
@@ -7366,6 +7389,13 @@
                   <div class="place-name">${esc(r.name)}${
                     r.aiSuggested ? ` <span class="ai-badge">AI</span>` : ""
                   }${ratingBadge(r)}</div>
+                  ${
+                    r.kind === "event"
+                      ? `<div class="place-when">${esc(eventDateLabel(r))}${
+                          r.venue ? ` · ${esc(r.venue)}` : ""
+                        }</div>`
+                      : ""
+                  }
                   ${meta ? `<div class="place-notes">${esc(meta)}</div>` : ""}
                   ${r.description ? `<div class="place-notes">${esc(r.description)}</div>` : ""}
                   <div class="search-result-more">Details ${icon('forward', { size: 13, cls: 'ico-inline' })}</div>
@@ -7455,6 +7485,16 @@
     const runBtn = document.getElementById("exploreRunBtn");
     if (runBtn) runBtn.addEventListener("click", () => runExplore());
 
+    view.querySelectorAll("[data-event-when]").forEach((btn) =>
+      btn.addEventListener("click", () => {
+        explore.when = btn.getAttribute("data-event-when");
+        // Changing the dates changes the answer, so what is on screen is now
+        // out of date - the same bargain every other Explore control makes.
+        markExploreStale();
+        renderPicks();
+      })
+    );
+
     const catBtn = document.getElementById("exploreCatBtn");
     if (catBtn) catBtn.addEventListener("click", openCategoryPicker);
 
@@ -7489,6 +7529,23 @@
           description: r.description || "",
           category: catLabel(explore.category),
         };
+        // Rebuilding the candidate field by field means anything this list
+        // does not know about is dropped on the way in - which is exactly
+        // what happened to every event: it arrived with a date and a venue
+        // and was saved as an ordinary place with neither.
+        if (r.kind === "event") {
+          Object.assign(candidate, {
+            kind: "event",
+            startsAt: r.startsAt,
+            time: r.time || "",
+            venue: r.venue || "",
+            price: r.price || null,
+            ticketUrl: r.ticketUrl || "",
+            recurring: !!r.recurring,
+            sources: r.sources || [],
+            category: r.category || "Event",
+          });
+        }
         quickAdd(candidate);
       });
     });
@@ -7587,7 +7644,10 @@
 
     // Escaped in parts, because the rating carries a drawn star: escaping the
     // joined string would have printed the SVG rather than shown it.
-    const meta = [extra === undefined ? p.category : extra, away]
+    // For an event the date outranks the category: "Sat 6 Sep, 19:30" is what
+    // you need off a row, and "Music" is not.
+    const isEvent = p.kind === "event";
+    const meta = [isEvent ? eventDateLabel(p) || p.category : extra === undefined ? p.category : extra, away]
       .filter(Boolean)
       .map((x) => esc(String(x)))
       .concat(p.rating != null ? [`${icon("star", { size: 13, cls: "ico-inline" })} ${esc(String(p.rating))}`] : [])
@@ -7596,7 +7656,7 @@
     return `
       <div class="swipeable">
         ${rowActions(p.id)}
-      <button class="pick-row" data-open-pick="${esc(p.id)}">
+      <button class="pick-row${isEvent && eventIsPast(p) ? " pick-row-past" : ""}" data-open-pick="${esc(p.id)}">
         ${photoBlock(p, "thumb")}
         <div class="pick-row-main">
           <div class="pick-row-name">${esc(p.name)}</div>
@@ -7606,6 +7666,8 @@
             ${p.booked ? `<span class="row-badge booked">booked</span>` : ""}
             ${p.note ? `<span class="row-badge note">note</span>` : ""}
             ${p.geoAlternatives ? `<span class="row-badge doubt">location?</span>` : ""}
+            ${isEvent && eventIsPast(p) ? `<span class="row-badge past">been and gone</span>` : ""}
+            ${isEvent && p.unverified && !eventIsPast(p) ? `<span class="row-badge doubt">check it's on</span>` : ""}
             ${p.enrichStatus === "loading" ? `<span class="row-badge">loading…</span>` : ""}
           </div>
         </div>
@@ -8420,9 +8482,9 @@
   }
 
   const IDEA_FIELDS = {
-    from: "e.g. Edinburgh",
-    towards: "e.g. towards the Highlands",
-    who: "e.g. family of 3, 4-year-old who walks",
+    from: "e.g. the town you're staying in",
+    towards: "e.g. towards the coast",
+    who: "e.g. two adults and a 4-year-old",
     extra: "e.g. no motorways, back by six",
   };
 
@@ -10035,7 +10097,14 @@
                 <div class="place-name">${esc(r.name)}${
                   r.isArea ? ` <span class="area-badge">${icon('globe', { size: 13, cls: 'ico-inline' })} ${esc(prettyCategory(r.type) || "Area")}</span>` : ""
                 }${r.aiSuggested ? ` <span class="ai-badge">AI</span>` : ""}${ratingBadge(r)}</div>
-                <div class="place-notes">${esc(r.displayName || "")}</div>
+                ${
+                  r.kind === "event"
+                    ? `<div class="place-when">${esc(eventDateLabel(r))}${
+                        r.venue ? ` · ${esc(r.venue)}` : ""
+                      }${r.price ? ` · ${esc(r.price)}` : ""}</div>`
+                    : ""
+                }
+                <div class="place-notes">${esc(r.displayName || r.description || "")}</div>
                 ${r.description ? `<div class="place-notes">${esc(r.description)}</div>` : ""}
                 <div class="search-result-more">${
                   r.isArea ? "Save it to group places under it, or tap for details ›" : "Details ›"
@@ -10346,8 +10415,14 @@
         } else {
           // quickAdd refreshes the list itself, once the folder question has
           // actually been answered - redrawing it here would mark a place as
-          // saved while the question is still on screen.
-          quickAdd(r);
+          // saved while the question is still on screen. When it asks
+          // nothing, though, this sheet is finished with and closing it is
+          // the whole of what "saved" should feel like.
+          if (!quickAdd(r)) {
+            closePlaceModal();
+            if (searchOverlay.classList.contains("open")) renderSearchOverlay();
+            else if (view.dataset.activeTab) showView(view.dataset.activeTab);
+          }
         }
       });
     }
@@ -10803,6 +10878,23 @@
   // bounded too. Shown on screen like any other anchor, and cleared in one
   // tap - a guess you can see and change is a different thing from a guess
   // made behind your back.
+  // The folder most of these places are filed under, when there is a clear
+  // winner. "Unsorted" is not a place, so it never wins.
+  function commonestFolder(picks) {
+    const counts = {};
+    picks.forEach((p) => {
+      const city = (p.city || "").trim();
+      if (!city || city === "Unsorted" || city === "Saved") return;
+      counts[city] = (counts[city] || 0) + 1;
+    });
+    const names = Object.keys(counts).sort((a, b) => counts[b] - counts[a]);
+    if (!names.length) return null;
+    // A tie is not a winner: two towns equally represented is exactly the
+    // case where naming one of them would be misleading.
+    if (names.length > 1 && counts[names[0]] === counts[names[1]]) return null;
+    return names[0];
+  }
+
   function derivedAnchor() {
     const picks = loadPicks().filter((p) => p.lat != null);
     if (!picks.length) return null;
@@ -10834,7 +10926,17 @@
     // purpose, which is a decision rather than an accident.
     const lat = picks.reduce((n, p) => n + p.lat, 0) / picks.length;
     const lon = picks.reduce((n, p) => n + p.lon, 0) / picks.length;
-    const name = nearestMajorPlace(lat, lon) || suggestedFolderFor(lat, lon) || activeBoard().destination || "your places";
+    // Naming the guess used to lean on three hardcoded Scottish anchors, so
+    // anywhere else fell straight through to the destination and a guess
+    // centred on Stirling announced itself as "Scotland" - a whole country,
+    // which is exactly the shape of the bug this radius cap was fixing.
+    // The places themselves already know where they are: the folder most of
+    // the nearby ones sit in is a better name than the region they are in.
+    const name =
+      nearestMajorPlace(lat, lon) ||
+      commonestFolder(picks) ||
+      activeBoard().destination ||
+      "your places";
 
     // Spread out far enough that the centroid is not near anything in
     // particular - the average of Edinburgh and Skye is a field - so anchoring
@@ -12387,8 +12489,28 @@
       enrichStatus: "loading",
       addedAt: Date.now(),
     };
+    // An event is a place with a date on it. Everything above applies
+    // unchanged; these are the fields a place has no use for.
+    if (candidate.kind === "event") {
+      pick.kind = "event";
+      pick.startsAt = candidate.startsAt;
+      pick.time = candidate.time || "";
+      pick.venue = candidate.venue || "";
+      pick.price = candidate.price || null;
+      pick.ticketUrl = candidate.ticketUrl || "";
+      pick.recurring = !!candidate.recurring;
+      // A model naming a festival that is not happening is the obvious way
+      // this goes wrong, so the row says so and links what it read.
+      pick.unverified = true;
+      if (Array.isArray(candidate.sources) && candidate.sources.length) {
+        pick.sources = candidate.sources.slice(0, 4);
+      }
+    }
     picks.push(pick);
     savePicks(picks);
+    // The whole point of an event having a date: it goes in the day it is on,
+    // at the time it starts, without being dragged there.
+    if (pick.kind === "event") addEventToItsDay(pick);
     // Deliberately does NOT clear the search: results now live on their own
     // screen that stays open so several places can be added in a row, and
     // wiping the list out from under the second tap is exactly the bug that
@@ -12441,11 +12563,11 @@
   //
   // They are a filter here instead. Same lists, same rows, one destination.
   let pickKindFilter = "all";
-  let guideOpen = false;
   const KIND_FILTERS = [
     { key: "all", label: "All" },
     { key: "place", label: `${icon('castle', { size: 17, cls: 'ico-inline' })} To do` },
     { key: "eat", label: `${icon('food', { size: 17, cls: 'ico-inline' })} Eat` },
+    { key: "event", label: "🎪 On" },
   ];
 
   // Entry point for the old Places/Eats routes: same screen, filter preset.
@@ -12474,7 +12596,9 @@
     // never be the reason its own control is hidden.
     const kinds = new Set(all.filter((p) => !p.major).map((p) => pickKind(p)));
     if (kinds.size > 1 || pickKindFilter !== "all") {
-      html += `<div class="filter-row kind-row">${KIND_FILTERS.map(
+      html += `<div class="filter-row kind-row">${KIND_FILTERS.filter(
+        (k) => k.key === "all" || k.key === pickKindFilter || kinds.has(k.key)
+      ).map(
         (k) =>
           `<button class="filter-chip${k.key === pickKindFilter ? " active" : ""}" data-pick-kind-filter="${k.key}">${
             k.label
@@ -12564,28 +12688,6 @@
       html += `<button class="hero-share" id="sharePicks" style="margin:18px 0 4px;">${icon('share', { size: 17, cls: 'ico-inline' })} Share my picks</button>`;
     }
 
-    // The bundled guide came across too, collapsed. It is suggestions rather
-    // than your list, so it sits at the bottom and stays out of the way until
-    // asked for - the same bargain Explore makes at the top.
-    const board = activeBoard();
-    if (board.hasGuide) {
-      html += `
-        <div class="card" style="margin-top:16px;">
-          <div class="explore-head" id="guideToggle">
-            <b>📖 Edinburgh guide</b>
-            <span class="chevron">${guideOpen ? "▼" : "▶"}</span>
-          </div>
-          ${
-            guideOpen
-              ? `<p class="search-hint">Suggestions that came with this trip. Tap ♡ to save one into your list.</p>` +
-                (pickKindFilter !== "eat" ? renderGuidePlaces() : "") +
-                (pickKindFilter !== "place" ? renderGuideEats() : "")
-              : ""
-          }
-        </div>
-      `;
-    }
-
     destroyMiniMaps();
     view.innerHTML = html;
     wireExplore();
@@ -12603,25 +12705,6 @@
         renderPicks();
       })
     );
-
-    const guideToggle = document.getElementById("guideToggle");
-    if (guideToggle) {
-      guideToggle.addEventListener("click", () => {
-        guideOpen = !guideOpen;
-        renderPicks();
-      });
-    }
-
-    // Guide entries open the same sheet a search result does, and the ♡ saves
-    // one straight into the list - both exactly as they behaved on the tabs
-    // these came from.
-    view.querySelectorAll("[data-preview-guide]").forEach((btn) =>
-      btn.addEventListener("click", () => {
-        const [source, index] = btn.getAttribute("data-preview-guide").split("|");
-        openGuidePreview(source, Number(index));
-      })
-    );
-    wirePickToggles(renderPicks);
 
     // Search has its own screen now - these are just the ways in.
     const searchTrigger = document.getElementById("pickSearchTrigger");
@@ -12699,7 +12782,7 @@
     const shareBtn = document.getElementById("sharePicks");
     if (shareBtn) {
       shareBtn.addEventListener("click", () => {
-        const lines = ["🏴 My picks for Scotland with Ally", ""];
+        const lines = [`📍 My picks — ${activeBoard().name}`, ""];
         picks.forEach((p) => {
           lines.push(`• ${p.name}${p.city ? ` (${p.city})` : ""}`);
           if (p.description) lines.push(`  ${p.description}`);
@@ -13994,9 +14077,6 @@
       const board = state.boards.find((b) => b.id === state.activeId) || state.boards[0];
       board.name = where;
       board.destination = where;
-      // The bundled Edinburgh guide belongs to one particular trip and is
-      // noise on anybody else's.
-      board.hasGuide = /edinburgh|scotland/i.test(where) ? board.hasGuide : false;
       saveBoards(state);
       saveTripSettings({ destination: where });
     }
@@ -14023,9 +14103,9 @@
         sub: "Everything else follows from this — what it searches, what it suggests, what it costs.",
         body: `
           <input class="welcome-input" id="welcomeWhere" type="text" value="${esc(w.where)}"
-                 placeholder="Edinburgh, the Highlands, Cornwall…" autocomplete="off" />
+                 placeholder="Cornwall, the Dolomites, Lisbon…" autocomplete="off" />
           <div class="search-chips welcome-chips">
-            ${["Edinburgh", "The Highlands", "Skye", "The Lake District", "Cornwall", "Snowdonia"]
+            ${["Cornwall", "The Lake District", "Snowdonia", "The Highlands", "Amsterdam", "Lisbon"]
               .map((x) => `<button class="search-chip" data-welcome-where="${esc(x)}">${esc(x)}</button>`)
               .join("")}
           </div>
@@ -14230,6 +14310,13 @@
     autoBackup,
     deleteBoard,
     BOARD_PARTS,
+    eventWindow,
+    normaliseEvent,
+    eventIsPast,
+    eventDateLabel,
+    addEventToItsDay,
+    parseEventDate,
+    cityColor,
   };
 
   setUpNativeShell();

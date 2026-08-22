@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">Scotland with Ally</string>
-    <string name="title_activity_main">Scotland with Ally</string>
+    <string name="app_name">Wayfare</string>
+    <string name="title_activity_main">Wayfare</string>
     <string name="package_name">com.livium888.scotlandtrip</string>
     <string name="custom_url_scheme">com.livium888.scotlandtrip</string>
 </resources>

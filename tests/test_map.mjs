@@ -9,6 +9,18 @@ const SANDBOX_CHROMIUM = '/opt/pw-browsers/chromium';
 const LAUNCH_OPTS = fs.existsSync(SANDBOX_CHROMIUM) ? { executablePath: SANDBOX_CHROMIUM } : {};
 
 const BASE = 'http://localhost:8946';
+
+// Today and tomorrow, in the label format the app parses ("Day 1 · Tue 11 Aug").
+const D = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const M = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const label = (d) => `${D[d.getDay()]} ${d.getDate()} ${M[d.getMonth()]}`;
+const chip = (d) => `${D[d.getDay()]} ${d.getDate()}`;
+const today = new Date();
+const tomorrow = new Date(Date.now() + 86400000);
+const DAY0 = label(today);
+const DAY1 = label(tomorrow);
+const CHIP0 = chip(today);
+const CHIP1 = chip(tomorrow);
 let failures = 0;
 const check = (l, c, extra) => { if (c) console.log(`PASS: ${l}`); else { console.log(`FAIL: ${l}${extra ? ' :: ' + extra : ''}`); failures++; } };
 
@@ -30,7 +42,11 @@ const SEED = {
   ],
   folders: ['Edinburgh', 'Glasgow'],
   plan: {
-    days: [{ id: 'd0', label: 'Day 1 · Wed 19 Aug' }, { id: 'd1', label: 'Day 2 · Thu 20 Aug' }],
+    // Relative to today, not a fixed week in August. With hardcoded dates
+    // this suite quietly changed what it was testing as they slid into the
+    // past - "the map opened from Today" means nothing once Today is not one
+    // of the planned days - and then failed on a date rather than on a bug.
+    days: [{ id: 'd0', label: `Day 1 · ${DAY0}` }, { id: 'd1', label: `Day 2 · ${DAY1}` }],
     items: {
       d0: [{ pickId: 'custom:Edinburgh Castle', time: '10:00' }, { pickId: 'custom:Camera Obscura', time: '13:00' }],
       d1: [],
@@ -79,8 +95,8 @@ check('map canvas fills the screen', sized.w > 300 && sized.h > 300, JSON.string
 
 // --- Filters: days and folders ---
 const chips = await page.evaluate(() => Array.from(document.querySelectorAll('#mapOverlay .map-chip')).map((c) => c.textContent.trim()));
-check('All, the planned day and each folder are offered', chips[0] === 'All' && chips.includes('Wed 19') && chips.includes('Edinburgh') && chips.includes('Glasgow'), JSON.stringify(chips));
-check('an empty day is not offered as a filter', !chips.includes('Thu 20'), JSON.stringify(chips));
+check('All, the planned day and each folder are offered', chips[0] === 'All' && chips.includes(CHIP0) && chips.includes('Edinburgh') && chips.includes('Glasgow'), JSON.stringify(chips));
+check('an empty day is not offered as a filter', !chips.includes(CHIP1), JSON.stringify(chips));
 
 await page.evaluate(() => document.querySelector('[data-map-filter="folder:Glasgow"]').click());
 await page.waitForTimeout(500);
@@ -128,7 +144,7 @@ await page.click('#mapBtn');
 await page.waitForSelector('#mapOverlay.open');
 await page.waitForTimeout(500);
 const activeChip = await page.evaluate(() => document.querySelector('#mapOverlay .map-chip.on').textContent.trim());
-check('map opened from Today starts on that day', activeChip === 'Wed 19', activeChip);
+check('map opened from Today starts on that day', activeChip === CHIP0, activeChip);
 
 // --- An empty board says so instead of showing a blank grey rectangle ---
 await page.evaluate(() => document.querySelector('[data-map-close]').click());

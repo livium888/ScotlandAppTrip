@@ -39,6 +39,30 @@ await page.route(/wikidata|wikipedia|overpass|googleapis/, (r) =>
   r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ search: [] }) }));
 
 await page.goto(BASE, { waitUntil: 'load' });
+// Three folders and no areas, which is the situation this whole suite is
+// about: a real choice, so the question is worth asking. It used to get them
+// from the bundled guide, which no longer exists - a board's default is now
+// one folder, and one folder is not a choice.
+await page.evaluate(() => {
+  const state = JSON.parse(localStorage.getItem('boards-v1'));
+  const id = state.activeId;
+  localStorage.setItem(`board:${id}:folders`, JSON.stringify(['Edinburgh', 'Stirling', 'Glasgow']));
+  // And one saved area, because the app's guess about where something belongs
+  // now comes from the towns you have saved rather than from three hardcoded
+  // Scottish anchors. With no areas there is nothing to guess from, and the
+  // honest answer is Unsorted - which is a different test from this one.
+  //
+  // Two of them, close enough together that neither is the obvious answer.
+  // One area plainly containing the place is not a choice - the app files it
+  // and says where, which is the behaviour the second half of this suite
+  // checks. A real rival is what makes the question worth asking.
+  localStorage.setItem(`board:${id}:picks`, JSON.stringify([
+    { id: 'custom:Edinburgh', name: 'Edinburgh', city: 'Edinburgh', major: true,
+      category: 'City', lat: 55.9533, lon: -3.1883, addedAt: 1, photoChecked: true },
+    { id: 'custom:Leith', name: 'Leith', city: 'Leith', major: true,
+      category: 'Area', lat: 55.9560, lon: -3.1930, addedAt: 2, photoChecked: true }]));
+});
+await page.reload({ waitUntil: 'load' });
 await page.evaluate(() => document.querySelector('[data-view="picks"]').click());
 // Open the search screen if we aren't already on it - a second search from
 // the results doesn't mean going back to Picks first.
@@ -76,15 +100,20 @@ check('and which list it belongs in', askedFirst.kinds === 2, JSON.stringify(ask
 
 // Nothing is saved while the question is still on screen.
 const duringAsk = await page.evaluate(() => JSON.parse(localStorage.getItem('board:'+JSON.parse(localStorage.getItem('boards-v1')).activeId+':picks') || '[]'));
-check('nothing is filed before the question is answered', duringAsk.length === 0, JSON.stringify(duringAsk));
+// Counted by name rather than by length: the board is seeded with two areas
+// to make the folder question a real one, so "nothing filed yet" means the
+// place being saved is absent, not that storage is empty.
+check('nothing is filed before the question is answered',
+  !duringAsk.some((p) => p.name === 'Camera Obscura'), JSON.stringify(duringAsk.map((p) => p.name)));
 
 // Accepting what it suggests is one tap on Save.
 await page.evaluate(() => document.getElementById('labelDone').click());
 await page.waitForTimeout(700);
 
 const picks = await page.evaluate(() => JSON.parse(localStorage.getItem('board:'+JSON.parse(localStorage.getItem('boards-v1')).activeId+':picks') || '[]'));
-check('the place is saved once answered', picks.length === 1 && picks[0].name === 'Camera Obscura', JSON.stringify(picks.map(p => p.name)));
-check('filed where it was told to go', picks[0] && picks[0].city === 'Edinburgh', picks[0] && picks[0].city);
+const saved = picks.find((p) => p.name === 'Camera Obscura');
+check('the place is saved once answered', !!saved, JSON.stringify(picks.map(p => p.name)));
+check('filed where it was told to go', saved && saved.city === 'Edinburgh', saved && saved.city);
 check('the question does not linger', await page.evaluate(() =>
   !document.getElementById('placeModal').classList.contains('open')));
 
@@ -94,8 +123,14 @@ const toast = await page.evaluate(() => {
 });
 check('confirms where it went', toast && /Edinburgh/.test(toast.text), JSON.stringify(toast));
 
-// A place can still be moved afterwards, from its own sheet.
-await page.evaluate(() => document.querySelector('[data-open-pick]').click());
+// A place can still be moved afterwards, from its own sheet. Opened by id,
+// because the board also holds the two seeded areas and the first row on the
+// screen is one of those rather than the place this is about.
+const openCamera = () => page.evaluate(() => {
+  const btn = document.querySelector('[data-open-pick="custom:Camera Obscura"]');
+  if (btn) btn.click();
+});
+await openCamera();
 await page.waitForSelector('#placeModal.open [data-move-pick]', { timeout: 5000 });
 await page.evaluate(() => {
   const chips = Array.from(document.querySelectorAll('[data-move-pick]'));
@@ -103,14 +138,27 @@ await page.evaluate(() => {
   if (other) other.click();
 });
 await page.waitForTimeout(500);
-const moved = await page.evaluate(() => JSON.parse(localStorage.getItem('board:'+JSON.parse(localStorage.getItem('boards-v1')).activeId+':picks'))[0].city);
-check('and moved later from its own sheet', moved !== 'Edinburgh', moved);
-await page.evaluate(() => { const p = JSON.parse(localStorage.getItem('board:'+JSON.parse(localStorage.getItem('boards-v1')).activeId+':picks')); p[0].city = 'Edinburgh'; localStorage.setItem('board:'+JSON.parse(localStorage.getItem('boards-v1')).activeId+':picks', JSON.stringify(p)); });
+const cameraCity = () => page.evaluate(() =>
+  (JSON.parse(localStorage.getItem('board:'+JSON.parse(localStorage.getItem('boards-v1')).activeId+':picks'))
+    .find((p) => p.name === 'Camera Obscura') || {}).city);
+check('and moved later from its own sheet', (await cameraCity()) !== 'Edinburgh', await cameraCity());
+await page.evaluate(() => {
+  const key = 'board:'+JSON.parse(localStorage.getItem('boards-v1')).activeId+':picks';
+  const p = JSON.parse(localStorage.getItem(key));
+  const c = p.find((x) => x.name === 'Camera Obscura');
+  if (c) c.city = 'Edinburgh';
+  localStorage.setItem(key, JSON.stringify(p));
+  // A day to schedule into. Boards used to start with the bundled trip's
+  // seven days already in them; they start empty now.
+  const planKey = 'board:'+JSON.parse(localStorage.getItem('boards-v1')).activeId+':plan';
+  localStorage.setItem(planKey, JSON.stringify({ days: [{ id: 'd1', label: 'Day 1' }], items: { d1: [] } }));
+});
+await page.reload({ waitUntil: 'load' });
 await page.evaluate(() => document.querySelector('[data-view="picks"]').click());
-await page.waitForTimeout(300);
+await page.waitForTimeout(400);
 
 // --- Scheduling from the pick's detail sheet, without leaving the tab ---
-await page.evaluate(() => document.querySelector('[data-open-pick]').click());
+await openCamera();
 await page.waitForSelector('#placeModal.open [data-assign-day]', { timeout: 5000 });
 const dayChips = await page.evaluate(() => document.querySelectorAll('[data-assign-day]').length);
 check('day chips appear on the pick card', dayChips > 0, String(dayChips));
@@ -135,7 +183,6 @@ await page.evaluate(() => document.querySelector('#placeModal .modal-close').cli
 await page.waitForTimeout(200);
 await page.evaluate(() => document.querySelector('[data-view="itinerary"]').click());
 await page.waitForTimeout(150);
-await page.evaluate(() => document.querySelector('[data-plan-mode="mine"]').click());
 await page.waitForTimeout(300);
 
 const selects = await page.evaluate(() => document.querySelectorAll('select[data-plan-add]').length);

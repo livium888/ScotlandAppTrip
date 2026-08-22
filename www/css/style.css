@@ -3334,3 +3334,24 @@ html, body {
   color: var(--text);
 }
 .budget-split-note { font-weight: 400; font-size: 12px; color: var(--text-muted); }
+
+/* ---------- What's on ---------- */
+/* An event's date is the thing you read first, so it sits above the address
+   rather than in the run of metadata below it. */
+.place-when {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent, var(--text));
+  margin-top: 2px;
+}
+.event-when { margin-bottom: 6px; }
+.explore-note {
+  margin: 2px 0 10px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+/* Been and gone. Still readable — it is a record of what you did — but plainly
+   in the past, so a list of events does not rot into a list of things you
+   have missed with nothing to tell them apart. */
+.pick-row-past { opacity: 0.55; }
+.row-badge.past { background: var(--surface-2); color: var(--text-muted); }

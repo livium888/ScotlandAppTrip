@@ -35,7 +35,11 @@ await page.waitForTimeout(500);
 
 const boards = await page.evaluate(() => JSON.parse(localStorage.getItem('boards-v1')));
 check('migration created a board', boards && boards.boards.length === 1, JSON.stringify(boards));
-check('the board is the existing trip', boards.boards[0].dated === true && boards.boards[0].hasGuide === true, JSON.stringify(boards.boards[0]));
+// hasGuide used to be true here, because the first board shipped with a
+// bundled guide to one particular week in Scotland. That guide is gone, so
+// what makes this "the existing trip" is that it is dated and that the old
+// single-trip data was carried into it - which the checks below prove.
+check('the board is the existing trip', boards.boards[0].dated === true, JSON.stringify(boards.boards[0]));
 
 const migrated = await page.evaluate((id) => ({
   picks: JSON.parse(localStorage.getItem(`board:${id}:picks`) || '[]'),

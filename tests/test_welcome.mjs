@@ -38,10 +38,14 @@ check('you can see how long this will take', await page.evaluate(() =>
 check('and it will not let you past a blank answer', await page.evaluate(() =>
   document.querySelector('[data-welcome-next]').disabled === true));
 
-await page.evaluate(() => document.querySelector('[data-welcome-where="Skye"]').click());
+// Whatever the first suggestion happens to be - the point is that tapping one
+// answers the question, not which places are offered.
+const firstSuggestion = await page.evaluate(() =>
+  document.querySelector('[data-welcome-where]').getAttribute('data-welcome-where'));
+await page.evaluate(() => document.querySelector('[data-welcome-where]').click());
 await page.waitForTimeout(250);
 check('a suggestion answers it', await page.evaluate(() =>
-  document.getElementById('welcomeWhere').value === 'Skye'));
+  document.getElementById('welcomeWhere').value) === firstSuggestion, firstSuggestion);
 check('and the way on opens up', await page.evaluate(() =>
   document.querySelector('[data-welcome-next]').disabled === false));
 
@@ -54,7 +58,7 @@ check('the second question is when', /When are you going/.test(
 await page.evaluate(() => document.querySelector('[data-welcome-back]').click());
 await page.waitForTimeout(250);
 check('going back keeps your answer', await page.evaluate(() =>
-  document.getElementById('welcomeWhere').value === 'Skye'));
+  document.getElementById('welcomeWhere').value) === firstSuggestion, firstSuggestion);
 await page.evaluate(() => document.querySelector('[data-welcome-next]').click());
 await page.waitForTimeout(250);
 
@@ -78,9 +82,9 @@ await page.waitForTimeout(700);
 check('it is done asking', await page.evaluate(() =>
   !document.getElementById('welcomeOverlay').classList.contains('open')));
 check('the trip is named after where you are going', await page.evaluate(() =>
-  JSON.parse(localStorage.getItem('boards-v1')).boards[0].name === 'Skye'));
+  JSON.parse(localStorage.getItem('boards-v1')).boards[0].name) === firstSuggestion, firstSuggestion);
 check('and searching will look there', await page.evaluate(() =>
-  JSON.parse(localStorage.getItem('trip-settings-v1')).destination === 'Skye'));
+  JSON.parse(localStorage.getItem('trip-settings-v1')).destination) === firstSuggestion, firstSuggestion);
 check('who is coming is remembered, since it changes every answer', await page.evaluate(() =>
   /young kids/.test(JSON.parse(localStorage.getItem('trip-settings-v1')).travellers)));
 const days = await page.evaluate(() => {

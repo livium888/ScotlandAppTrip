@@ -138,8 +138,15 @@ check('AI-found place saved with real OSM coords', picks.length === 1 && picks[0
 // --- Auto plan ---
 await page.evaluate(() => document.querySelector('[data-view="itinerary"]').click());
 await page.waitForTimeout(150);
-await page.evaluate(() => document.querySelector('[data-plan-mode="mine"]').click());
+// There used to be a Suggested/My plan toggle to click past here, and seven
+// days already in the plan from the bundled trip. Both went with that trip,
+// so the day has to be made before there is anything to plan into.
 await page.waitForTimeout(200);
+await page.evaluate(() => {
+  const quick = document.querySelector('[data-quick-day]');
+  if (quick) quick.click();
+});
+await page.waitForTimeout(400);
 check('Plan my days button present', await page.evaluate(() => !!document.getElementById('autoPlanBtn')));
 
 // The button now opens the chooser: what to plan is a question, and the answer

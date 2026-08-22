@@ -1,9 +1,13 @@
 // The Places tab (now the Picks list, since Places and Eats became a filter
-// on it rather than tabs of their own) had two kinds of entry side by side: saved places as rows
-// that opened a sheet, and bundled guide entries as tall cards where only a
-// small ♥ responded to a tap. Same screen, two behaviours, nothing to tell
-// them apart - eleven of the cards did nothing at all when tapped. There was
-// also no way to order any of it.
+// on it rather than tabs of their own) had two kinds of entry side by side:
+// saved places as rows that opened a sheet, and bundled guide entries as tall
+// cards where only a small ♥ responded to a tap - eleven of which did nothing
+// at all when tapped. There was also no way to order any of it.
+//
+// The bundled guide has since been removed with the trip it described, so
+// half of that is history. What is left is the half that still matters and
+// still regresses: every entry on the screen responds to a tap, the list can
+// be ordered, and folders separate it rather than filtering it.
 //
 // These checks drive the real controls rather than reading the DOM, because
 // "the handler is attached" and "tapping it does something" turned out to be
@@ -33,9 +37,9 @@ const names = () => page.evaluate(() =>
 await page.goto(BASE, { waitUntil: 'load' });
 await page.evaluate(() => {
   localStorage.clear();
-  // The bundled guide is on, which is the board the problem showed up on.
+  // The board the problem showed up on.
   localStorage.setItem('boards-v1', JSON.stringify({
-    activeId: 'b-p', boards: [{ id: 'b-p', name: 'Trip', destination: 'Edinburgh', dated: true, hasGuide: true, createdAt: 1 }],
+    activeId: 'b-p', boards: [{ id: 'b-p', name: 'Trip', destination: 'Edinburgh', dated: true, hasGuide: false, createdAt: 1 }],
   }));
   localStorage.setItem('board:b-p:folders', JSON.stringify(['Edinburgh', 'Stirling']));
   localStorage.setItem('board:b-p:picks', JSON.stringify([
@@ -53,21 +57,14 @@ await page.reload({ waitUntil: 'load' });
 const openPicks = async () => {
   await page.evaluate(() => document.querySelector('[data-view="picks"]').click());
   await page.waitForTimeout(400);
-  // The bundled guide moved in here and starts folded, so open it - these
-  // checks are largely about guide entries responding to a tap.
-  await page.evaluate(() => {
-    const g = document.getElementById('guideToggle');
-    if (g && !document.querySelector('.guide-row')) g.click();
-  });
-  await page.waitForTimeout(400);
 };
 await openPicks();
 
 // --- Every entry on the screen responds to a tap ---
 const dead = await page.evaluate(() => {
   // Anything that looks like an entry but has no way to open it.
-  const rows = Array.from(document.querySelectorAll('.pick-row, .guide-row'));
-  return rows.filter((r) => !r.matches('[data-open-pick]') && !r.querySelector('[data-open-pick], [data-preview-guide]')).length;
+  const rows = Array.from(document.querySelectorAll('.pick-row'));
+  return rows.filter((r) => !r.matches('[data-open-pick]') && !r.querySelector('[data-open-pick]')).length;
 });
 check('no entry on the screen is dead to a tap', dead === 0, `${dead} dead rows`);
 
@@ -80,31 +77,13 @@ check('a saved place opens the place you tapped', await page.evaluate((n) =>
 await page.evaluate(() => document.querySelector('#placeModal .modal-close').click());
 await page.waitForTimeout(300);
 
-// And on a bundled guide entry, which previously did nothing at all.
-await page.evaluate(() => document.querySelector('.guide-row-main').scrollIntoView());
-await page.click('.guide-row-main');
-await page.waitForSelector('#placeModal.open', { timeout: 3000 });
-const guideSheet = await page.evaluate(() => document.getElementById('placeModal').textContent);
-check('a guide entry opens too, instead of ignoring the tap', /Save this place|Already saved/.test(guideSheet), guideSheet.slice(0, 200));
-
-// Saving from that sheet must agree with the ♥ - not create a second copy.
-const beforeSave = await page.evaluate(() =>
-  JSON.parse(localStorage.getItem('board:b-p:picks')).length);
-const savedName = await page.evaluate(() => document.querySelector('.modal-title').textContent.trim());
-await page.evaluate(() => document.getElementById('previewAdd').click());
-await page.waitForTimeout(700);
-const afterSave = await page.evaluate(() => JSON.parse(localStorage.getItem('board:b-p:picks')));
-check('saving from the sheet saves once', afterSave.length === beforeSave + 1, `${beforeSave} -> ${afterSave.length}`);
-check('and under the guide\'s own identity, not a duplicate', afterSave.some((p) => p.id === `places:${savedName}`),
-  JSON.stringify(afterSave.map((p) => p.id)));
-
-// The ♥ now shows it as saved, because both controls mean the same thing.
+// The sheet a row opens is the place you tapped, and it offers the things you
+// do to a place rather than being a dead end.
+const sheet = await page.evaluate(() => document.getElementById('placeModal').textContent);
+check('and the sheet is about that place, with something to do in it',
+  /Remove|Add to a day|Directions|Explore/i.test(sheet), sheet.slice(0, 200));
+await page.evaluate(() => document.querySelector('#placeModal .modal-close').click());
 await page.waitForTimeout(300);
-const heartAgrees = await page.evaluate((n) => {
-  const btn = document.querySelector(`[data-toggle-pick="places"][data-name="${n}"]`);
-  return btn ? btn.classList.contains('picked') : null;
-}, savedName);
-check('the ♥ and the sheet agree on what is saved', heartAgrees === true, String(heartAgrees));
 
 // --- Sorting ---
 const sorts = await page.evaluate(() => Array.from(document.querySelectorAll('[data-sort]')).map((b) => b.textContent.trim()));
@@ -116,8 +95,7 @@ check('the list can be ordered', sorts.length >= 3, JSON.stringify(sorts));
 await page.evaluate(() => document.querySelector('[data-sort="area"]').click());
 await page.waitForTimeout(300);
 const perSection = await page.evaluate(() => {
-  // Saved rows only: the bundled guide at the foot of the screen reuses the
-  // same row class and is not part of your list.
+  // Saved rows only.
   const out = [];
   let current = null;
   document.querySelectorAll('#view .section-label, #view button.pick-row').forEach((el) => {
@@ -169,17 +147,33 @@ const sections = await page.evaluate(() =>
     e.textContent.replace(/\s+/g, ' ').replace(/\s*\d+\s*$/, '').trim()));
 check('every folder is a heading of its own', sections.includes('Edinburgh') && sections.includes('Stirling'), JSON.stringify(sections));
 // Everything saved is on screen at once - counted against storage rather than
-// a literal, since a guide entry was saved earlier in this run.
+// a literal, since the list is added to as this run goes on.
 const savedCount = await page.evaluate(() => JSON.parse(localStorage.getItem('board:b-p:picks')).length);
 check('and nothing is hidden to achieve it', (await names()).length === savedCount, `${(await names()).length} shown of ${savedCount}`);
 
-// --- The eats side of the guide is on the same screen, and just as tappable ---
-check('Eats guide entries are tappable too', await page.evaluate(() =>
-  document.querySelectorAll('.guide-row-main[data-preview-guide^="eats"]').length > 0));
-await page.evaluate(() => document.querySelector('.guide-row-main[data-preview-guide^="eats"]').scrollIntoView());
-await page.evaluate(() => document.querySelector('.guide-row-main[data-preview-guide^="eats"]').click());
-await page.waitForSelector('#placeModal.open', { timeout: 3000 });
-check('and open their own sheet', await page.evaluate(() => !!document.getElementById('previewAdd')));
+// --- Places and eats share the screen, told apart by a filter ---
+// This was two tabs and is now one list, which is only an improvement if the
+// filter genuinely separates them.
+await page.evaluate(() => {
+  const picks = JSON.parse(localStorage.getItem('board:b-p:picks'));
+  picks.push({ id: 'custom:Chippy', name: 'The Fish Bar', city: 'Edinburgh', category: 'Fish and chips',
+    kind: 'eat', lat: 55.95, lon: -3.19, addedAt: 500 });
+  localStorage.setItem('board:b-p:picks', JSON.stringify(picks));
+});
+await page.reload({ waitUntil: 'load' });
+await openPicks();
+check('somewhere to eat and somewhere to go are both on the one list',
+  (await names()).includes('The Fish Bar') && (await names()).includes('Edinburgh Zoo'),
+  JSON.stringify(await names()));
+const eatFilter = await page.evaluate(() => !!document.querySelector('[data-pick-kind-filter="eat"]'));
+check('and there is a filter to tell them apart', eatFilter);
+if (eatFilter) {
+  await page.evaluate(() => document.querySelector('[data-pick-kind-filter="eat"]').click());
+  await page.waitForTimeout(400);
+  const eats = await names();
+  check('which shows only the places to eat', eats.includes('The Fish Bar') && !eats.includes('Edinburgh Zoo'),
+    JSON.stringify(eats));
+}
 
 await browser.close();
 console.log(failures === 0 ? '\nALL TESTS PASSED' : `\n${failures} FAILED`);

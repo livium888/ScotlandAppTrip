@@ -1,10 +1,10 @@
 {
-  "name": "scotlandapptrip",
+  "name": "wayfare",
   "version": "1.0.0",
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "node tests/check-android-xml.mjs && node tests/run-all.mjs"
+    "test": "node tests/check-android-xml.mjs && node tests/check-identity.mjs && node tests/run-all.mjs"
   },
   "repository": {
     "type": "git",

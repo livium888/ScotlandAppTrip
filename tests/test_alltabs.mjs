@@ -80,8 +80,8 @@ check('and leaves Places when it does', !/Booths/.test(await text()), (await tex
 
 // --- The itinerary works without dates, on a board of your own ---
 await tab('itinerary');
-check('no bundled Scotland itinerary is offered here', !(await page.evaluate(() =>
-  !!document.querySelector('[data-plan-mode="suggested"]'))));
+check('no bundled itinerary is offered here, or anywhere', !(await page.evaluate(() =>
+  !!document.querySelector('[data-plan-mode]'))));
 check('an empty plan says how to start', /No days yet/.test(await text()), (await text()).slice(0, 160));
 
 await page.evaluate(() => document.querySelector('[data-quick-day="Day 1"]').click());
@@ -181,29 +181,33 @@ await page.evaluate(() => {
 await page.waitForTimeout(300);
 check('tapping a stat takes you to that tab', /Dog and Gun/.test(await text()));
 
-// --- The Scotland board keeps everything it had ---
+// --- A board written before the bundled guide was removed still loads ---
+//
+// The app used to ship a guide to one week in Scotland, and one board had
+// hasGuide: true on it. That content is gone, but boards and backup files
+// carrying the old flag are still out there, so the flag has to be harmless
+// rather than fatal - and the board it sits on has to behave like any other.
 await page.evaluate(() => {
   const state = JSON.parse(localStorage.getItem('boards-v1'));
-  state.boards.push({ id: 'b-scotland', name: 'Scotland with Ally', destination: 'Scotland', dated: true, hasGuide: true, createdAt: 2 });
+  state.boards.push({ id: 'b-scotland', name: 'An older board', destination: 'Scotland', dated: true, hasGuide: true, createdAt: 2 });
   state.activeId = 'b-scotland';
   localStorage.setItem('boards-v1', JSON.stringify(state));
 });
 await page.reload({ waitUntil: 'load' });
 await page.waitForTimeout(400);
 await kindFilter('place');
-// The guide moved into Picks and is collapsed until asked for - it is
-// suggestions, not your list, so it no longer occupies a screen of its own.
-check('the Scotland board still offers its guide', await page.evaluate(() => !!document.getElementById('guideToggle')));
-check('but it is folded away until wanted', !/Edinburgh Castle/.test(await text()), (await text()).slice(0, 200));
-await page.evaluate(() => document.getElementById('guideToggle').click());
-await page.waitForTimeout(300);
-check('the Scotland board still has its guide', /Edinburgh Castle/.test(await text()), (await text()).slice(0, 200));
+check('a board carrying the old guide flag still opens', /./.test(await text()));
+check('and shows no trace of the trip that used to be bundled',
+  !/Edinburgh Castle|Cramond/.test(await text()), (await text()).slice(0, 200));
 await tab('itinerary');
-check('and still offers the suggested itinerary', await page.evaluate(() =>
-  !!document.querySelector('[data-plan-mode="suggested"]')));
+check('there is one itinerary now, not a toggle between yours and somebody else\'s',
+  await page.evaluate(() => !document.querySelector('[data-plan-mode]')));
 await tab('tips');
-check('and still has the Scotland advice', /Cramond tide safety/.test(await text()), (await text()).slice(0, 200));
-check('with the bundled packing list seeded in', await page.evaluate(() =>
+check('and no local advice about somewhere it knows nothing about',
+  !/Cramond tide safety/.test(await text()), (await text()).slice(0, 200));
+// A packing list still seeds - an empty screen is a worse start than a short
+// generic one - it is just no longer about one particular week in August.
+check('the packing list still starts with something on it', await page.evaluate(() =>
   (JSON.parse(localStorage.getItem('board:b-scotland:packing')) || []).length > 3));
 
 await browser.close();
