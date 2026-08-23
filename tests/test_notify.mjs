@@ -187,17 +187,32 @@ const hours = await page.evaluate(() => ({
   shut: window.__tripTest.closingMinutesOnDay('Mo-Fr 09:00-17:00', 'Su'),
   always: window.__tripTest.closingMinutesOnDay('24/7', 'Mo'),
   holidays: window.__tripTest.closingMinutesOnDay('Mo-Su 10:00-18:00; PH off', 'Mo'),
+  seasonal: window.__tripTest.closingMinutesOnDay('Apr-Oct: Mo-Su 09:30-18:00; Nov-Mar: Mo-Su 10:00-16:00', 'Tu'),
   overnight: window.__tripTest.closingMinutesOnDay('Mo-Su 12:00-01:00', 'Mo'),
   nonsense: window.__tripTest.closingMinutesOnDay('by appointment', 'Mo'),
+  commented: window.__tripTest.closingMinutesOnDay('Mo-Su 09:30-17:00 "ring first"', 'Tu'),
 }));
 check('a plain day reads correctly', hours.plain === 17 * 60, JSON.stringify(hours));
 check('a place that shuts for lunch closes in the evening, not at noon',
   hours.lunch === 17 * 60 + 30, JSON.stringify(hours));
 check('a day it is closed says nothing', hours.shut === null, JSON.stringify(hours));
 check('nor does somewhere always open', hours.always === null, JSON.stringify(hours));
-check('nor anything with holiday rules in it', hours.holidays === null, JSON.stringify(hours));
 check('nor a pub open past midnight', hours.overnight === null, JSON.stringify(hours));
-check('nor a string it does not understand', hours.nonsense === null, JSON.stringify(hours));
+
+// These two used to be refused outright by a hand-rolled parser that waved
+// away anything with a holiday rule or a season in it. The real opening_hours
+// implementation answers them, which is most of the reason for carrying it.
+check('a holiday rule is now read rather than refused', hours.holidays === 18 * 60, JSON.stringify(hours));
+check('and so is a seasonal one', hours.seasonal !== null, JSON.stringify(hours));
+
+// And the two that must still be silence. The second is the trap: the library
+// parses it happily and reports "closed", because the quoted comment makes the
+// state *unknown* rather than shut. Reading getState() alone would put a
+// wrong "closed" on a place that is open - the exact bug the old parser was
+// being timid to avoid.
+check('a string it cannot understand is still silence', hours.nonsense === null, JSON.stringify(hours));
+check('and so is one whose hours carry a comment, which is unknown, not shut',
+  hours.commented === null, JSON.stringify(hours));
 
 // ---------- Each kind can be turned off on its own ----------
 

@@ -4,7 +4,8 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "node tests/check-android-xml.mjs && node tests/check-identity.mjs && node tests/run-all.mjs"
+    "test": "eslint www/js tests && node tests/check-android-xml.mjs && node tests/check-identity.mjs && node tests/run-all.mjs",
+    "lint": "eslint www/js tests"
   },
   "repository": {
     "type": "git",
@@ -31,6 +32,9 @@
   },
   "devDependencies": {
     "@capacitor/cli": "^8.5.0",
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.9.0",
+    "globals": "^17.11.0",
     "playwright": "^1.62.1"
   }
 }

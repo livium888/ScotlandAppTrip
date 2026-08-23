@@ -54,6 +54,14 @@
   <div class="welcome-overlay" id="welcomeOverlay"></div>
 
   <script src="vendor/leaflet/leaflet.js"></script>
+  <!-- Four small libraries, each doing a job that is genuinely hard to do
+       correctly by hand. All vendored as plain scripts because this app has no
+       build step. suncalc must come before opening_hours, which uses it to
+       answer "sunrise-sunset" opening times. -->
+  <script src="vendor/lib/suncalc.js"></script>
+  <script src="vendor/lib/opening_hours.js"></script>
+  <script src="vendor/lib/idb.js"></script>
+  <script src="vendor/lib/fuse.js"></script>
   <script src="js/icons.js"></script>
   <script src="js/data.js"></script>
   <script src="js/app.js"></script>

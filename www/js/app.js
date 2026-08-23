@@ -683,8 +683,11 @@
       });
     } catch (e) {
       if (e && e.name === "AbortError") {
+        // The abort is kept as the cause: the message above is for the person
+        // reading it, the original is for whoever is reading a diagnostic.
         throw new Error(
-          `The AI didn't answer within ${Math.round(AI_TIMEOUT_MS / 1000)} seconds. That is usually signal rather than anything you did - worth trying again.`
+          `The AI didn't answer within ${Math.round(AI_TIMEOUT_MS / 1000)} seconds. That is usually signal rather than anything you did - worth trying again.`,
+          { cause: e }
         );
       }
       throw e;
@@ -1906,6 +1909,11 @@
       website: tags.website || tags["contact:website"] || tags.url || null,
       phone: tags.phone || tags["contact:phone"] || null,
       openingHours: tags.opening_hours || null,
+      // Nominatim tells us the country and it was being thrown away. Public
+      // holidays are the reason it matters: "Mo-Su 10:00-18:00; PH off" cannot
+      // be answered at all without knowing whose public holidays.
+      countryCode: (addr.country_code || "").toLowerCase() || null,
+      state: addr.state || null,
       address: addressLine || r.display_name || null,
       category: prettyCategory(r.type || r.category),
       wikipedia: tags.wikipedia || null,
@@ -2165,6 +2173,8 @@
       if (!fresh.address && geo.address) fresh.address = geo.address;
       if (!fresh.phone && geo.phone) fresh.phone = geo.phone;
       if (!fresh.openingHours && geo.openingHours) fresh.openingHours = geo.openingHours;
+      if (!fresh.countryCode && geo.countryCode) fresh.countryCode = geo.countryCode;
+      if (!fresh.state && geo.state) fresh.state = geo.state;
       if ((!fresh.category || fresh.category === "Custom") && geo.category) fresh.category = geo.category;
     }
     if (wiki) {
@@ -2523,7 +2533,12 @@
   const AUTO_BACKUP_EVERY_MS = 24 * 60 * 60 * 1000;
   const AUTO_BACKUP_KEEP = 3;
 
-  function backupFilename(when) {
+  // Named apart from backupFilename() deliberately: these two used to share a
+  // name, the later definition quietly won for every caller, and the manual
+  // export ended up calling it with no argument - producing
+  // "trip-backup-NaN-NaN-NaN.json" and losing the board name. Nothing tested
+  // the filename, so nothing noticed.
+  function autoBackupFilename(when) {
     const d = new Date(when);
     const stamp = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
       d.getDate()
@@ -2542,7 +2557,7 @@
     }
 
     const json = buildBackup();
-    const name = backupFilename(Date.now());
+    const name = autoBackupFilename(Date.now());
     try {
       await fs.writeFile({
         path: name,
@@ -2584,6 +2599,142 @@
       }
     } catch (e) {
       /* an old plugin without readdir just leaves them all, which is fine */
+    }
+  }
+
+  // ---------- Putting the trip in a real calendar ----------
+  // The plan lives in this app and nowhere else, which is fine until somebody
+  // else in the family wants to know what Tuesday looks like.
+  //
+  // There is an `ics` package on npm and it was the obvious thing to reach
+  // for. It is twenty-one files of Node modules, which a no-build-step app
+  // cannot vendor without pulling in a bundler - and the format itself is a
+  // dozen lines of text with strict rules about escaping and line endings.
+  // The rules are the actual work, and they are written out below rather than
+  // hidden behind a dependency that would cost more to carry than to replace.
+  const ICS_LINE_END = "\r\n"; // RFC 5545 is explicit about this, and Outlook cares
+
+  function icsEscape(text) {
+    return String(text || "")
+      .replace(/\\/g, "\\\\")
+      .replace(/;/g, "\;")
+      .replace(/,/g, "\\,")
+      .replace(/\r?\n/g, "\\n");
+  }
+
+  // Long lines must be folded at 75 octets, continued with a leading space.
+  // A calendar that refuses to open is the usual symptom of skipping this.
+  function icsFold(line) {
+    if (line.length <= 75) return line;
+    const parts = [line.slice(0, 75)];
+    let rest = line.slice(75);
+    while (rest.length > 74) {
+      parts.push(" " + rest.slice(0, 74));
+      rest = rest.slice(74);
+    }
+    if (rest) parts.push(" " + rest);
+    return parts.join(ICS_LINE_END);
+  }
+
+  function icsStamp(date) {
+    const p = (n) => String(n).padStart(2, "0");
+    return (
+      `${date.getUTCFullYear()}${p(date.getUTCMonth() + 1)}${p(date.getUTCDate())}` +
+      `T${p(date.getUTCHours())}${p(date.getUTCMinutes())}${p(date.getUTCSeconds())}Z`
+    );
+  }
+
+  function icsDay(date) {
+    const p = (n) => String(n).padStart(2, "0");
+    return `${date.getFullYear()}${p(date.getMonth() + 1)}${p(date.getDate())}`;
+  }
+
+  // Every stop on every dated day, as calendar events. A stop with a time gets
+  // an hour; a stop without one becomes an all-day entry, because inventing a
+  // time would put somebody in a car park at nine in the morning for no reason.
+  function buildTripIcs() {
+    const plan = loadPlan();
+    const byId = {};
+    loadPicks().forEach((p) => {
+      byId[p.id] = p;
+    });
+    const board = activeBoard();
+    const now = new Date();
+    const lines = [
+      "BEGIN:VCALENDAR",
+      "VERSION:2.0",
+      "PRODID:-//Wayfare//Trip//EN",
+      "CALSCALE:GREGORIAN",
+      "METHOD:PUBLISH",
+      `X-WR-CALNAME:${icsEscape(board.name)}`,
+    ];
+
+    let count = 0;
+    datedDays(plan.days).forEach(({ d, when }) => {
+      if (!when) return; // an undated day has no place in a calendar
+      itemsInDayOrder(plan.items[d.id] || []).forEach((item, i) => {
+        const pick = byId[item.pickId];
+        if (!pick) return;
+        count++;
+        const uid = `${d.id}-${i}-${board.id}@wayfare`;
+        const where = [pick.venue, pick.address || pick.city].filter(Boolean).join(", ");
+        const body = [pick.description, pick.note, pick.website].filter(Boolean).join("\n\n");
+
+        lines.push("BEGIN:VEVENT", `UID:${uid}`, `DTSTAMP:${icsStamp(now)}`);
+
+        const mins = timeToMinutes(item.time);
+        if (mins == null) {
+          // All-day. DTEND is exclusive, hence the next morning.
+          const next = new Date(when);
+          next.setDate(next.getDate() + 1);
+          lines.push(`DTSTART;VALUE=DATE:${icsDay(when)}`, `DTEND;VALUE=DATE:${icsDay(next)}`);
+        } else {
+          const start = new Date(when);
+          start.setHours(0, mins, 0, 0);
+          const end = new Date(start.getTime() + 60 * 60000);
+          // Local time with no zone: an event at 10:00 should read 10:00
+          // wherever the phone thinks it is, which is what floating time means.
+          const local = (dt) => {
+            const p = (n) => String(n).padStart(2, "0");
+            return (
+              `${dt.getFullYear()}${p(dt.getMonth() + 1)}${p(dt.getDate())}` +
+              `T${p(dt.getHours())}${p(dt.getMinutes())}00`
+            );
+          };
+          lines.push(`DTSTART:${local(start)}`, `DTEND:${local(end)}`);
+        }
+
+        lines.push(`SUMMARY:${icsEscape(pick.name)}`);
+        if (where) lines.push(`LOCATION:${icsEscape(where)}`);
+        if (body) lines.push(`DESCRIPTION:${icsEscape(body)}`);
+        if (pick.lat != null && pick.lon != null) lines.push(`GEO:${pick.lat};${pick.lon}`);
+        lines.push("END:VEVENT");
+      });
+    });
+
+    lines.push("END:VCALENDAR");
+    return { text: lines.map(icsFold).join(ICS_LINE_END) + ICS_LINE_END, count };
+  }
+
+  function exportTripIcs() {
+    const { text, count } = buildTripIcs();
+    if (!count) {
+      return { ok: false, message: "Nothing to export yet — add some dated days with stops in them." };
+    }
+    try {
+      const name = `${activeBoard().name.replace(/[^\w-]+/g, "-").toLowerCase()}.ics`;
+      const blob = new Blob([text], { type: "text/calendar" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      return { ok: true, message: `Saved ${name} — ${count} stop${count === 1 ? "" : "s"}. Open it to add them to your calendar.` };
+    } catch (e) {
+      return { ok: false, message: `Couldn't save the file: ${e.message || e}` };
     }
   }
 
@@ -3052,6 +3203,17 @@
               <button class="modal-btn${backupIsOverdue() ? " modal-btn-primary" : ""}" id="exportBackupBtn">⬇ Export</button>
               <button class="modal-btn" id="importBackupBtn">${icon('upload', { size: 17, cls: 'ico-inline' })} Import</button>
             </div>
+
+            <div class="settings-divider"></div>
+
+            <label class="settings-label">Calendar</label>
+            <p class="settings-hint">
+              Your dated days as calendar entries, so anyone who wants to know what
+              Tuesday looks like can see it without this app. A stop with a time gets
+              an hour; one without becomes an all-day entry.
+            </p>
+            <button class="modal-btn" id="exportIcsBtn" style="width:100%;">${icon('download', { size: 17, cls: 'ico-inline' })} Export to calendar</button>
+            <pre class="settings-result" id="icsResult" hidden></pre>
             <input type="file" id="importBackupFile" accept="application/json,.json" hidden />
             <pre class="settings-result" id="backupResult" hidden></pre>
 
@@ -3228,6 +3390,18 @@
         saveNotifySettings({ morning: notifyMorning.value || "07:30" });
         await rescheduleNotifications(true);
         sayNotify(countScheduled());
+      });
+    }
+
+    const icsBtn = document.getElementById("exportIcsBtn");
+    if (icsBtn) {
+      icsBtn.addEventListener("click", () => {
+        const res = exportTripIcs();
+        const out = document.getElementById("icsResult");
+        if (!out) return;
+        out.hidden = false;
+        out.className = "settings-result " + (res.ok ? "ok" : "bad");
+        out.textContent = res.message;
       });
     }
 
@@ -5127,13 +5301,192 @@
     return map[m[1].slice(0, 3).toLowerCase()] || null;
   }
 
+  // ---------- Opening hours, properly ----------
+  // This used to be ~100 lines of hand-rolled regex that deliberately refused
+  // most of the OSM opening_hours syntax: anything with public holidays,
+  // seasonal ranges, "sunrise-sunset" or a quoted comment was waved through as
+  // "no idea", because a wrong "closed" sends you away from somewhere that was
+  // open. That timidity was right, and it also meant the app said nothing
+  // about a great many places whose hours were perfectly well specified.
+  //
+  // opening_hours.js is the reference implementation of that syntax. It knows
+  // seasons, holidays per country, and that "sunrise-sunset" needs the sun's
+  // actual position at this latitude on this date.
+  //
+  // Three things matter in using it:
+  //   - It has a third state. getState() false plus getUnknown() true means
+  //     "there is a comment here, nobody can say" - NOT closed. Reading only
+  //     getState() would reintroduce exactly the wrong-closed bug, on a string
+  //     the old code refused outright.
+  //   - It throws on syntax it cannot parse, and on "PH" with no country. Both
+  //     are caught, and both mean the same thing as before: say nothing.
+  //   - Warnings mean it guessed. A guess is not good enough to send somebody
+  //     somewhere else, so a warning is also silence.
+  function openingHoursLib() {
+    return typeof window !== "undefined" && window.opening_hours ? window.opening_hours : null;
+  }
+
+  // Holiday rules need to know whose holidays. Nominatim tells us, when the
+  // place came from there; without it the PH rule is dropped rather than
+  // failing the whole string.
+  function hoursContextFor(pick) {
+    const ctx = {};
+    if (pick && pick.lat != null) {
+      ctx.lat = pick.lat;
+      ctx.lon = pick.lon;
+    }
+    const cc = pick && pick.countryCode;
+    if (cc) {
+      ctx.address = { country_code: cc };
+      if (pick.state) ctx.address.state = pick.state;
+    }
+    return ctx;
+  }
+
+  const hoursCache = new Map();
+
+  function parsedHours(pick) {
+    const OH = openingHoursLib();
+    const raw = pick && pick.openingHours ? String(pick.openingHours).trim() : "";
+    if (!OH || !raw) return null;
+
+    const key = `${raw}|${(pick && pick.countryCode) || ""}|${(pick && pick.state) || ""}`;
+    if (hoursCache.has(key)) return hoursCache.get(key);
+
+    const build = (text, ctx) => {
+      const oh = new OH(text, ctx);
+      // A warning means it understood something, but not confidently.
+      const warnings = typeof oh.getWarnings === "function" ? oh.getWarnings() : [];
+      if (warnings && warnings.length) return null;
+      return oh;
+    };
+
+    let result = null;
+    try {
+      result = build(raw, hoursContextFor(pick));
+    } catch (e) {
+      // Overwhelmingly this is "PH used without a country". Dropping the
+      // holiday clause keeps the ordinary week, which is most of the value.
+      const withoutHolidays = raw
+        .split(";")
+        .filter((rule) => !/\b(PH|SH)\b/.test(rule))
+        .join(";")
+        .trim();
+      if (withoutHolidays && withoutHolidays !== raw) {
+        try {
+          result = build(withoutHolidays, hoursContextFor(pick));
+        } catch (e2) {
+          result = null;
+        }
+      }
+    }
+    hoursCache.set(key, result);
+    return result;
+  }
+
+  // The one function the screens ask. Everything it can answer is a fact about
+  // a moment in time; `known: false` is a perfectly good answer and the most
+  // common one.
+  function hoursAt(pick, when) {
+    const oh = parsedHours(pick);
+    if (!oh) return { known: false };
+    const at = when || new Date();
+    try {
+      if (typeof oh.getUnknown === "function" && oh.getUnknown(at)) {
+        const comment = typeof oh.getComment === "function" ? oh.getComment(at) : "";
+        return { known: false, comment: comment || "" };
+      }
+      const open = !!oh.getState(at);
+      const change = typeof oh.getNextChange === "function" ? oh.getNextChange(at) : null;
+      return {
+        known: true,
+        open,
+        // When it shuts, if it is open; when it opens, if it is not.
+        change: change instanceof Date && !Number.isNaN(change.getTime()) ? change : null,
+      };
+    } catch (e) {
+      return { known: false };
+    }
+  }
+
+  function clockOf(date) {
+    return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+  }
+
+  // "Is it shut all day on this day of the week." The library thinks in
+  // moments, so this asks it about the whole day: shut at every hour it is
+  // asked about means shut. Returns null when it cannot say, and the caller
+  // falls back to the old reading.
+  function closedOnDayViaLib(openingHours, dayCode, pick) {
+    const at = { openingHours, lat: pick && pick.lat, lon: pick && pick.lon,
+      countryCode: pick && pick.countryCode, state: pick && pick.state };
+    if (!parsedHours(at)) return null;
+    const index = DAY_NAMES.indexOf(dayCode);
+    if (index < 0) return null;
+
+    // The next occurrence of that weekday, so seasonal rules are asked about a
+    // real date rather than an abstract "Tuesday".
+    const day = new Date();
+    day.setHours(0, 0, 0, 0);
+    day.setDate(day.getDate() + ((index - day.getDay() + 7) % 7));
+
+    for (let hour = 6; hour <= 22; hour++) {
+      const probe = new Date(day);
+      probe.setHours(hour, 0, 0, 0);
+      const verdict = hoursAt(at, probe);
+      if (!verdict.known) return null; // one unknown hour and the day is unknown
+      if (verdict.open) return false;
+    }
+    return true;
+  }
+
+  // The last time it shuts on that day. Walks the evening backwards looking
+  // for the moment it stops being open, which is what "closes at" means to
+  // somebody standing outside it.
+  function closingViaLib(openingHours, dayCode, pick) {
+    const at = { openingHours, lat: pick && pick.lat, lon: pick && pick.lon,
+      countryCode: pick && pick.countryCode, state: pick && pick.state };
+    if (!parsedHours(at)) return null;
+    const index = DAY_NAMES.indexOf(dayCode);
+    if (index < 0) return null;
+
+    const day = new Date();
+    day.setHours(0, 0, 0, 0);
+    day.setDate(day.getDate() + ((index - day.getDay() + 7) % 7));
+
+    // Somewhere open at midnight is a pub running past it, and "closes in 45
+    // minutes" is not the useful thing to say about a pub.
+    const endOfDay = new Date(day);
+    endOfDay.setHours(23, 59, 0, 0);
+    const midnight = hoursAt(at, endOfDay);
+    if (!midnight.known) return null;
+    if (midnight.open) return null;
+
+    let last = null;
+    for (let minutes = 6 * 60; minutes <= 23 * 60 + 59; minutes += 15) {
+      const probe = new Date(day);
+      probe.setHours(0, minutes, 0, 0);
+      const verdict = hoursAt(at, probe);
+      if (!verdict.known) return null;
+      if (verdict.open) last = verdict.change;
+    }
+    if (!last) return null;
+    // A change landing on the following day means it does not shut today.
+    if (last.getDate() !== day.getDate()) return null;
+    return last.getHours() * 60 + last.getMinutes();
+  }
+
   // A deliberately conservative reading of OSM opening_hours: it only reports
   // a closure when the string clearly lists days and this day isn't among
   // them. Anything with holiday rules, seasonal ranges or syntax it doesn't
   // recognise is left alone, because a wrong "closed" warning is worse than
   // none - it would send you somewhere else for no reason.
-  function closedOnDay(openingHours, dayCode) {
+  function closedOnDay(openingHours, dayCode, pick) {
     if (!openingHours || !dayCode) return false;
+    // The library answers this properly when it is loaded, including the
+    // seasonal and holiday rules the regex below refuses to look at.
+    const lib = closedOnDayViaLib(openingHours, dayCode, pick);
+    if (lib !== null) return lib;
     const hours = openingHours.trim();
     if (/24\/7/i.test(hours)) return false;
     // Unsupported syntax - don't guess.
@@ -5180,8 +5533,10 @@
   // Returns minutes past midnight, or null when the string is anything this
   // does not confidently understand. Null means "say nothing", which is the
   // right answer far more often than a guess would be.
-  function closingMinutesOnDay(openingHours, dayCode) {
+  function closingMinutesOnDay(openingHours, dayCode, pick) {
     if (!openingHours || !dayCode) return null;
+    const lib = closingViaLib(openingHours, dayCode, pick);
+    if (lib !== null) return lib;
     const hours = openingHours.trim();
     if (/24\/7/i.test(hours)) return null;
     if (/PH|SH|easter|summer|winter|"/i.test(hours)) return null;
@@ -5335,6 +5690,7 @@
             <button class="plan-day-remove" data-remove-day="${esc(day.id)}" aria-label="Remove day">${icon('close', { size: 17, cls: 'ico-inline' })}</button>
           </div>
           ${weatherLine(forecast, { quiet: true })}
+          ${daylightLine(dateForDayLabel(day.label), dayWeatherAnchor(day.id))}
           <div class="plan-items">
       `;
       if (!items.length) {
@@ -5355,7 +5711,7 @@
           )} from previous stop</div>`;
         }
 
-        const mayBeClosed = closedOnDay(p.openingHours, dayCode);
+        const mayBeClosed = closedOnDay(p.openingHours, dayCode, p);
         html += `
           <div class="plan-item">
             <input class="plan-time" type="text" inputmode="text" placeholder="time"
@@ -10406,23 +10762,15 @@
         // A catalog item already knows where it belongs, so it saves outright.
         // Anything else asks which folder - and that sheet takes over this same
         // modal, so closing here would shut the question before it was read.
-        if (r.guideSource) {
-          togglePick(r.guideSource, r);
+        // quickAdd refreshes the list itself, once the folder question has
+        // actually been answered - redrawing it here would mark a place as
+        // saved while the question is still on screen. When it asks nothing,
+        // though, this sheet is finished with and closing it is the whole of
+        // what "saved" should feel like.
+        if (!quickAdd(r)) {
           closePlaceModal();
-          // The list behind needs to show it as saved now.
           if (searchOverlay.classList.contains("open")) renderSearchOverlay();
           else if (view.dataset.activeTab) showView(view.dataset.activeTab);
-        } else {
-          // quickAdd refreshes the list itself, once the folder question has
-          // actually been answered - redrawing it here would mark a place as
-          // saved while the question is still on screen. When it asks
-          // nothing, though, this sheet is finished with and closing it is
-          // the whole of what "saved" should feel like.
-          if (!quickAdd(r)) {
-            closePlaceModal();
-            if (searchOverlay.classList.contains("open")) renderSearchOverlay();
-            else if (view.dataset.activeTab) showView(view.dataset.activeTab);
-          }
         }
       });
     }
@@ -11385,28 +11733,49 @@
   const DB_VERSION = 2;
   let tileDbPromise = null;
 
+  // Raw IndexedDB is all request objects and onsuccess/onerror pairs, and the
+  // failure mode is quiet: a transaction that auto-closes because an await
+  // slipped between two operations does not throw, it just does nothing.
+  // `idb` is four kilobytes that turn the whole thing into promises.
+  //
+  // It stays optional. The hand-rolled path below still works, because a
+  // vendored file failing to load should cost you the map cache, not the app.
   function tileDb() {
     if (tileDbPromise) return tileDbPromise;
-    tileDbPromise = new Promise((resolve, reject) => {
-      if (!window.indexedDB) return reject(new Error("no indexeddb"));
-      const req = indexedDB.open(TILE_DB, DB_VERSION);
-      req.onupgradeneeded = () => {
-        [TILE_STORE, PHOTO_STORE, GEO_STORE].forEach((name) => {
-          if (!req.result.objectStoreNames.contains(name)) req.result.createObjectStore(name);
-        });
-      };
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
-    }).catch((e) => {
+    const upgrade = (db) => {
+      [TILE_STORE, PHOTO_STORE, GEO_STORE].forEach((name) => {
+        if (!db.objectStoreNames.contains(name)) db.createObjectStore(name);
+      });
+    };
+    tileDbPromise = (window.idb && window.idb.openDB
+      ? window.idb.openDB(TILE_DB, DB_VERSION, { upgrade })
+      : new Promise((resolve, reject) => {
+          if (!window.indexedDB) return reject(new Error("no indexeddb"));
+          const req = indexedDB.open(TILE_DB, DB_VERSION);
+          req.onupgradeneeded = () => upgrade(req.result);
+          req.onsuccess = () => resolve(req.result);
+          req.onerror = () => reject(req.error);
+        })
+    ).catch((e) => {
       tileDbPromise = null;
       throw e;
     });
     return tileDbPromise;
   }
 
+  // Both shapes answer `get`/`put`/`count`/`clear` the same way; only idb's
+  // are already promises. This is the one place that has to know which it got.
+  function dbIsWrapped() {
+    return !!(window.idb && window.idb.openDB);
+  }
+
   async function dbGet(store, key) {
     try {
       const db = await tileDb();
+      if (dbIsWrapped()) {
+        const value = await db.get(store, key);
+        return value === undefined ? null : value;
+      }
       return await new Promise((resolve) => {
         const req = db.transaction(store, "readonly").objectStore(store).get(key);
         req.onsuccess = () => resolve(req.result === undefined ? null : req.result);
@@ -11420,6 +11789,10 @@
   async function dbPut(store, key, value) {
     try {
       const db = await tileDb();
+      if (dbIsWrapped()) {
+        await db.put(store, value, key);
+        return true;
+      }
       return await new Promise((resolve) => {
         const tx = db.transaction(store, "readwrite");
         tx.objectStore(store).put(value, key);
@@ -11522,28 +11895,18 @@
     return `${z}/${x}/${y}`;
   }
 
-  async function readTile(z, x, y) {
-    const db = await tileDb();
-    return new Promise((resolve) => {
-      const req = db.transaction(TILE_STORE, "readonly").objectStore(TILE_STORE).get(tileKey(z, x, y));
-      req.onsuccess = () => resolve(req.result || null);
-      req.onerror = () => resolve(null);
-    });
+  function readTile(z, x, y) {
+    return dbGet(TILE_STORE, tileKey(z, x, y));
   }
 
-  async function writeTile(z, x, y, blob) {
-    const db = await tileDb();
-    return new Promise((resolve) => {
-      const tx = db.transaction(TILE_STORE, "readwrite");
-      tx.objectStore(TILE_STORE).put(blob, tileKey(z, x, y));
-      tx.oncomplete = () => resolve(true);
-      tx.onerror = () => resolve(false);
-    });
+  function writeTile(z, x, y, blob) {
+    return dbPut(TILE_STORE, tileKey(z, x, y), blob);
   }
 
   async function countTiles() {
     try {
       const db = await tileDb();
+      if (dbIsWrapped()) return (await db.count(TILE_STORE)) || 0;
       return await new Promise((resolve) => {
         const req = db.transaction(TILE_STORE, "readonly").objectStore(TILE_STORE).count();
         req.onsuccess = () => resolve(req.result || 0);
@@ -11560,6 +11923,12 @@
   async function tilesBytes() {
     try {
       const db = await tileDb();
+      if (dbIsWrapped()) {
+        // getAll on blobs is one read rather than a cursor walk, and the only
+        // thing wanted from each is its size.
+        const blobs = await db.getAll(TILE_STORE);
+        return blobs.reduce((n, b) => n + (b && typeof b.size === "number" ? b.size : 0), 0);
+      }
       return await new Promise((resolve) => {
         let total = 0;
         const req = db.transaction(TILE_STORE, "readonly").objectStore(TILE_STORE).openCursor();
@@ -11587,6 +11956,10 @@
   async function clearTiles() {
     try {
       const db = await tileDb();
+      if (dbIsWrapped()) {
+        await db.clear(TILE_STORE);
+        return;
+      }
       await new Promise((resolve) => {
         const tx = db.transaction(TILE_STORE, "readwrite");
         tx.objectStore(TILE_STORE).clear();
@@ -12563,6 +12936,66 @@
   //
   // They are a filter here instead. Same lists, same rows, one destination.
   let pickKindFilter = "all";
+  // ---------- Finding something you have already saved ----------
+  // The only search box on this screen looks for places on the internet to
+  // add. There was never a way to search what you had already saved, so forty
+  // picks across six folders meant folding sections and scrolling - the app
+  // was better at finding somewhere new than finding somewhere you had already
+  // decided you wanted.
+  //
+  // Fuse does the matching. Hand-rolling this always starts as
+  // `name.toLowerCase().includes(q)` and then wants typo tolerance, matching
+  // on the town or the note as well as the name, and some sense of which hit
+  // is better than which - all of which is a solved problem nobody should be
+  // solving again.
+  let pickFilter = "";
+
+  const FIND_KEYS = [
+    { name: "name", weight: 0.6 },
+    { name: "city", weight: 0.15 },
+    { name: "category", weight: 0.1 },
+    { name: "note", weight: 0.1 },
+    { name: "address", weight: 0.05 },
+  ];
+
+  function findInPicks(list, query) {
+    const q = (query || "").trim();
+    if (!q) return list;
+    const Fuse = typeof window !== "undefined" ? window.Fuse : null;
+    if (!Fuse) {
+      // Without the library, a plain substring match over the same fields.
+      // Worse, but never nothing.
+      const needle = q.toLowerCase();
+      return list.filter((p) =>
+        FIND_KEYS.some((k) => String(p[k.name] || "").toLowerCase().includes(needle))
+      );
+    }
+    const fuse = new Fuse(list, {
+      keys: FIND_KEYS,
+      // Tight enough that "castle" doesn't match "Cafe", loose enough to
+      // survive a thumb typing on a moving train.
+      threshold: 0.38,
+      ignoreLocation: true,
+      minMatchCharLength: 2,
+    });
+    return fuse.search(q).map((hit) => hit.item);
+  }
+
+  function renderFindBar(total) {
+    // Not worth the room until there is enough saved that scrolling is the
+    // problem it solves.
+    if (total < 8 && !pickFilter) return "";
+    return `
+      <div class="find-bar">
+        <span class="find-icon" data-ico="search" data-ico-size="17"></span>
+        <input class="find-input" id="pickFind" type="search" autocomplete="off"
+               placeholder="Find something you've saved…" value="${esc(pickFilter)}"
+               aria-label="Find something you have already saved" />
+        ${pickFilter ? `<button class="find-clear" id="pickFindClear" aria-label="Clear">${icon("close", { size: 15 })}</button>` : ""}
+      </div>
+    `;
+  }
+
   const KIND_FILTERS = [
     { key: "all", label: "All" },
     { key: "place", label: `${icon('castle', { size: 17, cls: 'ico-inline' })} To do` },
@@ -12578,7 +13011,11 @@
 
   function renderPicks() {
     const all = loadPicks();
-    const picks = pickKindFilter === "all" ? all : all.filter((p) => p.major || pickKind(p) === pickKindFilter);
+    const byKind = pickKindFilter === "all" ? all : all.filter((p) => p.major || pickKind(p) === pickKindFilter);
+    // Two different searches, deliberately kept apart: the box at the top
+    // finds places on the internet to add, the one below finds places you
+    // already have. Conflating them is how you end up unable to do either.
+    const picks = findInPicks(byKind, pickFilter);
 
     let html = `
       <div class="search-trigger-wrap">
@@ -12588,7 +13025,16 @@
                aria-label="Search for a place to add" />
       </div>
       ${renderExplore()}
+      ${renderFindBar(all.length)}
     `;
+
+    if (pickFilter) {
+      html += `<p class="find-result">${
+        picks.length
+          ? `${picks.length} of ${byKind.length} match “${esc(pickFilter)}”`
+          : `Nothing saved matches “${esc(pickFilter)}”`
+      }</p>`;
+    }
 
     // Only worth showing once there is a mix to separate. A filter over four
     // places that are all cafés is a control that can only ever hide things.
@@ -12691,6 +13137,34 @@
     destroyMiniMaps();
     view.innerHTML = html;
     wireExplore();
+
+    const findInput = document.getElementById("pickFind");
+    if (findInput) {
+      findInput.addEventListener("input", () => {
+        pickFilter = findInput.value;
+        const caret = findInput.selectionStart;
+        renderPicks();
+        // renderPicks replaces the field, so put the cursor back where the
+        // thumb left it - otherwise every second character types itself at
+        // the front of the box.
+        const again = document.getElementById("pickFind");
+        if (again) {
+          again.focus();
+          try {
+            again.setSelectionRange(caret, caret);
+          } catch (e) {
+            /* a search input can refuse a range; the focus is the point */
+          }
+        }
+      });
+    }
+    const findClear = document.getElementById("pickFindClear");
+    if (findClear) {
+      findClear.addEventListener("click", () => {
+        pickFilter = "";
+        renderPicks();
+      });
+    }
 
     view.querySelectorAll("[data-pick-kind-filter]").forEach((btn) => {
       btn.addEventListener("click", () => {
@@ -13032,6 +13506,57 @@
     `;
   }
 
+  // ---------- How much daylight is left ----------
+  // A trip planned in a northern summer and a trip planned in a northern
+  // November are different trips, and the app could not tell you which one you
+  // were on. "Sunset 16:02" is the single fact that decides whether a hill
+  // walk at half three is a nice idea or a bad one, and it is not something
+  // anybody can work out in their head for a given date and latitude.
+  //
+  // SunCalc is doing the astronomy. It also arrived as a dependency of
+  // opening_hours, which needs it to answer "sunrise-sunset" opening times -
+  // so this costs nothing extra beyond the wiring.
+  function sunTimes(date, anchor) {
+    const SC = typeof window !== "undefined" ? window.SunCalc : null;
+    if (!SC || !anchor || anchor.lat == null || !date) return null;
+    try {
+      const t = SC.getTimes(date, anchor.lat, anchor.lon);
+      const ok = (d) => d instanceof Date && !Number.isNaN(d.getTime());
+      if (!ok(t.sunrise) || !ok(t.sunset)) {
+        // Inside the Arctic circle in the right week there is no sunrise at
+        // all, and that is a real answer rather than a failure.
+        return { polar: true, up: !!(t.nadir && SC.getPosition(t.nadir, anchor.lat, anchor.lon).altitude > 0) };
+      }
+      return { sunrise: t.sunrise, sunset: t.sunset, dusk: ok(t.dusk) ? t.dusk : null };
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // One line for the top of a day. Says the thing you would want to know
+  // before deciding what to do with the afternoon.
+  function daylightLine(date, anchor) {
+    const sun = sunTimes(date, anchor);
+    if (!sun) return "";
+    if (sun.polar) {
+      return `<div class="daylight">${icon("clock", { size: 15, cls: "ico-inline" })} ${
+        sun.up ? "The sun doesn't set here at this time of year." : "The sun doesn't rise here at this time of year."
+      }</div>`;
+    }
+    const today = isoDate(new Date()) === isoDate(date);
+    const now = new Date();
+    // On the day itself, how long is left matters more than when it started.
+    if (today && now < sun.sunset && now > sun.sunrise) {
+      const minsLeft = Math.round((sun.sunset - now) / 60000);
+      return `<div class="daylight">${icon("clock", { size: 15, cls: "ico-inline" })} ${esc(
+        formatDuration(minsLeft)
+      )} of daylight left — sunset ${esc(clockOf(sun.sunset))}</div>`;
+    }
+    return `<div class="daylight">${icon("clock", { size: 15, cls: "ico-inline" })} Light from ${esc(
+      clockOf(sun.sunrise)
+    )} to ${esc(clockOf(sun.sunset))}</div>`;
+  }
+
   // ---------- Telling you the thing before you need it ----------
   // Today already worked out which stop is next, whether somewhere might be
   // shut, and what the sky is doing - and could do nothing whatever with any
@@ -13223,7 +13748,7 @@
       // ---- It shuts sooner than you think ----
       if (settings.closing && dayCode) {
         stops.forEach((stop, i) => {
-          const closes = closingMinutesOnDay(stop.pick.openingHours, dayCode);
+          const closes = closingMinutesOnDay(stop.pick.openingHours, dayCode, stop.pick);
           if (closes == null) return;
           const warnAt = closes - 45;
           if (warnAt <= 0) return;
@@ -13500,6 +14025,7 @@
         <div class="today-date">${esc(current.day.label)}</div>
       </div>
       ${weatherLine(forecast)}
+      ${daylightLine(current.date, dayWeatherAnchor(current.day.id))}
     `;
 
     // Nothing ahead of you, so the screen says what it is looking at and
@@ -13528,11 +14054,11 @@
         const p = byId[it.pickId];
         const prev = idx > 0 ? byId[items[idx - 1].pickId] : null;
         const leg = walkLeg(prev, p);
-        const mayBeClosed = closedOnDay(p.openingHours, dayCode);
+        const mayBeClosed = closedOnDay(p.openingHours, dayCode, p);
         // Today knew a castle was open on a Tuesday and said nothing at all
         // about it being seven in the evening and the castle shutting at five.
         // That is the version of the question you have in the car park.
-        const closesAt = closingMinutesOnDay(p.openingHours, dayCode);
+        const closesAt = closingMinutesOnDay(p.openingHours, dayCode, p);
         const minsNow = new Date().getHours() * 60 + new Date().getMinutes();
         const shutNow = current.isToday && closesAt != null && minsNow >= closesAt;
         const shutSoon = current.isToday && !shutNow && closesAt != null && closesAt - minsNow <= 60;
@@ -14317,6 +14843,11 @@
     addEventToItsDay,
     parseEventDate,
     cityColor,
+    hoursAt,
+    parsedHours,
+    sunTimes,
+    findInPicks,
+    buildTripIcs,
   };
 
   setUpNativeShell();

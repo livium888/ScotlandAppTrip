@@ -3355,3 +3355,55 @@ html, body {
    have missed with nothing to tell them apart. */
 .pick-row-past { opacity: 0.55; }
 .row-badge.past { background: var(--surface-2); color: var(--text-muted); }
+
+/* ---------- Finding something you already saved ---------- */
+/* Visually quieter than the add-a-place box above it: that one is a doorway to
+   another screen, this one filters the list in place. */
+.find-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0 4px;
+  padding: 0 12px;
+  background: var(--surface-2, var(--card));
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.find-icon { display: flex; color: var(--text-muted); flex: none; }
+.find-input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 15px;
+  padding: 10px 0;
+  outline: none;
+}
+.find-input::-webkit-search-cancel-button { display: none; }
+.find-clear {
+  flex: none;
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  padding: 4px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+.find-result {
+  margin: 6px 2px 0;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+/* Daylight sits with the weather line — same kind of fact about the day. */
+.daylight {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0 10px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
