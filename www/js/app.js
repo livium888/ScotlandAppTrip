@@ -7076,8 +7076,28 @@
 
   // The window a search covers, as real dates. "While we're there" comes from
   // the plan rather than from anything typed twice.
+  // Where a hand-picked range and start time live. Kept next to the window
+  // helper because everything that reads a window has to cope with them.
+  const customWindow = { from: "", to: "", fromTime: "" };
+
   function eventWindow(key) {
     const today = startOfDay(new Date());
+
+    if (key === "custom") {
+      const from = parseEventDate(customWindow.from) || today;
+      const to = parseEventDate(customWindow.to) || from;
+      // A range typed backwards is a slip, not a request for nothing.
+      const [a, b] = from <= to ? [from, to] : [to, from];
+      return {
+        from: a,
+        to: b,
+        fromTime: customWindow.fromTime || "",
+        label: customWindow.fromTime
+          ? `from ${humanDate(a)}, ${customWindow.fromTime}`
+          : `between ${humanDate(a)} and ${humanDate(b)}`,
+      };
+    }
+
     if (key === "trip") {
       const dated = datedDays(loadPlan().days).filter((x) => x.when);
       if (dated.length) {
@@ -7137,6 +7157,13 @@
       startsAt: showOn.toISOString(),
       endsAt: runsOn ? ends.toISOString() : "",
       time: typeof item.time === "string" && /^\d{1,2}:\d{2}$/.test(item.time.trim()) ? item.time.trim() : "",
+      // The whole point of asking: an event that ran 09:00-21:00 is still
+      // worth telling you about at three in the afternoon, and one that
+      // finished at 14:00 is not.
+      endTime:
+        typeof item.endTime === "string" && /^\d{1,2}:\d{2}$/.test(item.endTime.trim())
+          ? item.endTime.trim()
+          : "",
       venue: String(item.venue || "").trim(),
       area: String(item.area || item.venue || "").trim(),
       description: String(item.what || item.why || "").trim(),
@@ -7144,6 +7171,34 @@
       ticketUrl: /^https?:\/\//i.test(String(item.tickets || "")) ? String(item.tickets) : "",
       recurring: item.recurring === true,
     };
+  }
+
+  // Something with a listed start but no listed end. Guessing is unavoidable
+  // if "has it finished" is to mean anything at all, so the guess is a modest
+  // one and the screen says out loud that it is being made.
+  const ASSUMED_EVENT_HOURS = 2;
+
+  // Answers whether an event is still worth telling somebody about at a given
+  // moment. Only ever drops what has demonstrably finished - the point of the
+  // filter is to remove things that are over, not to be clever about things
+  // it cannot know.
+  function stillOnAt(event, cutoff) {
+    if (!cutoff) return true;
+    const day = event.startsAt ? startOfDay(new Date(event.startsAt)) : null;
+    // The cutoff is a moment, not a daily curfew: it only applies to the day
+    // it falls on. An event next Tuesday is not filtered by "from 3pm today".
+    if (!day || startOfDay(cutoff) > day) return true;
+    if (startOfDay(cutoff) < day) return true;
+
+    const mins = (t) => timeToMinutes(t);
+    const cutoffMins = cutoff.getHours() * 60 + cutoff.getMinutes();
+    const ends = mins(event.endTime);
+    if (ends != null) return ends > cutoffMins;
+
+    const starts = mins(event.time);
+    // No times at all - an all-day thing, and nobody can say it is over.
+    if (starts == null) return true;
+    return starts + ASSUMED_EVENT_HOURS * 60 > cutoffMins;
   }
 
   function endOfWindow(d) {
@@ -7196,7 +7251,12 @@
       : `between ${humanDate(window.from)} and ${humanDate(window.to)} ${window.from.getFullYear()}`;
 
     return (
-      `List events happening ${when}, within about ${miles} miles of ${centre.name}.\n\n` +
+      `List events happening ${when}, within about ${miles} miles of ${centre.name}.` +
+      (window.fromTime
+        ? ` On ${humanDate(window.from)} only things still going at ${window.fromTime} or later - ` +
+          `something that finishes before then is no use, but something that runs across it is.`
+        : "") +
+      `\n\n` +
       `Specifically: ${angle.ask}.${who}\n\n` +
       // The old prompt said "leave out anything you cannot confirm; six real
       // ones are worth more than twelve guesses", and the model did as it was
@@ -7214,6 +7274,8 @@
       `"date": "YYYY-MM-DD" the day it is on, ` +
       `"endDate": "YYYY-MM-DD" if it runs over several days, otherwise "", ` +
       `"time": "HH:MM" 24-hour start time, or "" if there isn't one, ` +
+      `"endTime": "HH:MM" when it finishes, or "" if it isn't listed - ` +
+      `an all-day market that runs 09:00 to 16:00 should say so, ` +
       `"venue": the building or place it is at, ` +
       `"area": the town or village, ` +
       `"what": one short sentence on what it actually is, ` +
@@ -7225,7 +7287,7 @@
   }
 
   // Kept so the screen can say why a list is shorter than it looks.
-  let eventsDropped = { unplaced: 0, undated: 0, tooFar: 0 };
+  let eventsDropped = { unplaced: 0, undated: 0, tooFar: 0, finished: 0 };
 
   // Two listings of the same thing from two angles - a ceilidh is both music
   // and local - should be one row.
@@ -7336,7 +7398,7 @@
   }
 
   async function eventsWithGemini(centre, windowKey, radiusMetres, key, angleKeys) {
-    eventsDropped = { unplaced: 0, undated: 0, tooFar: 0 };
+    eventsDropped = { unplaced: 0, undated: 0, tooFar: 0, finished: 0 };
     const window = eventWindow(windowKey);
     const angles = EVENT_ANGLES.filter(
       (a) => !angleKeys || !angleKeys.length || angleKeys.includes(a.key)
@@ -7350,6 +7412,17 @@
 
     const anchor = { name: centre.name, lat: centre.lat, lon: centre.lon, miles: toMiles(radiusMetres / 1000) };
 
+    // The moment to search from, when one was given: on that day, anything
+    // already finished is not an answer to "what can I still go to".
+    let cutoff = null;
+    if (window.fromTime) {
+      const mins = timeToMinutes(window.fromTime);
+      if (mins != null) {
+        cutoff = new Date(window.from);
+        cutoff.setHours(0, mins, 0, 0);
+      }
+    }
+
     // Normalise and dedupe before geocoding: the same ceilidh found by both
     // the music and the local angle should cost one lookup, not two.
     const seen = new Map();
@@ -7358,6 +7431,10 @@
         const event = normaliseEvent(item, window);
         if (!event) {
           eventsDropped.undated++;
+          return;
+        }
+        if (!stillOnAt(event, cutoff)) {
+          eventsDropped.finished++;
           return;
         }
         const id = eventFingerprint(event);
@@ -7410,6 +7487,7 @@
     if (!out.length) {
       const why = [
         eventsDropped.undated ? `${eventsDropped.undated} had no usable date` : "",
+        eventsDropped.finished ? `${eventsDropped.finished} had already finished by then` : "",
         eventsDropped.unplaced ? `${eventsDropped.unplaced} couldn't be placed anywhere` : "",
         eventsDropped.tooFar ? `${eventsDropped.tooFar} turned out to be too far away` : "",
       ]
@@ -7500,7 +7578,11 @@
   // One event, as a row. The same shape whether it is a search result you
   // might save or something already saved.
   function eventRow(e, index, saved) {
-    const time = e.time ? `<span class="ev-time">${esc(e.time)}</span>` : `<span class="ev-time ev-time-none">all day</span>`;
+    const time = e.time
+      ? `<span class="ev-time">${esc(e.time)}${
+          e.endTime ? `<span class="ev-until">–${esc(e.endTime)}</span>` : ""
+        }</span>`
+      : `<span class="ev-time ev-time-none">all day</span>`;
     const where = [e.venue, e.area].filter(Boolean).join(", ");
     const runs = e.endsAt
       ? ` <span class="ev-runs">until ${esc(humanDate(new Date(e.endsAt)))}</span>`
@@ -7553,8 +7635,37 @@
                 x.label
               )}</button>`
           ).join("")}
+          <button class="search-chip${eventSearch.when === "custom" ? " on" : ""}" data-ev-when="custom">Pick dates</button>
         </div>
-        <p class="explore-note">${esc(humanDate(w.from))} – ${esc(humanDate(w.to))}</p>
+        ${
+          eventSearch.when === "custom"
+            ? `
+          <div class="ev-dates">
+            <label class="ev-field">
+              <span>From</span>
+              <input type="date" id="evFrom" value="${esc(customWindow.from)}" />
+            </label>
+            <label class="ev-field">
+              <span>To</span>
+              <input type="date" id="evTo" value="${esc(customWindow.to)}" />
+            </label>
+            <label class="ev-field">
+              <span>From time</span>
+              <input type="time" id="evFromTime" value="${esc(customWindow.fromTime)}" />
+            </label>
+          </div>
+          <p class="settings-hint">
+            The time is a starting point, not a start time — pick 15:00 and a market that
+            ran 09:00–21:00 still counts, while one that finished at 14:00 does not. It only
+            applies to the first day. Anything with no finish time listed is taken to run
+            about ${ASSUMED_EVENT_HOURS} hours.
+            ${customWindow.fromTime ? `<button class="link-btn" id="evClearTime">Any time</button>` : ""}
+          </p>`
+            : ""
+        }
+        <p class="explore-note">${esc(humanDate(w.from))} – ${esc(humanDate(w.to))}${
+          w.fromTime ? `, from ${esc(w.fromTime)}` : ""
+        }</p>
         <div class="search-chips ev-kinds">
           ${EVENT_ANGLES.map(
             (a) =>
@@ -7675,6 +7786,30 @@
         renderEvents();
       })
     );
+
+    [
+      ["evFrom", "from"],
+      ["evTo", "to"],
+      ["evFromTime", "fromTime"],
+    ].forEach(([id, field]) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.addEventListener("change", () => {
+        customWindow[field] = el.value;
+        // Picking a start date and no end means that one day, which is what
+        // somebody choosing a single date on a calendar means by it.
+        if (field === "from" && !customWindow.to) customWindow.to = el.value;
+        renderEvents();
+      });
+    });
+
+    const clearTime = document.getElementById("evClearTime");
+    if (clearTime) {
+      clearTime.addEventListener("click", () => {
+        customWindow.fromTime = "";
+        renderEvents();
+      });
+    }
 
     const centreBtn = document.getElementById("evCentre");
     if (centreBtn) {
@@ -13298,6 +13433,7 @@
       pick.kind = "event";
       pick.startsAt = candidate.startsAt;
       pick.time = candidate.time || "";
+      pick.endTime = candidate.endTime || "";
       pick.venue = candidate.venue || "";
       pick.price = candidate.price || null;
       pick.ticketUrl = candidate.ticketUrl || "";
@@ -15277,6 +15413,8 @@
     cityColor,
     hoursAt,
     parsedHours,
+    stillOnAt,
+    customWindow,
     sunTimes,
     findInPicks,
     buildTripIcs,

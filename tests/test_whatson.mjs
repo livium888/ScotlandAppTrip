@@ -133,8 +133,9 @@ await page.waitForTimeout(500);
 const screen = () => page.evaluate(() => document.getElementById('view').textContent.replace(/\s+/g, ' '));
 check('the screen explains itself before you have searched anything',
   /Nothing saved yet/.test(await screen()), (await screen()).slice(0, 200));
+// The presets by name rather than by count, so adding one does not fail this.
 check('it offers the date window up front', await page.evaluate(() =>
-  document.querySelectorAll('[data-ev-when]').length === 3));
+  ['trip', 'weekend', 'week'].every((k) => !!document.querySelector(`[data-ev-when="${k}"]`))));
 check('and the kinds of thing to look for', await page.evaluate(() =>
   document.querySelectorAll('[data-ev-kind]').length === 6));
 
@@ -268,6 +269,105 @@ const stale = await page.evaluate(() => ({
 check('a date that has passed is past', stale.past === true, JSON.stringify(stale));
 check('tomorrow is not', stale.future === false, JSON.stringify(stale));
 check('and a place with no date is never past', stale.place === false, JSON.stringify(stale));
+
+// ---------- Your own dates, and a time to search onwards from ----------
+//
+// "I want to pick the date and time from a calendar... I give just the time
+// from which the event should be searched onwards. It doesn't have to start at
+// that time exactly, I want to filter what finished already. If I pick 3 PM as
+// start time, don't show me events that ended at 2 PM but show me events that
+// last from 9 am to 9 pm."
+//
+// That needs an end time, which the app never used to ask for - without one
+// "has this finished" is not a question anybody can answer.
+
+const filter = await page.evaluate(() => {
+  const day = new Date(2026, 8, 12);
+  const at = (h) => { const d = new Date(2026, 8, 12); d.setHours(h, 0, 0, 0); return d; };
+  const ev = (time, endTime, dayOffset) => ({
+    startsAt: new Date(2026, 8, 12 + (dayOffset || 0)).toISOString(), time, endTime });
+  const f = window.__tripTest.stillOnAt;
+  return {
+    runsAcross: f(ev('09:00', '21:00'), at(15)),
+    alreadyOver: f(ev('12:00', '14:00'), at(15)),
+    laterTonight: f(ev('19:30', ''), at(15)),
+    startedLongAgo: f(ev('12:00', ''), at(15)),
+    startedJustNow: f(ev('14:00', ''), at(15)),
+    allDayNoTimes: f(ev('', ''), at(15)),
+    pastClosing: f(ev('09:00', '21:00'), at(22)),
+    noCutoff: f(ev('09:00', '10:00'), null),
+    anotherDay: f(ev('09:00', '10:00', 1), at(15)),
+    ignored: day.getTime() > 0,
+  };
+});
+check('a market running 09:00–21:00 still counts at 15:00', filter.runsAcross === true, JSON.stringify(filter));
+check('and one that finished at 14:00 does not', filter.alreadyOver === false, JSON.stringify(filter));
+check('something starting later tonight counts', filter.laterTonight === true, JSON.stringify(filter));
+check('something with no finish time that started hours ago does not',
+  filter.startedLongAgo === false, JSON.stringify(filter));
+check('but one that started within the hour still does',
+  filter.startedJustNow === true, JSON.stringify(filter));
+check('an all-day thing with no times at all is never called over',
+  filter.allDayNoTimes === true, JSON.stringify(filter));
+check('and after closing time it is over', filter.pastClosing === false, JSON.stringify(filter));
+check('with no time given, nothing is filtered on time', filter.noCutoff === true, JSON.stringify(filter));
+// The one that would make the feature infuriating if it were wrong.
+check('the time is a moment to start from, not a curfew on every later day',
+  filter.anotherDay === true, JSON.stringify(filter));
+
+// ---------- The controls ----------
+
+await page.evaluate(() => {
+  const s = JSON.parse(localStorage.getItem('trip-settings-v1'));
+  s.geminiKey = 'KEY';
+  localStorage.setItem('trip-settings-v1', JSON.stringify(s));
+});
+await page.reload({ waitUntil: 'load' });
+await page.waitForTimeout(500);
+await page.evaluate(() => document.querySelector('[data-view="events"]').click());
+await page.waitForTimeout(400);
+
+check('there is a way to pick your own dates', await page.evaluate(() =>
+  !!document.querySelector('[data-ev-when="custom"]')));
+await page.evaluate(() => document.querySelector('[data-ev-when="custom"]').click());
+await page.waitForTimeout(300);
+check('which offers a calendar for both ends', await page.evaluate(() =>
+  !!document.getElementById('evFrom') && !!document.getElementById('evTo')));
+check('and a time to search onwards from', await page.evaluate(() =>
+  !!document.getElementById('evFromTime')));
+check('and says the time is a starting point rather than a start time',
+  await page.evaluate(() => /starting point, not a start time/.test(document.getElementById('view').textContent)));
+
+const day1 = '2026-09-12';
+await page.evaluate((d) => {
+  const from = document.getElementById('evFrom');
+  from.value = d;
+  from.dispatchEvent(new Event('change', { bubbles: true }));
+}, day1);
+await page.waitForTimeout(300);
+check('picking one date means that one day, not an open-ended range', await page.evaluate(() =>
+  document.getElementById('evTo').value) === day1, await page.evaluate(() => document.getElementById('evTo').value));
+
+await page.evaluate(() => {
+  const t = document.getElementById('evFromTime');
+  t.value = '15:00';
+  t.dispatchEvent(new Event('change', { bubbles: true }));
+});
+await page.waitForTimeout(300);
+check('the chosen moment is shown back to you', await page.evaluate(() =>
+  /from 15:00/.test(document.getElementById('view').textContent)),
+  await page.evaluate(() => document.getElementById('view').textContent.slice(0, 400)));
+
+// The model is told, so it does not spend its answer on the morning.
+promptsSeen = [];
+await page.evaluate(() => document.getElementById('evSearch').click());
+await page.waitForTimeout(9000);
+check('and the model is told to skip what finishes before then',
+  promptsSeen.length > 0 && promptsSeen.every((p) => /still going at 15:00 or later/.test(p)),
+  (promptsSeen[0] || '').slice(0, 300));
+
+check('there is a way back to any time', await page.evaluate(() =>
+  !!document.getElementById('evClearTime')));
 
 await browser.close();
 console.log(failures === 0 ? '\nALL TESTS PASSED' : `\n${failures} FAILED`);

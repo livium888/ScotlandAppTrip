@@ -3412,19 +3412,21 @@ html, body {
 /* A diary, not a list of places: the time is the left-hand column and
    everything else hangs off it, so scanning down a day answers "what time"
    before it answers "what". */
+/* Not flex. Twice now a flex row here has squeezed the heading down to one
+   word per line: with a nowrap link beside it the title ends up at its
+   min-content width, which for "What's on near Stirling" is "Stirling".
+   Ordinary block layout with the link running on after the text cannot do
+   that, and reads better anyway. */
 .ev-ask-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
   margin-bottom: 10px;
+  line-height: 1.4;
 }
 /* The place name can be long, so it takes the free space and wraps like
    ordinary text; the link keeps its own width beside it. `min-width: 0` alone
    did the opposite - it let the heading shrink to one word per line and the
    link sat on top of it. */
-.ev-ask-head b { flex: 1; line-height: 1.35; }
-.ev-ask-head .link-btn { flex: none; white-space: nowrap; }
+.ev-ask-head b { font-size: 15px; }
+.ev-ask-head .link-btn { margin-left: 8px; white-space: nowrap; }
 .ev-kinds { margin-top: 10px; }
 
 .ev-day {
@@ -3505,3 +3507,38 @@ html, body {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* Pick your own dates and a time to search from. */
+.ev-dates {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 12px 0 8px;
+}
+.ev-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1 1 8.5rem;
+  min-width: 0;
+}
+.ev-field span {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.ev-field input {
+  font: inherit;
+  font-size: 15px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface-2, var(--card));
+  color: var(--text);
+  min-width: 0;
+}
+/* The finish time is the quieter half of the pair — the start is what you
+   scan a column of times for. */
+.ev-until { font-weight: 400; font-size: 11px; color: var(--text-muted); display: block; }
