@@ -78,7 +78,8 @@ await page.waitForTimeout(200);
 // ---- Settings: destination + google key ----
 await page.click('#settingsBtn');
 await page.waitForSelector('#setGoogleKey');
-check('settings sheet opens', true);
+check('settings sheet opens', await page.evaluate(() =>
+  !!document.getElementById('setGoogleKey')));
 await page.fill('#setDestination', 'Manchester');
 await page.fill('#setGoogleKey', 'TEST-KEY-123');
 await page.click('#saveSettings');

@@ -73,7 +73,8 @@ await page.waitForTimeout(300);
 // --- Settings: your standing instructions ---
 await page.evaluate(() => document.getElementById('settingsBtn').click());
 await page.waitForSelector('#setPreferences', { timeout: 3000 });
-check('there is somewhere to say what you want', true);
+check('there is somewhere to say what you want', await page.evaluate(() =>
+  !!document.getElementById('setPreferences')));
 
 const presets = await page.evaluate(() => Array.from(document.querySelectorAll('[data-pref-preset]')).map((b) => b.textContent.trim()));
 check('suggestions offered rather than a blank page', presets.length >= 6, JSON.stringify(presets));

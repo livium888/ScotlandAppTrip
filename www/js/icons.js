@@ -83,6 +83,12 @@
     castle:
       '<path d="M4 20.5V6.5l3 2 2.5-2.5 2.5 2 2.5-2 2.5 2.5 3-2v14z"/>' +
       '<path d="M9.7 20.5v-4.3a2.3 2.3 0 0 1 4.6 0v4.3"/>',
+    // A ticket with a stub torn off it. Bunting and a marquee were both tried
+    // and both read as scribble at 17px; a ticket is the one shape that still
+    // says "an event" when it is barely a centimetre tall.
+    events:
+      '<path d="M3.6 8.9V6.9a1.4 1.4 0 0 1 1.4-1.4h14a1.4 1.4 0 0 1 1.4 1.4v2a2.3 2.3 0 0 0 0 4.6v2a1.4 1.4 0 0 1-1.4 1.4H5a1.4 1.4 0 0 1-1.4-1.4v-2a2.3 2.3 0 0 0 0-4.6z"/>' +
+      '<path d="M14.2 5.5v1.9M14.2 10.6v2.8M14.2 16.6v-1.9"/>',
     sparkle:
       '<path d="M11 3.5l1.7 4.6 4.6 1.7-4.6 1.7L11 16.1 9.3 11.5 4.7 9.8l4.6-1.7z"/>' +
       '<path d="M17.8 15l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z"/>',

@@ -60,7 +60,9 @@ const tabs = await page.evaluate(() => Array.from(document.querySelectorAll('.ta
   svgs: t.querySelectorAll('svg.ico').length,
   text: t.textContent.trim(),
 })));
-check('every tab is drawn, not typed', tabs.length === 6 && tabs.every((t) => t.svgs === 1),
+// The count was incidental - this check is about icons being drawn rather
+// than typed, and how many tabs there are is test_heuristics' business.
+check('every tab is drawn, not typed', tabs.length >= 6 && tabs.every((t) => t.svgs === 1),
   JSON.stringify(tabs));
 check('and no emoji survives in it', !tabs.some((t) => EMOJI.test(t.text)), JSON.stringify(tabs.map((t) => t.text)));
 check('the tab you are on is marked', await page.evaluate(() =>

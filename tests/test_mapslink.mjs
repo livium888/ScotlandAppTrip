@@ -148,12 +148,12 @@ const shared = await page.evaluate(async () => {
   if (origClipboard) Object.defineProperty(navigator, 'clipboard', { configurable: true, value: origClipboard });
   return captured;
 });
-if (shared) {
-  check('a shared plan links to the places, not their streets',
-    !/B8079|PH18/.test(decodeURIComponent(shared)), decodeURIComponent(shared).slice(0, 240));
-} else {
-  check('a shared plan links to the places, not their streets', true);
-}
+// The else branch used to pass unconditionally, so a share that stopped
+// firing altogether would have read as a pass. Not capturing the share is
+// itself a failure - there is nothing to check the links in.
+check('a shared plan links to the places, not their streets',
+  !!shared && !/B8079|PH18/.test(decodeURIComponent(shared)),
+  shared ? decodeURIComponent(shared).slice(0, 240) : 'no share was captured');
 
 // ---------- A place saved before any of this, with only an address ----------
 // No area was stored then, so the town has to come back out of the address -

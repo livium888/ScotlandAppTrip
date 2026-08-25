@@ -48,7 +48,8 @@ await page.click('#exploreToggle');
 await page.waitForSelector('#exploreMapBtn', { timeout: 3000 });
 
 // --- Explore offers it alongside the ways that need a name ---
-check('pointing at a map is offered as a starting point', true);
+check('pointing at a map is offered as a starting point', await page.evaluate(() =>
+  !!document.getElementById('exploreMapBtn')));
 
 await page.click('#exploreMapBtn');
 await page.waitForSelector('#mapPickCanvas', { timeout: 3000 });
@@ -109,7 +110,8 @@ await page.evaluate(() => document.querySelector('[data-view="picks"]').click())
 await page.waitForSelector('#pickSearchTrigger');
 await page.click('#pickSearchTrigger');
 await page.waitForSelector('#searchMapPick', { timeout: 3000 });
-check('the search screen offers it too, for when you have no name', true);
+check('the search screen offers it too, for when you have no name', await page.evaluate(() =>
+  !!document.getElementById('searchMapPick')));
 
 await page.click('#searchMapPick');
 await page.waitForSelector('#mapPickCanvas', { timeout: 3000 });

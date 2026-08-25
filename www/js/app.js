@@ -6505,11 +6505,6 @@
     // somewhere instead, and they only work at all because the AI is doing the
     // finding. The OSM fallbacks are honest guesses, hence approx on all of
     // them.
-    // Not a place search at all - runExplore branches on this key - but it
-    // belongs in the list because this is where people look for the questions
-    // that are not "find me a cafe".
-    { key: "events", label: "What's on", icon: "🎪", group: "Worth asking", tag: "amenity", value: "events", approx: true,
-      prompt: "things happening on a particular date - gigs, markets, festivals, theatre, sport" },
     { key: "comfort", label: "Comfort food", icon: "🥧", group: "Worth asking", tag: "amenity", value: "restaurant", approx: true,
       prompt: "comfort food - pies, stew, chips, a proper roast, somewhere warm and filling rather than clever" },
     { key: "locals", label: "Where locals eat", icon: "🍲", group: "Worth asking", tag: "amenity", value: "restaurant", approx: true,
@@ -6607,7 +6602,6 @@
     centre: null, // { name, lat, lon }
     category: "",
     customQuery: "", // used when category === "custom"
-    when: "trip", // which date window, when category === "events"
     showPrompt: false,
     radius: storedRadius(),
     status: "idle", // idle | locating | loading | done | error
@@ -7126,12 +7120,22 @@
     // field that cannot be missing.
     const when = parseEventDate(item.date);
     if (!when) return null;
-    // Outside the window asked about, it is not an answer to the question.
-    if (when < startOfDay(window.from) || when > endOfWindow(window.to)) return null;
+    // A run of days - a festival, an exhibition, a week of a play - used to be
+    // thrown away whenever its start fell before the window, which is exactly
+    // when you most want to know about it: the thing that started on Tuesday
+    // and is still on while you are here.
+    const ends = parseEventDate(item.endDate) || when;
+    const from = startOfDay(window.from);
+    const to = endOfWindow(window.to);
+    if (endOfWindow(ends) < from || when > to) return null;
+    // Shown against the first day of it you could actually go.
+    const showOn = when < from ? new Date(from) : when;
+    const runsOn = endOfWindow(ends) > endOfWindow(showOn);
     return {
       name,
       kind: "event",
-      startsAt: when.toISOString(),
+      startsAt: showOn.toISOString(),
+      endsAt: runsOn ? ends.toISOString() : "",
       time: typeof item.time === "string" && /^\d{1,2}:\d{2}$/.test(item.time.trim()) ? item.time.trim() : "",
       venue: String(item.venue || "").trim(),
       area: String(item.area || item.venue || "").trim(),
@@ -7158,25 +7162,60 @@
     return Number.isNaN(d.getTime()) ? null : d;
   }
 
-  function eventPrompt(centre, window, radiusMetres) {
+  // Six questions instead of one. This is the whole reason the old version
+  // came back with four results while Facebook showed forty: a single "what's
+  // on near here" gets a single general answer, and a general answer about a
+  // town is always short. Asked six narrower questions, the same model finds
+  // the folk night, the farmers' market, the am-dram production and the car
+  // boot sale - which live on different corners of the internet and never
+  // appear in one list.
+  //
+  // They run in parallel and the results are merged, so six searches cost
+  // about what one used to.
+  const EVENT_ANGLES = [
+    { key: "music", label: "Music & nightlife",
+      ask: "live music, gigs, folk sessions, open mic nights, club nights, ceilidhs, choirs, brass bands" },
+    { key: "market", label: "Markets & food",
+      ask: "farmers' markets, street food, food festivals, craft fairs, car boot sales, night markets, tastings" },
+    { key: "family", label: "For children",
+      ask: "things on for children and families - storytimes, workshops, holiday clubs, kids' theatre, farm and animal events, fetes" },
+    { key: "arts", label: "Arts & theatre",
+      ask: "theatre, comedy, cinema screenings, exhibitions with an end date, talks, book events, open studios" },
+    { key: "outdoors", label: "Outdoors & sport",
+      ask: "guided walks, races, matches, shows, agricultural and county shows, regattas, park runs, wildlife events" },
+    { key: "local", label: "Local & one-off",
+      ask: "things a local would know about - village hall events, church and community centre listings, fundraisers, quiz nights, anniversaries, seasonal celebrations" },
+  ];
+
+  function eventPrompt(centre, window, radiusMetres, angle) {
     const miles = Math.max(1, Math.round(toMiles(radiusMetres / 1000)));
     const who = aiContextBlock();
+    const sameDay = isoDate(window.from) === isoDate(window.to);
+    const when = sameDay
+      ? `on ${humanDate(window.from)} ${window.from.getFullYear()}`
+      : `between ${humanDate(window.from)} and ${humanDate(window.to)} ${window.from.getFullYear()}`;
+
     return (
-      `What is on near ${centre.name} between ${humanDate(window.from)} and ` +
-      `${humanDate(window.to)} ${window.from.getFullYear()}? ` +
-      `Within about ${miles} miles.${who}\n\n` +
-      `Anything with a date: gigs, theatre, markets, festivals, exhibitions with an ` +
-      `end date, sport, talks, one-off openings, things on at a village hall. ` +
-      `Not permanent attractions - a castle that is open every day is not an event.\n\n` +
-      `Use search to confirm each one is genuinely happening on the date you give, ` +
-      `from the venue's own page or a listings site. Leave out anything you cannot confirm; ` +
-      `six real ones are worth more than twelve guesses.\n\n` +
+      `List events happening ${when}, within about ${miles} miles of ${centre.name}.\n\n` +
+      `Specifically: ${angle.ask}.${who}\n\n` +
+      // The old prompt said "leave out anything you cannot confirm; six real
+      // ones are worth more than twelve guesses", and the model did as it was
+      // told. Breadth is the job here - the app filters afterwards, and an
+      // event nobody lists is one nobody can go to.
+      `Be thorough. Search venue listings, local newspapers, council and tourist board ` +
+      `what's-on pages, venue social media, ticketing sites and community noticeboards. ` +
+      `Small and local counts as much as big and ticketed. Twenty real listings is a ` +
+      `better answer than three.\n\n` +
+      `Include something only if you have seen it listed with a date. Do not invent ` +
+      `plausible-sounding events, and do not pad the list with permanent attractions - ` +
+      `a castle that opens every day is not an event.\n\n` +
       `Reply with ONLY a JSON array, each item ` +
       `{"name": what it is called, ` +
-      `"date": "YYYY-MM-DD" - the single day it is on, one entry per day if it runs several, ` +
+      `"date": "YYYY-MM-DD" the day it is on, ` +
+      `"endDate": "YYYY-MM-DD" if it runs over several days, otherwise "", ` +
       `"time": "HH:MM" 24-hour start time, or "" if there isn't one, ` +
-      `"venue": the place it is at, ` +
-      `"area": the town or street, ` +
+      `"venue": the building or place it is at, ` +
+      `"area": the town or village, ` +
       `"what": one short sentence on what it actually is, ` +
       `"price": "free", "£", "££" or "£££", ` +
       `"tickets": the booking or information URL, or "", ` +
@@ -7188,75 +7227,190 @@
   // Kept so the screen can say why a list is shorter than it looks.
   let eventsDropped = { unplaced: 0, undated: 0, tooFar: 0 };
 
-  async function eventsWithGemini(centre, windowKey, radiusMetres, key) {
-    eventsDropped = { unplaced: 0, undated: 0, tooFar: 0 };
-    const window = eventWindow(windowKey);
-    const prompt = eventPrompt(centre, window, radiusMetres);
+  // Two listings of the same thing from two angles - a ceilidh is both music
+  // and local - should be one row.
+  function eventFingerprint(event) {
+    const name = String(event.name || "")
+      .toLowerCase()
+      .replace(/^(the|a)\s+/, "")
+      .replace(/[^a-z0-9]+/g, "");
+    return `${name}|${String(event.startsAt || "").slice(0, 10)}`;
+  }
 
-    // The same two-attempt shape the trip planner uses, and for the same
-    // reason: grounding is what makes an event real rather than plausible,
-    // but a grounded reply comes back as prose with citations often enough
-    // that asking for JSON that way fails outright. JSON mode is the fallback
-    // and cannot answer in prose - at the cost of the sources.
-    let parsed = null;
-    let sources = [];
-    for (const attempt of [{ grounded: true }, { json: true }]) {
-      const answer = await callGemini(key, prompt, attempt);
-      const list = extractJson(answer.text);
-      if (Array.isArray(list) && list.length) {
-        parsed = list;
-        sources = answer.sources || [];
-        break;
+  async function askOneAngle(key, centre, window, radiusMetres, angle) {
+    const prompt = eventPrompt(centre, window, radiusMetres, angle);
+    // Grounded first, because grounding is what makes an event real rather
+    // than plausible; JSON mode as the fallback, because a grounded reply
+    // comes back as prose often enough to fail outright.
+    for (const attempt of [{ grounded: true, maxTokens: 8192 }, { json: true, maxTokens: 8192 }]) {
+      try {
+        const answer = await callGemini(key, prompt, attempt);
+        const list = extractJson(answer.text);
+        if (Array.isArray(list) && list.length) {
+          return { list, sources: answer.sources || [], angle: angle.key };
+        }
+      } catch (e) {
+        // One angle failing is not the search failing. Five others are running.
       }
     }
-    if (!parsed) throw new Error("Nothing came back that could be read as a list of events.");
+    return { list: [], sources: [], angle: angle.key };
+  }
 
-    const anchor = { name: centre.name, lat: centre.lat, lon: centre.lon, miles: toMiles(radiusMetres / 1000) };
-    const out = [];
-    for (const item of parsed.slice(0, 12)) {
-      const event = normaliseEvent(item, window);
-      if (!event) {
-        eventsDropped.undated++;
-        continue;
-      }
-      // Placed by its venue, and held to the same standard every other search
-      // in this app is held to: something that cannot be put on the map is
-      // not an answer to "what's on near here".
+  // Placing an event is a different problem from placing a café, and treating
+  // it the same way is what threw most of them away. A café that Nominatim
+  // cannot find probably does not exist. An event at "the Tolbooth" or "the
+  // Albert Halls" or "St Mary's church hall" is perfectly real; those names
+  // are simply not in a gazetteer of businesses.
+  //
+  // So the venue is tried first, then the town, then the centre of the search
+  // itself - and an event is only refused when it can't be placed even that
+  // roughly, or when the place it names is genuinely somewhere else.
+  async function placeEvent(event, centre, anchor) {
+    const tries = [
+      { q: event.venue, hint: event.area || centre.name, exact: true },
+      { q: event.area, hint: null, exact: false },
+    ];
+    for (const attempt of tries) {
+      if (!attempt.q) continue;
       let geo = null;
       try {
-        geo = await geocodePlace(event.venue || event.name, event.area || centre.name, anchor);
+        geo = await geocodePlace(attempt.q, attempt.hint, anchor);
       } catch (e) {
         geo = null;
       }
-      if (!geo) {
-        eventsDropped.unplaced++;
-        continue;
-      }
-      if (!confirmedWithinAnchor(anchor, geo.lat, geo.lon, ANCHOR_GRACE)) {
-        eventsDropped.tooFar++;
-        continue;
-      }
-      out.push(
-        Object.assign(event, {
-          lat: geo.lat,
-          lon: geo.lon,
-          address: geo.address || event.area,
-          website: event.ticketUrl || geo.website || null,
-          // Said out loud on every row. A model inventing a festival is the
-          // obvious way this goes wrong, and the honest answer is not to hide
-          // it but to hand over the page it came from.
-          aiSuggested: true,
-          unverified: true,
-          sources,
-        })
-      );
-      if (!lastGeocodeFromCache) await new Promise((r) => setTimeout(r, 1100));
+      if (!geo) continue;
+      // Wherever it landed, it still has to be in the area asked about.
+      if (!confirmedWithinAnchor(anchor, geo.lat, geo.lon, ANCHOR_GRACE)) return { tooFar: true };
+      return {
+        lat: geo.lat,
+        lon: geo.lon,
+        address: geo.address || event.area,
+        website: geo.website || null,
+        // A town-level hit is not the door of the venue, and the row should
+        // not imply that it is.
+        approximate: !attempt.exact,
+      };
+    }
+    // Last resort: nothing about this could be placed inside the search area.
+    // Before falling back to the centre, find out whether that is because the
+    // place is genuinely unmappable or because it is somewhere else entirely -
+    // the two are indistinguishable from an anchored lookup, which returns
+    // nothing either way.
+    //
+    // Without this check, a listing whose area reads "Chelsea, London" failed
+    // every anchored attempt and then got planted in the middle of Stirling,
+    // which is the exact bug the anchor work existed to kill.
+    if (!event.area || centre.lat == null) return null;
+    let anywhere = null;
+    try {
+      anywhere = await geocodePlace(event.area, null, null);
+    } catch (e) {
+      anywhere = null;
+    }
+    if (anywhere && !confirmedWithinAnchor(anchor, anywhere.lat, anywhere.lon, ANCHOR_GRACE)) {
+      return { tooFar: true };
+    }
+    // Genuinely unmappable, and nothing says it is elsewhere. The search
+    // centre is a fair position for a listing, clearly marked as one.
+    return {
+      lat: centre.lat,
+      lon: centre.lon,
+      address: event.area,
+      website: null,
+      approximate: true,
+    };
+  }
+
+  // A handful at a time. Serial with a second's pause between each was thirteen
+  // seconds of doing nothing for twelve events, and the geocode cache added in
+  // Phase 1 means most of these never touch the network at all.
+  async function inBatches(items, size, worker) {
+    const out = [];
+    for (let i = 0; i < items.length; i += size) {
+      const batch = items.slice(i, i + size);
+      out.push(...(await Promise.all(batch.map(worker))));
+      // Politeness to Nominatim between batches rather than between items.
+      if (i + size < items.length) await new Promise((r) => setTimeout(r, 900));
+    }
+    return out;
+  }
+
+  async function eventsWithGemini(centre, windowKey, radiusMetres, key, angleKeys) {
+    eventsDropped = { unplaced: 0, undated: 0, tooFar: 0 };
+    const window = eventWindow(windowKey);
+    const angles = EVENT_ANGLES.filter(
+      (a) => !angleKeys || !angleKeys.length || angleKeys.includes(a.key)
+    );
+
+    // All six at once. One slow angle no longer holds up the other five, and
+    // one failing angle does not fail the search.
+    const answers = await Promise.all(
+      angles.map((angle) => askOneAngle(key, centre, window, radiusMetres, angle))
+    );
+
+    const anchor = { name: centre.name, lat: centre.lat, lon: centre.lon, miles: toMiles(radiusMetres / 1000) };
+
+    // Normalise and dedupe before geocoding: the same ceilidh found by both
+    // the music and the local angle should cost one lookup, not two.
+    const seen = new Map();
+    answers.forEach(({ list, sources, angle }) => {
+      list.slice(0, 30).forEach((item) => {
+        const event = normaliseEvent(item, window);
+        if (!event) {
+          eventsDropped.undated++;
+          return;
+        }
+        const id = eventFingerprint(event);
+        const existing = seen.get(id);
+        if (existing) {
+          // Found from two angles is a small vote of confidence, and worth
+          // keeping whichever version knows more.
+          existing.angles.push(angle);
+          if (!existing.event.ticketUrl && event.ticketUrl) existing.event.ticketUrl = event.ticketUrl;
+          if (!existing.event.venue && event.venue) existing.event.venue = event.venue;
+          if (!existing.event.time && event.time) existing.event.time = event.time;
+          return;
+        }
+        seen.set(id, { event, sources, angles: [angle] });
+      });
+    });
+
+    const candidates = Array.from(seen.values());
+    if (!candidates.length) {
+      throw new Error(`Nothing found on ${window.label} near ${centre.name}.`);
     }
 
+    const placed = await inBatches(candidates, 4, async ({ event, sources, angles: found }) => {
+      const spot = await placeEvent(event, centre, anchor);
+      if (!spot) {
+        eventsDropped.unplaced++;
+        return null;
+      }
+      if (spot.tooFar) {
+        eventsDropped.tooFar++;
+        return null;
+      }
+      return Object.assign(event, {
+        lat: spot.lat,
+        lon: spot.lon,
+        address: spot.address,
+        approximate: spot.approximate,
+        website: event.ticketUrl || spot.website || null,
+        kinds: found,
+        // Said out loud on every row. A model inventing a festival is the
+        // obvious way this goes wrong, and the honest answer is not to hide
+        // it but to hand over the page it came from.
+        aiSuggested: true,
+        unverified: true,
+        sources,
+      });
+    });
+
+    const out = placed.filter(Boolean);
     if (!out.length) {
       const why = [
         eventsDropped.undated ? `${eventsDropped.undated} had no usable date` : "",
-        eventsDropped.unplaced ? `${eventsDropped.unplaced} couldn't be found on the map` : "",
+        eventsDropped.unplaced ? `${eventsDropped.unplaced} couldn't be placed anywhere` : "",
         eventsDropped.tooFar ? `${eventsDropped.tooFar} turned out to be too far away` : "",
       ]
         .filter(Boolean)
@@ -7267,8 +7421,334 @@
           : `Nothing found on ${window.label} near ${centre.name}.`
       );
     }
-    // Soonest first: an event list is a diary, not a ranking.
-    return out.sort((a, b) => new Date(a.startsAt) - new Date(b.startsAt));
+    // Soonest first: an event list is a diary, not a ranking - and within a
+    // day, by the clock rather than by whichever angle answered first.
+    return out.sort((a, b) => {
+      const day = new Date(a.startsAt) - new Date(b.startsAt);
+      if (day) return day;
+      const at = timeToMinutes(a.time);
+      const bt = timeToMinutes(b.time);
+      if (at == null && bt == null) return 0;
+      if (at == null) return -1;
+      if (bt == null) return 1;
+      return at - bt;
+    });
+  }
+
+  // ---------- What's on ----------
+  // Events were a category inside the place search, which was the wrong shape
+  // for them in two ways. They were mixed into a list of permanent places
+  // where the only thing that matters about them - when - had nowhere to sit;
+  // and finding them meant knowing to open Explore, pick a centre, scroll a
+  // category sheet and choose the odd one out. A thing you check every morning
+  // of a trip should not be four taps deep inside something else.
+  const eventSearch = {
+    when: "trip",
+    kinds: [], // empty means all six angles
+    status: "idle", // idle | loading | done | error
+    results: [],
+    error: "",
+    centre: null,
+  };
+
+  function savedEvents() {
+    return loadPicks().filter((p) => p.kind === "event");
+  }
+
+  // Grouped under the day they are on, because a list of events is a diary.
+  function groupEventsByDay(list) {
+    const days = new Map();
+    list.forEach((e) => {
+      const when = e.startsAt ? new Date(e.startsAt) : null;
+      if (!when || Number.isNaN(when.getTime())) return;
+      const key = isoDate(when);
+      if (!days.has(key)) days.set(key, { when, items: [] });
+      days.get(key).items.push(e);
+    });
+    return Array.from(days.entries())
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([key, day]) => ({
+        key,
+        when: day.when,
+        // Within a day, by the clock. The date lives in startsAt and the time
+        // in a separate string, so sorting on startsAt alone put the 21:00
+        // folk session above the 09:00 market - which is not a diary, it is a
+        // list in the order the answers happened to arrive.
+        items: day.items.slice().sort((a, b) => {
+          const at = timeToMinutes(a.time);
+          const bt = timeToMinutes(b.time);
+          // Something with no time is an all-day thing, and belongs at the top
+          // of its day rather than sorted as though it were midnight.
+          if (at == null && bt == null) return String(a.name).localeCompare(String(b.name));
+          if (at == null) return -1;
+          if (bt == null) return 1;
+          return at - bt;
+        }),
+      }));
+  }
+
+  function eventDayHeading(when) {
+    const today = startOfDay(new Date());
+    const day = startOfDay(when);
+    const diff = Math.round((day - today) / 86400000);
+    if (diff === 0) return "Today";
+    if (diff === 1) return "Tomorrow";
+    if (diff > 1 && diff < 7) return when.toLocaleDateString("en-GB", { weekday: "long" });
+    return humanDate(when);
+  }
+
+  // One event, as a row. The same shape whether it is a search result you
+  // might save or something already saved.
+  function eventRow(e, index, saved) {
+    const time = e.time ? `<span class="ev-time">${esc(e.time)}</span>` : `<span class="ev-time ev-time-none">all day</span>`;
+    const where = [e.venue, e.area].filter(Boolean).join(", ");
+    const runs = e.endsAt
+      ? ` <span class="ev-runs">until ${esc(humanDate(new Date(e.endsAt)))}</span>`
+      : "";
+    const tags = [
+      e.price ? `<span class="ev-tag">${esc(e.price)}</span>` : "",
+      e.recurring ? `<span class="ev-tag">every week</span>` : "",
+      e.approximate ? `<span class="ev-tag soft">approx. location</span>` : "",
+    ].join("");
+
+    return `
+      <div class="ev-row${saved ? " ev-saved" : ""}">
+        ${time}
+        <div class="ev-main">
+          <div class="ev-name">${esc(e.name)}${runs}</div>
+          ${where ? `<div class="ev-where">${esc(where)}</div>` : ""}
+          ${e.description ? `<div class="ev-what">${esc(e.description)}</div>` : ""}
+          <div class="ev-tags">${tags}</div>
+          <div class="ev-actions">
+            ${
+              saved
+                ? `<button class="ev-btn" data-open-pick="${esc(e.id)}">Details</button>`
+                : `<button class="ev-btn ev-btn-primary" data-save-event="${index}">＋ Save</button>`
+            }
+            ${e.ticketUrl ? `<button class="ev-btn" data-open-maps="${esc(e.ticketUrl)}">Tickets & info</button>` : ""}
+            ${
+              !saved && e.sources && e.sources.length
+                ? `<button class="ev-btn" data-open-maps="${esc(e.sources[0].uri)}">Where this came from</button>`
+                : ""
+            }
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderEventsSearchBar() {
+    const w = eventWindow(eventSearch.when);
+    const centre = eventSearch.centre || loadAnchor() || derivedAnchor();
+    return `
+      <div class="card ev-ask">
+        <div class="ev-ask-head">
+          <b>${centre ? `What's on near ${esc(centre.name)}` : "What's on"}</b>
+          <button class="link-btn" id="evCentre">${centre ? "Somewhere else" : "Choose where"}</button>
+        </div>
+        <div class="search-chips">
+          ${EVENT_WINDOWS.map(
+            (x) =>
+              `<button class="search-chip${eventSearch.when === x.key ? " on" : ""}" data-ev-when="${esc(x.key)}">${esc(
+                x.label
+              )}</button>`
+          ).join("")}
+        </div>
+        <p class="explore-note">${esc(humanDate(w.from))} – ${esc(humanDate(w.to))}</p>
+        <div class="search-chips ev-kinds">
+          ${EVENT_ANGLES.map(
+            (a) =>
+              `<button class="search-chip${eventSearch.kinds.includes(a.key) ? " on" : ""}" data-ev-kind="${esc(
+                a.key
+              )}">${esc(a.label)}</button>`
+          ).join("")}
+        </div>
+        <p class="settings-hint">
+          ${
+            eventSearch.kinds.length
+              ? "Only the kinds you've picked."
+              : "All of them — six searches at once, which is how it finds the folk night as well as the festival."
+          }
+        </p>
+        <button class="modal-btn modal-btn-primary" id="evSearch" style="width:100%;margin-top:10px;">
+          ${eventSearch.status === "loading" ? "Looking…" : `${icon("search", { size: 17, cls: "ico-inline" })} See what's on`}
+        </button>
+      </div>
+    `;
+  }
+
+  function renderEvents() {
+    const saved = savedEvents();
+    const upcoming = saved.filter((e) => !eventIsPast(e));
+    const past = saved.filter(eventIsPast);
+
+    let html = `
+      <div class="kids-head">
+        <h1 class="kids-title">What's on</h1>
+        <p class="kids-sub">${
+          upcoming.length
+            ? `${upcoming.length} coming up`
+            : "Things with a date on them — gigs, markets, shows, one-offs"
+        }</p>
+      </div>
+    `;
+
+    html += renderEventsSearchBar();
+
+    if (eventSearch.status === "error") {
+      html += `<div class="card"><p class="pick-status">${esc(eventSearch.error)}</p></div>`;
+    }
+
+    if (eventSearch.status === "loading") {
+      html += `<div class="card"><p class="pick-status">Asking six different ways — markets, music, family, arts, outdoors and whatever the locals are up to. This takes a few seconds.</p></div>`;
+    }
+
+    if (eventSearch.status === "done" && eventSearch.results.length) {
+      const savedIds = new Set(saved.map((p) => p.id));
+      const fresh = eventSearch.results.filter((e) => !savedIds.has(pickId("custom", e.name)));
+      html += `<div class="section-label list-head"><span>Found</span><span class="list-head-count">${eventSearch.results.length}</span></div>`;
+      if (!fresh.length) {
+        html += `<div class="card"><p class="pick-status">Everything found is already saved.</p></div>`;
+      }
+      groupEventsByDay(fresh).forEach((day) => {
+        html += `<div class="ev-day">${esc(eventDayHeading(day.when))} <span class="ev-day-date">${esc(
+          humanDate(day.when)
+        )}</span></div>`;
+        day.items.forEach((e) => {
+          html += eventRow(e, eventSearch.results.indexOf(e), false);
+        });
+      });
+      html += `<p class="settings-hint ev-caveat">${icon("alert", {
+        size: 14,
+        cls: "ico-inline",
+      })} Found by searching the web. Worth a check before you set off — every one links where it came from.</p>`;
+    }
+
+    if (upcoming.length) {
+      html += `<div class="section-label list-head"><span>Saved</span><span class="list-head-count">${upcoming.length}</span></div>`;
+      groupEventsByDay(upcoming).forEach((day) => {
+        html += `<div class="ev-day">${esc(eventDayHeading(day.when))} <span class="ev-day-date">${esc(
+          humanDate(day.when)
+        )}</span></div>`;
+        day.items.forEach((e) => {
+          html += eventRow(e, -1, true);
+        });
+      });
+    }
+
+    if (past.length) {
+      html += `<div class="section-label list-head"><span>Been and gone</span><span class="list-head-count">${past.length}</span></div>`;
+      past.forEach((e) => {
+        html += eventRow(e, -1, true);
+      });
+    }
+
+    if (!upcoming.length && !past.length && eventSearch.status === "idle") {
+      html += `
+        <div class="card">
+          <p class="pick-status">Nothing saved yet. Everything else in this app is a place, which is there whether you
+             go on Tuesday or in March — this is the part that is only on while you're here.</p>
+        </div>
+      `;
+    }
+
+    view.innerHTML = html;
+    wireEvents();
+  }
+
+  function wireEvents() {
+    view.querySelectorAll("[data-ev-when]").forEach((b) =>
+      b.addEventListener("click", () => {
+        eventSearch.when = b.getAttribute("data-ev-when");
+        renderEvents();
+      })
+    );
+
+    view.querySelectorAll("[data-ev-kind]").forEach((b) =>
+      b.addEventListener("click", () => {
+        const key = b.getAttribute("data-ev-kind");
+        // Tapping one narrows to it; tapping the last one off goes back to
+        // all six, because a search for nothing is not a thing anybody wants.
+        const i = eventSearch.kinds.indexOf(key);
+        if (i >= 0) eventSearch.kinds.splice(i, 1);
+        else eventSearch.kinds.push(key);
+        renderEvents();
+      })
+    );
+
+    const centreBtn = document.getElementById("evCentre");
+    if (centreBtn) {
+      centreBtn.addEventListener("click", () => {
+        openAnchorSheet(() => {
+          eventSearch.centre = loadAnchor();
+          renderEvents();
+        });
+      });
+    }
+
+    const go = document.getElementById("evSearch");
+    if (go) go.addEventListener("click", () => runEventSearch());
+
+    view.querySelectorAll("[data-save-event]").forEach((b) =>
+      b.addEventListener("click", () => {
+        const e = eventSearch.results[Number(b.getAttribute("data-save-event"))];
+        if (!e) return;
+        // Straight into the list under the town it is in - there is no folder
+        // question worth asking about a thing that is on for one afternoon.
+        const folder = confidentFolderFor(e.lat, e.lon) || e.area || "Unsorted";
+        confirmAddCandidate(e, folder);
+        updatePick(pickId("custom", e.name), { kind: "event" });
+        renderEvents();
+      })
+    );
+
+    view.querySelectorAll("[data-open-pick]").forEach((b) =>
+      b.addEventListener("click", () => openPickDetail(b.getAttribute("data-open-pick")))
+    );
+
+    view.querySelectorAll("[data-open-maps]").forEach((b) =>
+      b.addEventListener("click", () => openExternal(b.getAttribute("data-open-maps")))
+    );
+  }
+
+  async function runEventSearch() {
+    const key = loadTripSettings().geminiKey.trim();
+    if (!key) {
+      eventSearch.status = "error";
+      eventSearch.error =
+        "Finding what's on needs an AI key — there is no free map database of events, the way there is for places. " +
+        "Settings has a Gemini key field; the free tier is enough for this.";
+      renderEvents();
+      return;
+    }
+    const centre = eventSearch.centre || loadAnchor() || derivedAnchor();
+    if (!centre || centre.lat == null) {
+      eventSearch.status = "error";
+      eventSearch.error = "Say where to look first — tap “Choose where” above.";
+      renderEvents();
+      return;
+    }
+
+    eventSearch.status = "loading";
+    eventSearch.error = "";
+    eventSearch.results = [];
+    renderEvents();
+
+    const radius = (centre.miles || DEFAULT_ANCHOR_MILES) * 1609;
+    try {
+      eventSearch.results = await eventsWithGemini(
+        centre,
+        eventSearch.when,
+        radius,
+        key,
+        eventSearch.kinds
+      );
+      eventSearch.status = "done";
+    } catch (e) {
+      eventSearch.status = "error";
+      eventSearch.error = e && e.message ? e.message : String(e);
+    }
+    renderEvents();
   }
 
   // Drops a saved event onto the planned day it falls on, if there is one.
@@ -7321,38 +7801,14 @@
     renderPicks();
 
     const key = loadTripSettings().geminiKey.trim();
-
-    // Events have no fallback. Overpass maps things that stay still and
-    // Nominatim geocodes names; neither has any idea what is on next
-    // Saturday. Saying so is better than running a place search and calling
-    // the result an answer to a different question.
-    if (explore.category === "events" && !key) {
-      explore.status = "error";
-      explore.error =
-        "Finding what's on needs an AI key — there is no free map database of events. " +
-        "Settings has a Gemini key field; the free tier is enough for this.";
-      renderPicks();
-      return;
-    }
-
     if (key) {
       try {
-        explore.results =
-          explore.category === "events"
-            ? await eventsWithGemini(explore.centre, explore.when, explore.radius, key)
-            : await exploreWithGemini(explore.centre, explore.category, explore.radius, key);
+        explore.results = await exploreWithGemini(explore.centre, explore.category, explore.radius, key);
         explore.usedAi = true;
         explore.status = "done";
         renderPicks();
         return;
       } catch (e) {
-        if (explore.category === "events") {
-          // Nothing else can answer this one, so the error is the result.
-          explore.status = "error";
-          explore.error = e && e.message ? e.message : String(e);
-          renderPicks();
-          return;
-        }
         // Recorded rather than swallowed, so a quiet drop to thinner data is
         // visible instead of just looking like a sparse area.
         explore.error = e && e.message ? e.message : String(e);
@@ -7419,10 +7875,7 @@
   function renderExploreCategoryButton() {
     const cat = findCategory(explore.category);
     const label = explore.category === "custom" ? `🔎 ${explore.customQuery}` : cat ? `${cat.icon} ${cat.label}` : "";
-    // Events build their own question from the dates, so there is no category
-    // prompt to rewrite - and a control that silently does nothing is worse
-    // than one that isn't there.
-    const tunable = cat && explore.category !== "custom" && explore.category !== "events";
+    const tunable = cat && explore.category !== "custom";
     return `
       <div class="cat-select-row">
         <button class="cat-select" id="exploreCatBtn">
@@ -7607,37 +8060,18 @@
     if (explore.centre) {
       body += `<p class="explore-centre">Around <b>${esc(explore.centre.name)}</b></p>`;
       body += renderExploreCategoryButton();
-      // A place search needs a where and a what. An event search needs a when
-      // as well, and it is the only question that has one - so the chips
-      // appear with the category rather than sitting on every search taking
-      // up room and meaning nothing.
-      if (explore.category === "events") {
-        const w = eventWindow(explore.when);
-        body += `
-          <div class="search-chips event-when">
-            ${EVENT_WINDOWS.map(
-              (x) =>
-                `<button class="search-chip${explore.when === x.key ? " on" : ""}" data-event-when="${esc(
-                  x.key
-                )}">${esc(x.label)}</button>`
-            ).join("")}
-          </div>
-          <p class="explore-note">${esc(humanDate(w.from))} – ${esc(humanDate(w.to))}</p>
-        `;
-      } else {
-        // The categories are a shortcut, not the whole vocabulary. Describing
-        // what you want was previously reachable only by opening the category
-        // sheet and finding the field at the top of it, which made the list look
-        // like the only thing the app could look for.
-        body += `
-          <form class="search-bar explore-describe" id="exploreDescribeForm">
-            <input type="text" id="exploreDescribeInput"
-                   placeholder="…or describe it — e.g. soft play with parking"
-                   autocomplete="off" value="${explore.category === "custom" ? esc(explore.customQuery) : ""}" />
-            <button type="submit" aria-label="Use this description">Use</button>
-          </form>
-        `;
-      }
+      // The categories are a shortcut, not the whole vocabulary. Describing
+      // what you want was previously reachable only by opening the category
+      // sheet and finding the field at the top of it, which made the list look
+      // like the only thing the app could look for.
+      body += `
+        <form class="search-bar explore-describe" id="exploreDescribeForm">
+          <input type="text" id="exploreDescribeInput"
+                 placeholder="…or describe it — e.g. soft play with parking"
+                 autocomplete="off" value="${explore.category === "custom" ? esc(explore.customQuery) : ""}" />
+          <button type="submit" aria-label="Use this description">Use</button>
+        </form>
+      `;
       body += `
         <div class="explore-radius">
           <label for="exploreRadius">Within</label>
@@ -7840,16 +8274,6 @@
 
     const runBtn = document.getElementById("exploreRunBtn");
     if (runBtn) runBtn.addEventListener("click", () => runExplore());
-
-    view.querySelectorAll("[data-event-when]").forEach((btn) =>
-      btn.addEventListener("click", () => {
-        explore.when = btn.getAttribute("data-event-when");
-        // Changing the dates changes the answer, so what is on screen is now
-        // out of date - the same bargain every other Explore control makes.
-        markExploreStale();
-        renderPicks();
-      })
-    );
 
     const catBtn = document.getElementById("exploreCatBtn");
     if (catBtn) catBtn.addEventListener("click", openCategoryPicker);
@@ -10801,7 +11225,9 @@
   // Changing where a search looks. Everything that can name a place is offered
   // in the order you are likely to have one: the areas you have saved, where
   // you are standing, and a box that takes a town or a postcode.
-  function openAnchorSheet() {
+  // `onDone` lets a caller that is not the search overlay react to the area
+  // changing - the What's on screen, which has its own list to redraw.
+  function openAnchorSheet(onDone) {
     const current = searchAnchor;
     const miles = anchorMiles(current);
     const areas = loadPicks().filter((p) => p.major && p.lat != null);
@@ -10873,6 +11299,10 @@
       useAnchorForThisSearch(chosen);
       saveAnchor(chosen);
       closePlaceModal();
+      if (onDone) {
+        onDone(chosen);
+        return;
+      }
       renderSearchOverlay();
       // Changing where to look is only ever done because the last answer was
       // wrong, so the search runs again rather than leaving it on screen.
@@ -14199,6 +14629,7 @@
     places: { render: () => renderPicksFiltered("place"), sub: () => `${picksOfKind("place").length} places to go` },
     eats: { render: () => renderPicksFiltered("eat"), sub: () => `${picksOfKind("eat").length} places to eat` },
     picks: { render: renderPicks, sub: () => "Everything you've saved" },
+    events: { render: renderEvents, sub: () => "Things with a date on them" },
     budget: { render: renderBudget, sub: () => "What this is costing" },
     tips: { render: renderTips, sub: () => "Notes & packing" },
   };
@@ -14213,6 +14644,7 @@
       itinerary: true,
       picks: true,
       kids: true,
+      events: true,
       // Reachable as views, but no longer tabs - there are no buttons for
       // these to hide or show.
       places: true,

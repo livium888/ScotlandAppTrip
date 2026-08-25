@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import http from "node:http";
 import fs from "node:fs";
+import { cpus } from "node:os";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const wwwDir = join(here, "..", "www");
@@ -67,8 +68,8 @@ const SUITES = [
   "test_notify.mjs",
   "test_people.mjs",
   "test_storage.mjs",
-  "test_events.mjs",
   "test_libs.mjs",
+  "test_whatson.mjs",
 ];
 
 const MIME = {
@@ -98,24 +99,63 @@ const server = http.createServer((req, res) => {
   });
 });
 
+// Suites ran one at a time, which made a full run about fifteen minutes -
+// and roughly seven of those were `waitForTimeout` calls sitting there doing
+// nothing while one core of the machine idled. They share only the read-only
+// server below; each drives its own browser and its own localStorage, so
+// there is nothing for them to collide over.
+//
+// Deliberately modest. Each suite is a whole Chromium, and running fifty of
+// those at once would trade a slow suite for a thrashing one.
+const LANES = Math.max(2, Math.min(6, (cpus().length || 4) - 1));
+
 function run(suite) {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [join(here, suite)], { stdio: "inherit" });
-    child.on("exit", (code) => resolve({ suite, code: code ?? 1 }));
+    const started = Date.now();
+    // Output is captured rather than inherited: with several running at once,
+    // interleaved output is unreadable, so each suite's is held and printed
+    // whole when it finishes.
+    const child = spawn(process.execPath, [join(here, suite)], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let out = "";
+    child.stdout.on("data", (d) => (out += d));
+    child.stderr.on("data", (d) => (out += d));
+    child.on("exit", (code) => {
+      const secs = ((Date.now() - started) / 1000).toFixed(1);
+      console.log(`\n=== ${suite} (${secs}s) ===`);
+      process.stdout.write(out);
+      resolve({ suite, code: code ?? 1, secs: Number(secs) });
+    });
   });
 }
 
 server.listen(PORT, async () => {
+  const queue = SUITES.slice();
   const results = [];
-  for (const suite of SUITES) {
-    console.log(`\n=== ${suite} ===`);
-    results.push(await run(suite));
-  }
+  const wallStart = Date.now();
+
+  // A lane takes the next suite off the queue whenever it is free, so one slow
+  // suite does not hold up a whole batch behind it.
+  const lane = async () => {
+    while (queue.length) {
+      const suite = queue.shift();
+      results.push(await run(suite));
+    }
+  };
+  await Promise.all(Array.from({ length: LANES }, lane));
   server.close();
 
   const failed = results.filter((r) => r.code !== 0);
+  const wall = ((Date.now() - wallStart) / 1000 / 60).toFixed(1);
+  const cpu = (results.reduce((a, r) => a + r.secs, 0) / 60).toFixed(1);
   console.log("\n──────── summary ────────");
-  results.forEach((r) => console.log(`${r.code === 0 ? "PASS" : "FAIL"}  ${r.suite}`));
+  // Slowest last, so the thing worth fixing is the thing you are looking at.
+  results
+    .slice()
+    .sort((a, b) => a.secs - b.secs)
+    .forEach((r) => console.log(`${r.code === 0 ? "PASS" : "FAIL"}  ${r.suite}  ${r.secs}s`));
+  console.log(`\n${results.length} suites in ${wall} min wall clock (${cpu} min of work, ${LANES} at a time).`);
   if (failed.length) {
     console.log(`\n${failed.length} suite(s) failed.`);
     process.exit(1);

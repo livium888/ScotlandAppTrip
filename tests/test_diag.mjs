@@ -136,7 +136,8 @@ const browser = await chromium.launch(LAUNCH_OPTS);
   await page.goto(BASE, { waitUntil: 'load' });
   await page.evaluate(() => document.querySelector('[data-view="picks"]').click());
   await page.waitForSelector('#exploreToggle');
-  check('Explore section present in Picks', true);
+  check('Explore section present in Picks', await page.evaluate(() =>
+    !!document.getElementById('exploreToggle')));
 
   await page.click('#exploreToggle');
   // The panel's own search field is gone - one search, at the top, whose

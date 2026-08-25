@@ -61,9 +61,49 @@ const openPicks = async () => {
 
 // ---------- One destination for one collection ----------
 
+// This used to assert `tabs.length <= 6`, and adding a seventh tab failed it.
+// Bumping the number to 7 would have been the easy fix and a worthless one -
+// the guard exists so the bar cannot creep, and a guard you raise whenever you
+// touch it is not a guard.
+//
+// So it measures the thing the number was standing in for: every tab has to be
+// wide enough to hit and its label has to fit without being cut off. Checked at
+// 320px as well as at the usual width, because that is the phone where a bar
+// with too much in it actually breaks.
 const tabs = await page.evaluate(() =>
   Array.from(document.querySelectorAll('.tab')).map((t) => t.getAttribute('data-view')));
-check('the tab bar is down to what a tab bar can show', tabs.length <= 6, JSON.stringify(tabs));
+
+const barAt = async (width) => {
+  await page.setViewportSize({ width, height: 780 });
+  await page.waitForTimeout(200);
+  return page.evaluate(() =>
+    Array.from(document.querySelectorAll('.tab'))
+      .filter((t) => !t.hidden)
+      .map((t) => {
+        const label = t.querySelector('.tab-label');
+        return {
+          view: t.getAttribute('data-view'),
+          width: Math.round(t.getBoundingClientRect().width),
+          // Truncated by the ellipsis, or wrapped onto a second line.
+          clipped: label.scrollWidth > label.clientWidth + 1,
+          lines: Math.round(label.getBoundingClientRect().height / 14),
+        };
+      }));
+};
+
+const wide = await barAt(390);
+const narrow = await barAt(320);
+await page.setViewportSize({ width: 390, height: 780 });
+
+check('every tab is big enough to hit with a thumb',
+  narrow.every((t) => t.width >= 44), JSON.stringify(narrow.map((t) => [t.view, t.width])));
+check('and no label is cut off, on the narrowest phone worth supporting',
+  narrow.every((t) => !t.clipped), JSON.stringify(narrow.filter((t) => t.clipped)));
+check('nor wrapped onto a second line, which knocks its icon out of line',
+  wide.every((t) => t.lines <= 1) && narrow.every((t) => t.lines <= 1),
+  JSON.stringify(narrow.map((t) => [t.view, t.lines])));
+// A hard ceiling still, just a generous one: past this the bar is a menu.
+check('and the bar is still a bar rather than a menu', tabs.length <= 7, JSON.stringify(tabs));
 check('Places and Eats are no longer separate destinations',
   !tabs.includes('places') && !tabs.includes('eats'), JSON.stringify(tabs));
 check('the saved list is still one tap away', tabs.includes('picks'), JSON.stringify(tabs));
