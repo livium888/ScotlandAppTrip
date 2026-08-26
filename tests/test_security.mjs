@@ -5,6 +5,7 @@
 // whatever arrives through the Android share sheet. None of that is trusted
 // input, and all of it ends up on screen.
 import { chromium } from 'playwright';
+import { goTo } from './lib/screens.mjs';
 import fs from 'node:fs';
 const SANDBOX_CHROMIUM = '/opt/pw-browsers/chromium';
 const LAUNCH_OPTS = fs.existsSync(SANDBOX_CHROMIUM) ? { executablePath: SANDBOX_CHROMIUM } : {};
@@ -72,7 +73,7 @@ await page.waitForTimeout(700);
 
 // --- Hostile text must render as text, on every screen ---
 for (const tab of ['today', 'kids', 'itinerary', 'places', 'eats', 'picks', 'budget', 'tips']) {
-  await page.evaluate((t) => document.querySelector(`[data-view="${t}"]`)?.click(), tab);
+  await goTo(page, tab, 0);
   await page.waitForTimeout(250);
 }
 check('no script runs from a hostile place name on any tab', executions.length === 0, JSON.stringify(executions));
@@ -115,6 +116,11 @@ await page.waitForTimeout(300);
 // The saved pick carries a javascript: website; its sheet must not offer it.
 await page.evaluate(() => document.querySelector('[data-view="picks"]').click());
 await page.waitForTimeout(300);
+// The Eats route above is Picks with its filter preset, and the filter is
+// still on when you come back to the tab - which is honest, since its chip
+// is lit, but it does mean asking for the whole list means saying so.
+await page.evaluate(() => document.querySelector('[data-pick-kind-filter="all"]')?.click());
+await page.waitForTimeout(250);
 await page.evaluate(() => document.querySelector('[data-open-pick]')?.click());
 await page.waitForSelector('#placeModal.open');
 await page.waitForTimeout(500);

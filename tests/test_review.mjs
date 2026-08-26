@@ -7,6 +7,7 @@
 // They are grouped by finding rather than by screen, so a failure here names
 // the bug rather than the tab it happened to show up on.
 import { chromium } from 'playwright';
+import { goTo } from './lib/screens.mjs';
 import fs from 'node:fs';
 const SANDBOX_CHROMIUM = '/opt/pw-browsers/chromium';
 const LAUNCH_OPTS = fs.existsSync(SANDBOX_CHROMIUM) ? { executablePath: SANDBOX_CHROMIUM } : {};
@@ -94,7 +95,7 @@ async function seed(id, contents) {
 const readPicks = (id) => page.evaluate((b) => JSON.parse(localStorage.getItem(`board:${b}:picks`) || '[]'), id);
 const readPlan = (id) => page.evaluate((b) => JSON.parse(localStorage.getItem(`board:${b}:plan`) || '{"days":[],"items":{}}'), id);
 const openTab = async (name) => {
-  await page.evaluate((t) => document.querySelector(`[data-view="${t}"]`).click(), name);
+  await goTo(page, name, 0);
   await page.waitForTimeout(400);
 };
 // Any attribute starting "on" is an event handler, and the app writes none of

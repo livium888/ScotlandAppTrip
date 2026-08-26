@@ -45,7 +45,7 @@ await page.route(/nominatim|wikidata|wikipedia|overpass|tile\.|open-meteo|photon
 
 const text = () => page.evaluate(() => document.getElementById('view').textContent.replace(/\s+/g, ' ').trim());
 const budget = async () => {
-  await page.evaluate(() => document.querySelector('[data-view="budget"]').click());
+  await page.evaluate(() => { document.querySelector('[data-view="more"]').click(); document.querySelector('[data-more="budget"]').click(); });
   await page.waitForTimeout(350);
 };
 

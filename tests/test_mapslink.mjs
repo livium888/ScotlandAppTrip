@@ -11,6 +11,7 @@
 // so it finds that Tesco rather than a Tesco and lands on the building rather
 // than near it.
 import { chromium } from 'playwright';
+import { goTo } from './lib/screens.mjs';
 import fs from 'node:fs';
 const SANDBOX_CHROMIUM = '/opt/pw-browsers/chromium';
 const LAUNCH_OPTS = fs.existsSync(SANDBOX_CHROMIUM) ? { executablePath: SANDBOX_CHROMIUM } : {};
@@ -63,7 +64,7 @@ await page.waitForTimeout(400);
 
 // Every outward link the app offers, wherever it offers it.
 const linksOn = async (tab) => {
-  await page.evaluate((t) => document.querySelector(`[data-view="${t}"]`).click(), tab);
+  await goTo(page, tab, 0);
   await page.waitForTimeout(500);
   return page.evaluate(() =>
     Array.from(document.querySelectorAll('[data-open-maps]')).map((e) => e.getAttribute('data-open-maps')));

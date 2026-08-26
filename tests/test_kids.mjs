@@ -13,6 +13,7 @@
 // And the search chips offered the asks people type anyway. The useful ones
 // are the ones that never occur to you.
 import { chromium } from 'playwright';
+import { goTo } from './lib/screens.mjs';
 import fs from 'node:fs';
 const SANDBOX_CHROMIUM = '/opt/pw-browsers/chromium';
 const LAUNCH_OPTS = fs.existsSync(SANDBOX_CHROMIUM) ? { executablePath: SANDBOX_CHROMIUM } : {};
@@ -46,10 +47,10 @@ await page.route(/wikidata|wikipedia|overpass|tile\.|open-meteo|photon|places\.g
 
 const picks = () => page.evaluate(() => JSON.parse(localStorage.getItem('board:b-k:picks') || '[]'));
 const viewText = () => page.evaluate(() => document.getElementById('view').textContent.replace(/\s+/g, ' ').trim());
-const tab = async (name) => {
-  await page.evaluate((n) => document.querySelector(`[data-view="${n}"]`).click(), name);
-  await page.waitForTimeout(400);
-};
+// Kids, Budget and Notes are rows in More rather than tabs of their own now,
+// so "go to that screen" means the tab if there is one and the More row if
+// there is not.
+const tab = async (name) => goTo(page, name, 400);
 
 // A day today and a day tomorrow, so "which day is it" has a right answer that
 // changes at midnight.
@@ -112,8 +113,14 @@ check('coming back to the app moves it on to the right day',
 
 // ---------- The kids list ----------
 
-check('there is a tab for the kids', await page.evaluate(() =>
-  !!document.querySelector('[data-view="kids"]')));
+// No longer a tab of its own - seven along the bottom of a phone is a menu
+// rather than a bar. It is a row in More, one tap from anywhere.
+await tab('more');
+check('there is a way to the kids list', await page.evaluate(() =>
+  !!document.querySelector('[data-more="kids"]')));
+check('and it says how many are marked rather than just naming itself',
+  await page.evaluate(() => /marked/.test(document.querySelector('[data-more="kids"]').textContent)),
+  await page.evaluate(() => document.querySelector('[data-more="kids"]').textContent.replace(/\s+/g, ' ')));
 check('and the Trip tab that counted things is gone', await page.evaluate(() =>
   !document.querySelector('[data-view="overview"]')));
 

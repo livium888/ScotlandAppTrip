@@ -4,6 +4,7 @@
 // screen. This walks one manually added place through all of it on a board
 // that has none of the bundled Scotland content.
 import { chromium } from 'playwright';
+import { goTo } from './lib/screens.mjs';
 import fs from 'node:fs';
 const SANDBOX_CHROMIUM = '/opt/pw-browsers/chromium';
 const LAUNCH_OPTS = fs.existsSync(SANDBOX_CHROMIUM) ? { executablePath: SANDBOX_CHROMIUM } : {};
@@ -19,7 +20,7 @@ page.on('pageerror', (e) => { console.log('PAGEERROR:', e.message); failures++; 
 await page.route(/nominatim|wikidata|wikipedia|overpass|googleapis|tile\./, (r) => r.abort());
 
 const tab = async (name) => {
-  await page.evaluate((t) => document.querySelector(`[data-view="${t}"]`).click(), name);
+  await goTo(page, name, 0);
   await page.waitForTimeout(250);
 };
 // Places and Eats stopped being destinations and became a filter on the one

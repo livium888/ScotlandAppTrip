@@ -13,6 +13,7 @@
 // One control now, and the order chosen decides the sections as well as the
 // rows.
 import { chromium } from 'playwright';
+import { goTo } from './lib/screens.mjs';
 import fs from 'node:fs';
 const SANDBOX_CHROMIUM = '/opt/pw-browsers/chromium';
 const LAUNCH_OPTS = fs.existsSync(SANDBOX_CHROMIUM) ? { executablePath: SANDBOX_CHROMIUM } : {};
@@ -28,7 +29,7 @@ page.on('pageerror', (e) => { console.log('PAGEERROR:', e.message); failures++; 
 await page.route(/generativelanguage|nominatim|wikidata|wikipedia|overpass|tile\.|open-meteo|photon|places\.googleapis/, (r) => r.abort());
 
 const tab = async (n) => {
-  await page.evaluate((x) => document.querySelector(`[data-view="${x}"]`).click(), n);
+  await goTo(page, n, 0);
   await page.waitForTimeout(350);
 };
 const order = async (key) => {

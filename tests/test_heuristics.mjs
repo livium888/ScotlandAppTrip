@@ -102,8 +102,17 @@ check('and no label is cut off, on the narrowest phone worth supporting',
 check('nor wrapped onto a second line, which knocks its icon out of line',
   wide.every((t) => t.lines <= 1) && narrow.every((t) => t.lines <= 1),
   JSON.stringify(narrow.map((t) => [t.view, t.lines])));
-// A hard ceiling still, just a generous one: past this the bar is a menu.
-check('and the bar is still a bar rather than a menu', tabs.length <= 7, JSON.stringify(tabs));
+// A hard ceiling still: past this the bar is a menu. It got there - seven -
+// and the answer was not to raise the number but to move the three screens
+// that were only worth opening once a day behind one that is.
+check('and the bar is still a bar rather than a menu', tabs.length <= 5, JSON.stringify(tabs));
+check('with one place holding everything that is not a tab',
+  tabs.includes('more'), JSON.stringify(tabs));
+check('and the screens that stopped being tabs are still one tap from it',
+  await page.evaluate(() => {
+    document.querySelector('[data-view="more"]').click();
+    return ['kids', 'budget', 'tips'].every((n) => !!document.querySelector(`[data-more="${n}"]`));
+  }));
 check('Places and Eats are no longer separate destinations',
   !tabs.includes('places') && !tabs.includes('eats'), JSON.stringify(tabs));
 check('the saved list is still one tap away', tabs.includes('picks'), JSON.stringify(tabs));

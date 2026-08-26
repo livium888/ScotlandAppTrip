@@ -174,7 +174,7 @@ await page.evaluate(() => {
 });
 await page.reload({ waitUntil: 'load' });
 await page.waitForTimeout(500);
-await page.evaluate(() => document.querySelector('[data-view="budget"]').click());
+await page.evaluate(() => { document.querySelector('[data-view="more"]').click(); document.querySelector('[data-more="budget"]').click(); });
 await page.waitForTimeout(600);
 const budget = await page.evaluate(() => document.getElementById('view').textContent.replace(/\s+/g, ' '));
 check('the total is split per person', /an adult/.test(budget), budget.slice(0, 400));
@@ -186,7 +186,7 @@ check('and it says how many it divided by', /across 3 of you/.test(budget), budg
 await setPeople([{ name: 'Sam', age: 38 }]);
 await page.reload({ waitUntil: 'load' });
 await page.waitForTimeout(500);
-await page.evaluate(() => document.querySelector('[data-view="budget"]').click());
+await page.evaluate(() => { document.querySelector('[data-view="more"]').click(); document.querySelector('[data-more="budget"]').click(); });
 await page.waitForTimeout(600);
 check('travelling alone, there is nothing to split', await page.evaluate(() =>
   !/an adult · |across 1 of you/.test(document.getElementById('view').textContent)));

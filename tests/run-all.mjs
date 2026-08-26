@@ -70,6 +70,8 @@ const SUITES = [
   "test_storage.mjs",
   "test_libs.mjs",
   "test_whatson.mjs",
+  "test_recall.mjs",
+  "test_more.mjs",
 ];
 
 const MIME = {

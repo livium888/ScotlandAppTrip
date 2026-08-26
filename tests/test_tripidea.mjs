@@ -124,6 +124,16 @@ await page.route(/nominatim\.openstreetmap\.org/, (route) => {
 await page.route(/wikidata|wikipedia|overpass|tile\.|open-meteo|photon|places\.googleapis/, (r) => r.abort());
 
 const readPicks = () => page.evaluate(() => JSON.parse(localStorage.getItem('board:b-i:picks') || '[]'));
+
+// Waiting on the thing being asserted rather than on a guess at how long it
+// takes. This suite was 33 seconds of sleeping - and a sleep is both the slow
+// answer and the flaky one, since it is either longer than the wait needs or
+// shorter than the wait sometimes is.
+const until = (fn, arg) => page.waitForFunction(fn, arg, { timeout: 20000 });
+const untilText = (sel, re) => page.waitForFunction(
+  ([s, r]) => new RegExp(r).test(document.querySelector(s)?.textContent || ''),
+  [sel, re.source], { timeout: 20000 });
+
 const readPlan = () => page.evaluate(() => JSON.parse(localStorage.getItem('board:b-i:plan') || '{"days":[],"items":{}}'));
 const readFolders = () => page.evaluate(() => JSON.parse(localStorage.getItem('board:b-i:folders') || '[]'));
 const sentence = () => page.evaluate(() => (document.getElementById('ideaSentence') || {}).textContent || '');
@@ -388,13 +398,13 @@ check('a time the model gave is kept', await page.evaluate(() =>
 
 // ---------- The mileage is measured, not believed ----------
 
-await page.waitForTimeout(1200);
+await untilText('.idea-stop-meta', /\d+ mi out/);
 check('a stop is shown with its real distance from the start', await page.evaluate(() =>
   /\d+ mi out/.test(document.querySelector('.idea-stop-meta').textContent)),
   await page.evaluate(() => document.querySelector('.idea-stop-meta').textContent));
 
 await page.evaluate(() => document.querySelectorAll('[data-idea-option]')[1].click());
-await page.waitForTimeout(1500);
+await until(() => !!document.querySelector('.idea-stop.over')).catch(() => {});
 check('a stop that is really 180 miles away is flagged, whatever the model claimed',
   await page.evaluate(() => !!document.querySelector('.idea-stop.over')),
   await page.evaluate(() => (document.querySelector('.idea-stop') || {}).textContent || ''));
@@ -421,7 +431,7 @@ check('and the button names the place it would swap to', await page.evaluate(() 
 
 await page.evaluate(() => document.querySelector('[data-idea-swap]').click());
 await page.waitForSelector('.chooser-sheet', { timeout: 4000 });
-await page.waitForTimeout(1200);
+await untilText('.chooser-sheet .modal-title', /Dunkeld Cathedral/).catch(() => {});
 const chooserText = () => page.evaluate(() => document.getElementById('placeModal').textContent);
 const chooserTitle = () => page.evaluate(() =>
   (document.querySelector('.chooser-sheet .modal-title') || {}).textContent || '');
@@ -438,7 +448,9 @@ const beforeSwap = await page.evaluate(() =>
   document.querySelector('.idea-stop-name').textContent.trim());
 
 await page.evaluate(() => document.querySelector('[data-choice-move="1"]').click());
-await page.waitForTimeout(1400);
+await untilText('.chooser-sheet .modal-title', /Birnam Oak/).catch(() => {});
+// The mileage for the alternative is looked up when it comes into view.
+await untilText('#placeModal', /\d+ miles from Edinburgh/).catch(() => {});
 check('moving on shows the alternative in full', /Birnam Oak/.test(await chooserTitle()), await chooserTitle());
 check('with why it was suggested', /on foot from the bridge/.test(await chooserText()));
 check('and how far out it really is, looked up for it',
@@ -456,11 +468,11 @@ await page.evaluate(() => {
   el.dispatchEvent(new TouchEvent('touchstart', { bubbles: true, changedTouches: [touch(300)] }));
   el.dispatchEvent(new TouchEvent('touchend', { bubbles: true, changedTouches: [touch(140)] }));
 });
-await page.waitForTimeout(900);
+await untilText('.chooser-sheet .modal-title', /Birnam Oak/).catch(() => {});
 check('swiping moves between them too', /Birnam Oak/.test(await chooserTitle()), await chooserTitle());
 
 await page.evaluate(() => document.querySelector('[data-choice-use]').click());
-await page.waitForTimeout(900);
+await untilText('.idea-stop-name', /Birnam Oak/).catch(() => {});
 const swapped = await page.evaluate(() =>
   Array.from(document.querySelectorAll('.idea-stop-name')).map((e) => e.textContent.trim()));
 check('choosing one puts it in the trip', /Birnam Oak/.test(swapped[0] || ''), JSON.stringify(swapped));
@@ -470,19 +482,20 @@ check('and the sheet closes', await page.evaluate(() =>
 // The one replaced is still there to go back to.
 await page.evaluate(() => document.querySelector('[data-idea-swap]').click());
 await page.waitForSelector('.chooser-sheet', { timeout: 4000 });
-await page.waitForTimeout(800);
+await page.waitForSelector('.chooser-sheet', { timeout: 8000 });
 await page.evaluate(() => document.querySelector('[data-choice-move="1"]').click());
-await page.waitForTimeout(1000);
+await untilText('.chooser-sheet .modal-title', /Dunkeld Cathedral/).catch(() => {});
 check('the one you replaced is still an option', /Dunkeld Cathedral/.test(await chooserTitle()), await chooserTitle());
 await page.evaluate(() => document.querySelector('[data-choice-use]').click());
-await page.waitForTimeout(900);
+await untilText('.idea-stop-name', /Dunkeld Cathedral/).catch(() => {});
 check('so choosing it brings the first one back', await page.evaluate(() =>
   /Dunkeld Cathedral/.test(document.querySelector('.idea-stop-name').textContent)));
 
 // ---------- A single stop, without taking the whole route ----------
 
 await page.evaluate(() => document.querySelector('[data-idea-add]').click());
-await page.waitForTimeout(1200);
+await until(() => JSON.parse(localStorage.getItem('board:b-i:picks') || '[]')
+  .some((p) => /Dunkeld Cathedral/.test(p.name))).catch(() => {});
 const savedOne = (await readPicks()).find((p) => /Dunkeld Cathedral/.test(p.name));
 check('a stop can be saved on its own', !!savedOne, JSON.stringify((await readPicks()).map((p) => p.name)));
 check('filed under the town it is in, not Unsorted', !!savedOne && savedOne.city === 'Dunkeld', JSON.stringify(savedOne));
@@ -507,7 +520,8 @@ check('and the trip screen is still where you left it', await page.evaluate(() =
 
 await page.evaluate(() => localStorage.setItem('board:b-i:plan', JSON.stringify({ days: [], items: {} })));
 await page.evaluate(() => document.querySelector('[data-idea-use]').click());
-await page.waitForTimeout(2000);
+await until(() => (JSON.parse(localStorage.getItem('board:b-i:plan') || '{}').days || []).length >= 2)
+  .catch(() => {});
 
 const plan = await readPlan();
 check('building the trip makes a day per day of the route', plan.days.length === 2,
@@ -784,7 +798,7 @@ await chip('Edinburgh');
 await page.waitForTimeout(200);
 await goToStep('review');
 await next();
-await page.waitForTimeout(3000);
+await untilText('#ideaOverlay', /cannot help with that request/).catch(() => {});
 check('a refusal is reported with what it actually said', await page.evaluate(() =>
   /cannot help with that request/.test(document.getElementById('ideaOverlay').textContent)),
   await page.evaluate(() => document.getElementById('ideaOverlay').textContent.slice(0, 260)));

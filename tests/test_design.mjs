@@ -53,6 +53,22 @@ await page.waitForTimeout(600);
 // rather than something a person typed.
 const EMOJI = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}]/u;
 
+// Three screens are rows in More rather than tabs of their own now. This
+// reaches any of them the way a person would.
+await page.addInitScript(() => {
+  window.goToScreen = (name) => {
+    const t = document.querySelector(`[data-view="${name}"]`);
+    if (t) return t.click();
+    const more = document.querySelector('[data-view="more"]');
+    if (!more) return;
+    more.click();
+    const row = document.querySelector(`[data-more="${name}"]`);
+    if (row) row.click();
+  };
+});
+await page.reload({ waitUntil: 'load' });
+await page.waitForTimeout(500);
+
 // ---------- The bar along the bottom ----------
 
 const tabs = await page.evaluate(() => Array.from(document.querySelectorAll('.tab')).map((t) => ({
@@ -62,7 +78,7 @@ const tabs = await page.evaluate(() => Array.from(document.querySelectorAll('.ta
 })));
 // The count was incidental - this check is about icons being drawn rather
 // than typed, and how many tabs there are is test_heuristics' business.
-check('every tab is drawn, not typed', tabs.length >= 6 && tabs.every((t) => t.svgs === 1),
+check('every tab is drawn, not typed', tabs.length >= 4 && tabs.every((t) => t.svgs === 1),
   JSON.stringify(tabs));
 check('and no emoji survives in it', !tabs.some((t) => EMOJI.test(t.text)), JSON.stringify(tabs.map((t) => t.text)));
 check('the tab you are on is marked', await page.evaluate(() =>
@@ -88,8 +104,8 @@ check('and it actually loaded rather than falling back', await page.evaluate(asy
 
 // ---------- Chrome across the screens ----------
 
-for (const tab of ['today', 'kids', 'itinerary', 'picks', 'budget', 'tips']) {
-  await page.evaluate((t) => document.querySelector(`[data-view="${t}"]`)?.click(), tab);
+for (const tab of ['today', 'more', 'kids', 'itinerary', 'picks', 'events', 'budget', 'tips']) {
+  await page.evaluate((t) => window.goToScreen(t), tab);
   await page.waitForTimeout(250);
   const found = await page.evaluate(() => {
     // Buttons only: a place name or a note is the user's text and may contain
@@ -247,8 +263,8 @@ const barIsOnTop = () => page.evaluate(() => {
   }) && b.bottom <= window.innerHeight + 1;
 });
 
-for (const tab of ['today', 'kids', 'itinerary', 'picks', 'budget', 'tips']) {
-  await page.evaluate((t) => document.querySelector(`[data-view="${t}"]`)?.click(), tab);
+for (const tab of ['today', 'more', 'kids', 'itinerary', 'picks', 'events', 'budget', 'tips']) {
+  await page.evaluate((t) => window.goToScreen(t), tab);
   await page.waitForTimeout(250);
   check(`the tab bar is reachable on ${tab}`, await barIsOnTop());
 }
@@ -261,7 +277,7 @@ await page.evaluate(() => { document.getElementById('view').scrollTop = 500; });
 await page.waitForTimeout(300);
 check('and still reachable with a long list scrolled under it', await barIsOnTop());
 check('a tap there really lands on the tab', await page.evaluate(() => {
-  const t = document.querySelector('[data-view="tips"]');
+  const t = document.querySelector('[data-view="more"]');
   const r = t.getBoundingClientRect();
   const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
   // Whatever is topmost there may be the icon inside the button; what matters
@@ -269,7 +285,7 @@ check('a tap there really lands on the tab', await page.evaluate(() => {
   const tab = hit && hit.closest ? hit.closest('.tab') : null;
   if (!tab) return false;
   tab.click();
-  return document.getElementById('view').dataset.activeTab === 'tips';
+  return document.getElementById('view').dataset.activeTab === 'more';
 }));
 
 // Nothing inside a screen can reach past the scroller, however it is styled -

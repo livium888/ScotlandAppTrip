@@ -118,11 +118,21 @@ await page.evaluate(() => {
 await page.reload({ waitUntil: 'load' });
 await page.waitForTimeout(600);
 
+// The search takes as long as it takes; sleeping a guess at it is either
+// flaky or slow, and this suite was both. The loading card is on screen for
+// exactly as long as the search runs, so that is the thing to wait on.
+const searchDone = async () => {
+  await page.waitForFunction(
+    () => !/Asking six different ways/.test(document.getElementById('view').textContent),
+    null, { timeout: 40000 });
+  await page.waitForTimeout(250);
+};
+
 // ---------- It has a home of its own ----------
 
 check('there is a tab for it, not a category buried in the place search',
   await page.evaluate(() => !!document.querySelector('.tabbar [data-view="events"]')));
-check('and its label fits on one line like the other six', await page.evaluate(() => {
+check('and its label fits on one line like the rest', await page.evaluate(() => {
   const labels = Array.from(document.querySelectorAll('.tabbar .tab-label'));
   const heights = labels.map((l) => l.getBoundingClientRect().height);
   return Math.max(...heights) - Math.min(...heights) < 2;
@@ -142,7 +152,7 @@ check('and the kinds of thing to look for', await page.evaluate(() =>
 // ---------- Recall: six questions, not one ----------
 
 await page.evaluate(() => document.getElementById('evSearch').click());
-await page.waitForTimeout(11000);
+await searchDone();
 
 check('it asks six different questions rather than one general one',
   geminiCalls === 6, `${geminiCalls} calls`);
@@ -198,7 +208,9 @@ check('and the whole list says where it came from',
 // ---------- Saving one ----------
 
 await page.evaluate(() => document.querySelector('[data-save-event]').click());
-await page.waitForTimeout(2000);
+await page.waitForFunction(() =>
+  JSON.parse(localStorage.getItem('board:b-w:picks') || '[]').some((p) => p.kind === 'event'),
+  null, { timeout: 15000 });
 const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('board:b-w:picks')).filter((p) => p.kind === 'event'));
 check('saving keeps it as an event', saved.length === 1, JSON.stringify(saved.map((p) => [p.name, p.kind])));
 check('with its date', !!(saved[0] && saved[0].startsAt), saved[0] && saved[0].startsAt);
@@ -207,10 +219,16 @@ check('and it moves into a section of its own', /Saved/.test(await screen()), (a
 // ---------- Narrowing to one kind ----------
 
 geminiCalls = 0;
+// The form folds away once it has answered, so changing the question means
+// opening it again first - which is the point of the fold.
+check('the form folded away once it had answered', await page.evaluate(() =>
+  !!document.getElementById('evEdit')));
+await page.evaluate(() => document.getElementById('evEdit').click());
+await page.waitForTimeout(300);
 await page.evaluate(() => document.querySelector('[data-ev-kind="market"]').click());
 await page.waitForTimeout(300);
 await page.evaluate(() => document.getElementById('evSearch').click());
-await page.waitForTimeout(6000);
+await searchDone();
 check('picking one kind asks one question, not six', geminiCalls === 1, `${geminiCalls} calls`);
 
 // ---------- No key is a plain answer, not an empty screen ----------
@@ -361,7 +379,7 @@ check('the chosen moment is shown back to you', await page.evaluate(() =>
 // The model is told, so it does not spend its answer on the morning.
 promptsSeen = [];
 await page.evaluate(() => document.getElementById('evSearch').click());
-await page.waitForTimeout(9000);
+await searchDone();
 check('and the model is told to skip what finishes before then',
   promptsSeen.length > 0 && promptsSeen.every((p) => /still going at 15:00 or later/.test(p)),
   (promptsSeen[0] || '').slice(0, 300));

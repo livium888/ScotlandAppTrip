@@ -2,6 +2,7 @@
 // trip, an undated one is just a list worth keeping. The migration is the
 // part that matters most - existing picks and plans must survive it.
 import { chromium } from 'playwright';
+import { goTo } from './lib/screens.mjs';
 import fs from 'node:fs';
 const SANDBOX_CHROMIUM = '/opt/pw-browsers/chromium';
 const LAUNCH_OPTS = fs.existsSync(SANDBOX_CHROMIUM) ? { executablePath: SANDBOX_CHROMIUM } : {};
@@ -80,18 +81,25 @@ const tabs = await page.evaluate(() => Array.from(document.querySelectorAll('.ta
 // Every tool works on every board - the places you save yourself are what
 // fill them. Today is the one exception: with no days planned it would be an
 // empty screen rather than a feature.
-check('a new board gets Picks, Budget and Tips too', ['picks', 'budget', 'tips'].every((t) => tabs.includes(t)), JSON.stringify(tabs));
+check('a new board gets the saved list and what\'s on', ['picks', 'events'].every((t) => tabs.includes(t)), JSON.stringify(tabs));
+// Budget and Notes are not tabs any more, but "every tool works on every
+// board" is still the rule - they are one tap away in More, on a brand new
+// board as much as on the first one.
+check('and the budget and notes, one tap away in More', await page.evaluate(() => {
+  document.querySelector('[data-view="more"]').click();
+  return ['budget', 'tips', 'kids'].every((n) => !!document.querySelector(`[data-more="${n}"]`));
+}));
 // Places and Eats were folded into Picks as a filter - three destinations for
 // one collection was three of eight tab slots saying the same thing.
 check('Places and Eats are no longer tabs of their own', !tabs.includes('places') && !tabs.includes('eats'), JSON.stringify(tabs));
-check('the tab bar stays within the five-or-so it can show properly', tabs.length <= 6, JSON.stringify(tabs));
+check('the tab bar stays within the five it can show properly', tabs.length <= 5, JSON.stringify(tabs));
 check('a new board can be planned', tabs.includes('itinerary'), JSON.stringify(tabs));
 check('Today stays hidden until there are days', !tabs.includes('today'), JSON.stringify(tabs));
 check('undated board still has Picks', tabs.includes('picks'), JSON.stringify(tabs));
 
 // ...but none of the bundled Edinburgh content leaks onto it.
 for (const [tab, marker] of [['picks', 'Edinburgh Castle'], ['picks', 'Independent, well-reviewed'], ['tips', 'Cramond']]) {
-  await page.evaluate((t) => document.querySelector(`[data-view="${t}"]`).click(), tab);
+  await goTo(page, tab, 0);
   await page.waitForTimeout(200);
   const text = await page.evaluate(() => document.getElementById('view').textContent);
   check(`no bundled Scotland content on the new board's ${tab} tab`, !new RegExp(marker, 'i').test(text), text.slice(0, 140));

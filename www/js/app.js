@@ -7207,14 +7207,31 @@
     return x;
   }
 
-  // Deliberately strict. A model asked for YYYY-MM-DD mostly gives it, and
-  // anything else - "next Saturday", "late August" - is not a date you can
-  // put in a day of a plan, so it is refused rather than guessed at.
+  // Strict about meaning, forgiving about punctuation. "next Saturday" or
+  // "late August" is refused, because that is not a date you can put on a day
+  // of a plan and guessing at it would be inventing the answer.
+  //
+  // But 2026-8-3, 2026/08/03 and 2026-08-03T19:30:00Z all say exactly one
+  // day, unambiguously, and the first version threw all three away for not
+  // being typed the way it asked. That is a real event lost to a formatting
+  // preference, and there were more of them than there should have been.
   function parseEventDate(value) {
-    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || "").trim());
+    const text = String(value || "").trim();
+    // A time or timezone on the end names the same day; anything after the
+    // date is dropped rather than the whole value being refused.
+    const m = /^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:[T ].*)?$/.exec(text);
     if (!m) return null;
-    const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
-    return Number.isNaN(d.getTime()) ? null : d;
+    const year = Number(m[1]);
+    const month = Number(m[2]);
+    const day = Number(m[3]);
+    // Checked rather than left to Date, which rolls 2026-13-40 forward into
+    // the next year without complaint.
+    if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+    const d = new Date(year, month - 1, day);
+    if (Number.isNaN(d.getTime())) return null;
+    // The 31st of a 30-day month is not a date, it is a mistake.
+    if (d.getMonth() !== month - 1 || d.getDate() !== day) return null;
+    return d;
   }
 
   // Six questions instead of one. This is the whole reason the old version
@@ -7286,8 +7303,15 @@
     );
   }
 
-  // Kept so the screen can say why a list is shorter than it looks.
-  let eventsDropped = { unplaced: 0, undated: 0, tooFar: 0, finished: 0 };
+  // Kept so the screen can say why a list is shorter than it looks - and it
+  // says so whether or not anything survived, which is the whole point. A
+  // count that only appears when the search fails completely is no use to
+  // somebody looking at six results wondering where the other thirty went.
+  const NO_DROPS = { unplaced: 0, undated: 0, outside: 0, tooFar: 0, finished: 0, merged: 0 };
+  let eventsDropped = Object.assign({}, NO_DROPS);
+  // The ones that can be shown anyway, with the reason attached. Something we
+  // could not place is still a real listing with a name, a date and a link.
+  let eventsHeldBack = [];
 
   // Two listings of the same thing from two angles - a ceilidh is both music
   // and local - should be one row.
@@ -7297,6 +7321,38 @@
       .replace(/^(the|a)\s+/, "")
       .replace(/[^a-z0-9]+/g, "");
     return `${name}|${String(event.startsAt || "").slice(0, 10)}`;
+  }
+
+  // Said out loud on the screen after every search, not only after a failed
+  // one. "Found 6" with nothing else on the page is what makes an app feel
+  // like it is holding things back; "Found 6, left out 14" with the reasons
+  // is the same search being honest about itself.
+  function describeEventDrops() {
+    const d = eventsDropped;
+    return [
+      d.undated ? `${d.undated} had no usable date` : "",
+      d.outside ? `${d.outside} fell outside those dates` : "",
+      d.finished ? `${d.finished} had already finished by then` : "",
+      d.tooFar ? `${d.tooFar} looked like somewhere else` : "",
+      d.unplaced ? `${d.unplaced} couldn't be placed on the map` : "",
+      d.merged ? `${d.merged} were the same thing found twice` : "",
+    ]
+      .filter(Boolean)
+      .join(", ");
+  }
+
+  // Whether two listings that share a name and a date are actually the same
+  // thing. "Farmers' Market" on a Saturday is the same event twice if both
+  // say Stirling, and two different markets if one says Stirling and the
+  // other says Callander - and merging those lost a real event every time.
+  function sameEventPlace(a, b) {
+    const flat = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+    const townA = flat(a.area);
+    const townB = flat(b.area);
+    // One of them not saying where it is proves nothing either way, so the
+    // name-and-date match stands.
+    if (!townA || !townB) return true;
+    return townA === townB || townA.includes(townB) || townB.includes(townA);
   }
 
   async function askOneAngle(key, centre, window, radiusMetres, angle) {
@@ -7329,9 +7385,20 @@
   // roughly, or when the place it names is genuinely somewhere else.
   async function placeEvent(event, centre, anchor) {
     const tries = [
-      { q: event.venue, hint: event.area || centre.name, exact: true },
-      { q: event.area, hint: null, exact: false },
+      { q: event.venue, hint: event.area || centre.name, exact: true, decides: false },
+      { q: event.area, hint: null, exact: false, decides: true },
     ];
+    // A venue name is a weak claim about geography. "The Corn Exchange", "The
+    // Barn", "St Mary's Hall" and "The Guildhall" exist in fifty towns, and a
+    // gazetteer hit on the wrong one used to end the event there and then -
+    // returned as "too far away" before the town it actually named was ever
+    // looked at. That is one of the ways a search came back with four results
+    // when the web had forty.
+    //
+    // So an out-of-area venue is remembered and stepped past. Only the town
+    // is trusted to rule an event out, because the town is the field the
+    // model is actually reliable about.
+    let venueLandedElsewhere = false;
     for (const attempt of tries) {
       if (!attempt.q) continue;
       let geo = null;
@@ -7342,7 +7409,11 @@
       }
       if (!geo) continue;
       // Wherever it landed, it still has to be in the area asked about.
-      if (!confirmedWithinAnchor(anchor, geo.lat, geo.lon, ANCHOR_GRACE)) return { tooFar: true };
+      if (!confirmedWithinAnchor(anchor, geo.lat, geo.lon, ANCHOR_GRACE)) {
+        if (attempt.decides) return { tooFar: true };
+        venueLandedElsewhere = true;
+        continue;
+      }
       return {
         lat: geo.lat,
         lon: geo.lon,
@@ -7362,7 +7433,9 @@
     // Without this check, a listing whose area reads "Chelsea, London" failed
     // every anchored attempt and then got planted in the middle of Stirling,
     // which is the exact bug the anchor work existed to kill.
-    if (!event.area || centre.lat == null) return null;
+    // Nothing left to check: with no town named, an out-of-area venue is the
+    // only evidence there is, and it says elsewhere.
+    if (!event.area || centre.lat == null) return venueLandedElsewhere ? { tooFar: true } : null;
     let anywhere = null;
     try {
       anywhere = await geocodePlace(event.area, null, null);
@@ -7398,7 +7471,8 @@
   }
 
   async function eventsWithGemini(centre, windowKey, radiusMetres, key, angleKeys) {
-    eventsDropped = { unplaced: 0, undated: 0, tooFar: 0, finished: 0 };
+    eventsDropped = Object.assign({}, NO_DROPS);
+    eventsHeldBack = [];
     const window = eventWindow(windowKey);
     const angles = EVENT_ANGLES.filter(
       (a) => !angleKeys || !angleKeys.length || angleKeys.includes(a.key)
@@ -7427,10 +7501,15 @@
     // the music and the local angle should cost one lookup, not two.
     const seen = new Map();
     answers.forEach(({ list, sources, angle }) => {
-      list.slice(0, 30).forEach((item) => {
+      list.slice(0, 40).forEach((item) => {
         const event = normaliseEvent(item, window);
         if (!event) {
-          eventsDropped.undated++;
+          // Two different failures wearing one name. "The model gave no
+          // usable date" and "it is real but not in the days you asked
+          // about" want different answers from you, so they are counted
+          // apart and said apart.
+          if (!parseEventDate(item && item.date)) eventsDropped.undated++;
+          else eventsDropped.outside++;
           return;
         }
         if (!stillOnAt(event, cutoff)) {
@@ -7439,16 +7518,22 @@
         }
         const id = eventFingerprint(event);
         const existing = seen.get(id);
-        if (existing) {
+        if (existing && sameEventPlace(existing.event, event)) {
           // Found from two angles is a small vote of confidence, and worth
           // keeping whichever version knows more.
+          eventsDropped.merged++;
           existing.angles.push(angle);
           if (!existing.event.ticketUrl && event.ticketUrl) existing.event.ticketUrl = event.ticketUrl;
           if (!existing.event.venue && event.venue) existing.event.venue = event.venue;
           if (!existing.event.time && event.time) existing.event.time = event.time;
+          if (!existing.event.endTime && event.endTime) existing.event.endTime = event.endTime;
+          if (!existing.event.description && event.description) existing.event.description = event.description;
           return;
         }
-        seen.set(id, { event, sources, angles: [angle] });
+        // Same name, same day, different town: two events, not one.
+        const key = existing ? `${id}|${String(event.area || "").toLowerCase()}` : id;
+        if (seen.has(key)) return;
+        seen.set(key, { event, sources, angles: [angle] });
       });
     });
 
@@ -7459,12 +7544,19 @@
 
     const placed = await inBatches(candidates, 4, async ({ event, sources, angles: found }) => {
       const spot = await placeEvent(event, centre, anchor);
+      // Neither of these is a reason to pretend the listing does not exist.
+      // It has a name, a date, usually a venue and often a ticket link; the
+      // only thing missing is a pin, and hiding the whole thing over a pin is
+      // how a list of forty turns into a list of six. They are kept aside,
+      // counted, and shown on request with the reason attached.
       if (!spot) {
         eventsDropped.unplaced++;
+        eventsHeldBack.push(Object.assign({}, event, { kinds: found, sources, why: "couldn't be placed on the map" }));
         return null;
       }
       if (spot.tooFar) {
         eventsDropped.tooFar++;
+        eventsHeldBack.push(Object.assign({}, event, { kinds: found, sources, why: "looks like it's somewhere else" }));
         return null;
       }
       return Object.assign(event, {
@@ -7485,14 +7577,7 @@
 
     const out = placed.filter(Boolean);
     if (!out.length) {
-      const why = [
-        eventsDropped.undated ? `${eventsDropped.undated} had no usable date` : "",
-        eventsDropped.finished ? `${eventsDropped.finished} had already finished by then` : "",
-        eventsDropped.unplaced ? `${eventsDropped.unplaced} couldn't be placed anywhere` : "",
-        eventsDropped.tooFar ? `${eventsDropped.tooFar} turned out to be too far away` : "",
-      ]
-        .filter(Boolean)
-        .join(", ");
+      const why = describeEventDrops();
       throw new Error(
         why
           ? `Nothing could be confirmed as on ${window.label} — ${why}.`
@@ -7527,6 +7612,13 @@
     results: [],
     error: "",
     centre: null,
+    // Whether the ones that couldn't be confirmed are on screen. Off by
+    // default - they are worse answers - but never more than one tap away,
+    // because the alternative is an app that quietly decides for you.
+    showHeld: false,
+    // Whether the form is open. It closes itself once a search has answered,
+    // and any tap on it opens it again.
+    editing: false,
   };
 
   function savedEvents() {
@@ -7577,7 +7669,8 @@
 
   // One event, as a row. The same shape whether it is a search result you
   // might save or something already saved.
-  function eventRow(e, index, saved) {
+  function eventRow(e, index, saved, opts) {
+    const held = opts && typeof opts.heldIndex === "number" ? opts.heldIndex : null;
     const time = e.time
       ? `<span class="ev-time">${esc(e.time)}${
           e.endTime ? `<span class="ev-until">–${esc(e.endTime)}</span>` : ""
@@ -7605,7 +7698,9 @@
             ${
               saved
                 ? `<button class="ev-btn" data-open-pick="${esc(e.id)}">Details</button>`
-                : `<button class="ev-btn ev-btn-primary" data-save-event="${index}">＋ Save</button>`
+                : held != null
+                  ? `<button class="ev-btn" data-save-held="${held}">＋ Save anyway</button>`
+                  : `<button class="ev-btn ev-btn-primary" data-save-event="${index}">＋ Save</button>`
             }
             ${e.ticketUrl ? `<button class="ev-btn" data-open-maps="${esc(e.ticketUrl)}">Tickets & info</button>` : ""}
             ${
@@ -7622,6 +7717,26 @@
   function renderEventsSearchBar() {
     const w = eventWindow(eventSearch.when);
     const centre = eventSearch.centre || loadAnchor() || derivedAnchor();
+
+    // Once it has run, the form has done its job. Left open it is three rows
+    // of chips, a date line, six more chips and a button - the whole screen,
+    // with the answers you asked for starting below the fold. Collapsed, it
+    // is one line saying what was asked, and the results are the screen.
+    if (eventSearch.status === "done" && !eventSearch.editing) {
+      const kinds = eventSearch.kinds.length
+        ? EVENT_ANGLES.filter((a) => eventSearch.kinds.includes(a.key)).map((a) => a.label).join(", ")
+        : "everything";
+      return `
+        <button class="card ev-asked" id="evEdit">
+          <span class="ev-asked-main">
+            <b>${centre ? esc(centre.name) : "Nearby"}</b>
+            <span class="ev-asked-meta">${esc(w.label)}${w.fromTime ? `, from ${esc(w.fromTime)}` : ""} · ${esc(kinds)}</span>
+          </span>
+          <span class="ev-asked-change">Change</span>
+        </button>
+      `;
+    }
+
     return `
       <div class="card ev-ask">
         <div class="ev-ask-head">
@@ -7688,6 +7803,43 @@
     `;
   }
 
+  // The answer to "there must be more than this". Everything the search threw
+  // away, counted by reason - and the ones that are still perfectly good
+  // listings, offered anyway rather than binned on your behalf.
+  // Directly under the count, not at the bottom of the list. The whole
+  // complaint was "there must be more than this" - an explanation you only
+  // reach by scrolling past everything answers it far too late.
+  function renderEventsLeftOutNote() {
+    const why = describeEventDrops();
+    if (!why) return "";
+    const held = eventsHeldBack;
+    return `
+      <div class="card ev-leftout">
+        <p class="settings-hint">Left out: ${esc(why)}.</p>
+        ${
+          held.length
+            ? `<button class="link-btn" id="evShowHeld">${
+                eventSearch.showHeld ? "Hide the unconfirmed ones" : `Show the ${held.length} it couldn't confirm`
+              }</button>`
+            : ""
+        }
+      </div>`;
+  }
+
+  // The rows themselves stay at the bottom, under the confirmed ones. They
+  // are worse answers and should read as worse answers.
+  function renderEventsHeld() {
+    const held = eventsHeldBack;
+    if (!held.length || !eventSearch.showHeld) return "";
+    let html = `<div class="section-label list-head"><span>Couldn't be confirmed</span><span class="list-head-count">${held.length}</span></div>`;
+    html += `<div class="card ev-leftout"><p class="settings-hint">These have a name and a date but nowhere confirmed to put them on the map. Worth checking the link before you go.</p></div>`;
+    held.forEach((e, i) => {
+      html += `<div class="ev-held-why">${esc(e.why || "")}</div>`;
+      html += eventRow(e, -1, false, { heldIndex: i });
+    });
+    return html;
+  }
+
   function renderEvents() {
     const saved = savedEvents();
     const upcoming = saved.filter((e) => !eventIsPast(e));
@@ -7717,7 +7869,19 @@
     if (eventSearch.status === "done" && eventSearch.results.length) {
       const savedIds = new Set(saved.map((p) => p.id));
       const fresh = eventSearch.results.filter((e) => !savedIds.has(pickId("custom", e.name)));
-      html += `<div class="section-label list-head"><span>Found</span><span class="list-head-count">${eventSearch.results.length}</span></div>`;
+      const already = eventSearch.results.length - fresh.length;
+      // The count used to be the number found while the list below it showed
+      // the number found minus the ones already saved - so "Found 12" sat on
+      // top of seven rows with nothing to explain the other five. The header
+      // now counts what is actually underneath it and says where the rest
+      // went.
+      html += `<div class="section-label list-head"><span>Found</span><span class="list-head-count">${fresh.length}</span></div>`;
+      if (already) {
+        html += `<p class="settings-hint ev-note">${already} of the ${eventSearch.results.length} found ${
+          already === 1 ? "is" : "are"
+        } already in your list, below.</p>`;
+      }
+      html += renderEventsLeftOutNote();
       if (!fresh.length) {
         html += `<div class="card"><p class="pick-status">Everything found is already saved.</p></div>`;
       }
@@ -7729,6 +7893,7 @@
           html += eventRow(e, eventSearch.results.indexOf(e), false);
         });
       });
+      html += renderEventsHeld();
       html += `<p class="settings-hint ev-caveat">${icon("alert", {
         size: 14,
         cls: "ico-inline",
@@ -7824,6 +7989,35 @@
     const go = document.getElementById("evSearch");
     if (go) go.addEventListener("click", () => runEventSearch());
 
+    const edit = document.getElementById("evEdit");
+    if (edit) {
+      edit.addEventListener("click", () => {
+        eventSearch.editing = true;
+        renderEvents();
+      });
+    }
+
+    const showHeld = document.getElementById("evShowHeld");
+    if (showHeld) {
+      showHeld.addEventListener("click", () => {
+        eventSearch.showHeld = !eventSearch.showHeld;
+        renderEvents();
+      });
+    }
+
+    view.querySelectorAll("[data-save-held]").forEach((b) =>
+      b.addEventListener("click", () => {
+        const e = eventsHeldBack[Number(b.getAttribute("data-save-held"))];
+        if (!e) return;
+        // No coordinates, so no folder can be worked out from them - the town
+        // it named is the best answer there is, and an unsorted event is
+        // still an event you can put on a day.
+        confirmAddCandidate(e, e.area || "Unsorted");
+        updatePick(pickId("custom", e.name), { kind: "event", unverified: true });
+        renderEvents();
+      })
+    );
+
     view.querySelectorAll("[data-save-event]").forEach((b) =>
       b.addEventListener("click", () => {
         const e = eventSearch.results[Number(b.getAttribute("data-save-event"))];
@@ -7867,6 +8061,8 @@
     eventSearch.status = "loading";
     eventSearch.error = "";
     eventSearch.results = [];
+    eventSearch.editing = false;
+    eventSearch.showHeld = false;
     renderEvents();
 
     const radius = (centre.miles || DEFAULT_ANCHOR_MILES) * 1609;
@@ -13566,7 +13762,7 @@
     { key: "all", label: "All" },
     { key: "place", label: `${icon('castle', { size: 17, cls: 'ico-inline' })} To do` },
     { key: "eat", label: `${icon('food', { size: 17, cls: 'ico-inline' })} Eat` },
-    { key: "event", label: "🎪 On" },
+    { key: "event", label: `${icon('events', { size: 17, cls: 'ico-inline' })} On` },
   ];
 
   // Entry point for the old Places/Eats routes: same screen, filter preset.
@@ -14754,9 +14950,15 @@
   // Subtitles are computed, not fixed strings: "Edinburgh · Stirling ·
   // Glasgow" over a board about Cumbria was the kind of small wrongness that
   // makes an app feel like it isn't listening.
+  //
+  // `parent` is what stops a screen reached from More from leaving the whole
+  // tab bar unlit. Kids, Budget and Notes are no longer tabs of their own -
+  // seven along the bottom of a phone is a menu, not a bar, and three of the
+  // seven were places you visit once a day at most. They live behind More,
+  // and while you are on one, More is the tab that is lit.
   const VIEWS = {
     today: { render: renderToday, sub: () => "What's on now" },
-    kids: { render: renderKids, sub: () => "Things they'll actually enjoy" },
+    kids: { render: renderKids, sub: () => "Things they'll actually enjoy", parent: "more", label: "For the kids" },
     itinerary: { render: renderItinerary, sub: () => "Your day-by-day plan" },
     // places/eats are no longer destinations of their own, but anything still
     // asking for them - the hardware-back history, a "＋ Add a place" button
@@ -14766,8 +14968,9 @@
     eats: { render: () => renderPicksFiltered("eat"), sub: () => `${picksOfKind("eat").length} places to eat` },
     picks: { render: renderPicks, sub: () => "Everything you've saved" },
     events: { render: renderEvents, sub: () => "Things with a date on them" },
-    budget: { render: renderBudget, sub: () => "What this is costing" },
-    tips: { render: renderTips, sub: () => "Notes & packing" },
+    budget: { render: renderBudget, sub: () => "What this is costing", parent: "more", label: "Budget" },
+    tips: { render: renderTips, sub: () => "Notes & packing", parent: "more", label: "Notes & packing" },
+    more: { render: renderMore, sub: () => "Everything else" },
   };
 
   // Every tool works on every board: the places you save yourself are what
@@ -14779,8 +14982,11 @@
       today: loadPlan().days.length > 0,
       itinerary: true,
       picks: true,
-      kids: true,
       events: true,
+      more: true,
+      // Reachable as views from the More hub, which is where their buttons
+      // are now. Listed here so showView does not bounce them to a tab.
+      kids: true,
       // Reachable as views, but no longer tabs - there are no buttons for
       // these to hide or show.
       places: true,
@@ -14833,15 +15039,107 @@
       `;
     }
     topbarSub.textContent = typeof v.sub === "function" ? v.sub() : v.sub;
+    // A screen opened from More lights More, not nothing. Landing on a screen
+    // with no tab lit is the small disorientation that makes an app feel like
+    // it has lost track of where you are.
+    const lit = v.parent || name;
     tabbar.querySelectorAll(".tab").forEach((t) => {
-      t.classList.toggle("active", t.getAttribute("data-view") === name);
+      t.classList.toggle("active", t.getAttribute("data-view") === lit);
     });
+    if (v.parent) addParentBackBar(v.parent, name);
     view.scrollTop = 0;
     paintIcons(view);
     // Only when the screen has actually changed. Re-running the entrance on
     // every redraw - and some screens redraw as coordinates arrive - would
     // make the list flicker under your thumb.
     if (previous !== name) replayViewEntrance();
+  }
+
+  // The way back out of a screen that is no longer a tab. Added after the
+  // render rather than inside each one, so the three screens behind More did
+  // not each have to learn about it.
+  function addParentBackBar(parentName, name) {
+    const parent = VIEWS[parentName];
+    if (!parent) return;
+    const bar = document.createElement("button");
+    bar.className = "sub-back";
+    bar.type = "button";
+    bar.innerHTML = `${icon("back", { size: 16, cls: "ico-inline" })}<span>${esc(
+      parentName === "more" ? "More" : parentName
+    )}</span>`;
+    bar.addEventListener("click", () => showView(parentName));
+    view.insertBefore(bar, view.firstChild);
+    // Re-titled so the topbar says which screen this is, not just what More
+    // is - the subtitle is the only thing naming it now that the tab is gone.
+    const own = VIEWS[name];
+    if (own && own.label) topbarSub.textContent = own.label;
+  }
+
+  // One place that lists everything the app can do, so that nothing has to be
+  // remembered and nothing needs its own tab. Each row carries the number that
+  // makes it worth opening - "8 marked", "3 of 9 packed" - because a menu of
+  // bare names tells you nothing about whether to tap it.
+  function renderMore() {
+    const picks = loadPicks().filter((p) => !p.major);
+    const kidCount = picks.filter(isForKids).length;
+    const packing = loadPacking();
+    const packed = packing.filter((i) => i.done).length;
+    const boards = loadBoards().boards || [];
+    const pinned = picks.filter((p) => p.lat != null).length;
+
+    let budgetLine = "Nothing costed yet";
+    try {
+      const { places, trip, own } = budgetLines();
+      const priced = places.filter((l) => l.source !== "unknown");
+      const ownTotal = own.reduce((a, r) => a + (Number(r.amount) || 0), 0);
+      const low = priced.reduce((a, l) => a + l.low, 0) + trip.reduce((a, l) => a + l.low, 0) + ownTotal;
+      const high = priced.reduce((a, l) => a + l.high, 0) + trip.reduce((a, l) => a + l.high, 0) + ownTotal;
+      if (low || high) budgetLine = low === high ? money(low) : `${money(low)}–${money(high)}`;
+    } catch (e) {
+      // A budget that cannot be totalled is not a reason for this screen to
+      // fail; the row still opens the screen that can explain itself.
+    }
+
+    const row = (target, ico, title, meta) => `
+      <button class="more-row" data-more="${esc(target)}">
+        <span class="more-row-ico">${icon(ico, { size: 20 })}</span>
+        <span class="more-row-main">
+          <span class="more-row-title">${esc(title)}</span>
+          <span class="more-row-meta">${esc(meta)}</span>
+        </span>
+        ${icon("forward", { size: 16, cls: "more-row-go" })}
+      </button>`;
+
+    view.innerHTML = `
+      <div class="kids-head">
+        <h1 class="kids-title">More</h1>
+        <p class="kids-sub">The rest of it, in one place rather than spread along the bottom</p>
+      </div>
+
+      <div class="section-label">This trip</div>
+      <div class="card more-list">
+        ${row("kids", "kids", kidsTitle(), kidCount ? `${kidCount} marked` : "Nothing marked yet")}
+        ${row("budget", "budget", "Budget", budgetLine)}
+        ${row("tips", "tips", "Notes & packing", packing.length ? `${packed} of ${packing.length} packed` : "Nothing on the list yet")}
+      </div>
+
+      <div class="section-label">Everything</div>
+      <div class="card more-list">
+        ${row("map", "map", "Map of everything", pinned ? `${pinned} on the map` : "Nothing placed yet")}
+        ${row("boards", "folder", "Your trips", `${boards.length} saved`)}
+        ${row("settings", "settings", "Settings", "Keys, units, backup")}
+      </div>
+    `;
+
+    view.querySelectorAll("[data-more]").forEach((b) =>
+      b.addEventListener("click", () => {
+        const target = b.getAttribute("data-more");
+        if (target === "map") return openAllMap(defaultMapFilter());
+        if (target === "boards") return openBoardSwitcher();
+        if (target === "settings") return openSettings();
+        showView(target);
+      })
+    );
   }
 
   // Screens arrive rather than appear: the class is removed and re-added so
@@ -15385,6 +15683,9 @@
   // and there is no way to wait for forever. These read; none of them changes
   // anything.
   window.__tripTest = {
+    // Places and Eats are views with no tab of their own; a suite that wants
+    // to render one has no button to press.
+    showView,
     geocodeCandidates,
     findPhoto,
     isOffline,
