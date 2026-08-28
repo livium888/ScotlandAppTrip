@@ -72,6 +72,7 @@ const SUITES = [
   "test_whatson.mjs",
   "test_recall.mjs",
   "test_more.mjs",
+  "test_doable.mjs",
 ];
 
 const MIME = {

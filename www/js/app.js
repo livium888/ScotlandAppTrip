@@ -264,9 +264,19 @@
     const notes = [];
     if (people.some((p) => p.buggy)) notes.push("a buggy to get around with");
     if (people.some((p) => p.naps)) {
-      const napper = people.find((p) => p.naps);
-      notes.push(`${personLabel(napper).toLowerCase()} still naps in the early afternoon`);
+      const nap = napWindow();
+      // The times when they are known, because "naps in the early afternoon"
+      // and "naps 12:30-14:00" lead to different suggestions.
+      notes.push(
+        `${personLabel(nap.who).toLowerCase()} naps ${
+          nap.from === NAP_START && nap.to === NAP_END
+            ? "in the early afternoon"
+            : `from ${clockFromMinutes(nap.from)} to ${clockFromMinutes(nap.to)}`
+        }`
+      );
     }
+    const bed = earliestBedtime();
+    if (bed) notes.push(`${personLabel(bed.p).toLowerCase()} goes to bed around ${clockFromMinutes(bed.mins)}`);
     if (people.some((p) => p.mobility)) notes.push("limited walking - steps and rough ground are a problem");
     const diets = people.map((p) => (p.diet || "").trim()).filter(Boolean);
     if (diets.length) notes.push(`dietary: ${Array.from(new Set(diets)).join(", ")}`);
@@ -301,7 +311,21 @@
           <div class="person-flags">
             <label><input type="checkbox" data-person-field="naps" data-person="${i}"${
           p.naps ? " checked" : ""
-        } /> <span>Naps in the afternoon</span></label>
+        } /> <span>Naps in the afternoon</span></label>${
+          // The times only once the switch is on: three empty boxes against
+          // an adult's name is clutter asking to be ignored.
+          p.naps
+            ? `
+            <div class="person-times">
+              <label class="person-time"><span>Nap from</span>
+                <input type="time" data-person-field="napFrom" data-person="${i}"
+                       value="${esc(p.napFrom || clockFromMinutes(NAP_START))}" /></label>
+              <label class="person-time"><span>until</span>
+                <input type="time" data-person-field="napTo" data-person="${i}"
+                       value="${esc(p.napTo || clockFromMinutes(NAP_END))}" /></label>
+            </div>`
+            : ""
+        }
             <label><input type="checkbox" data-person-field="buggy" data-person="${i}"${
           p.buggy ? " checked" : ""
         } /> <span>In a buggy</span></label>
@@ -309,6 +333,17 @@
           p.mobility ? " checked" : ""
         } /> <span>Steps and rough ground are hard</span></label>
           </div>
+          ${
+            // Only for a child: an adult's bedtime is not a fact that rules
+            // anything out, and asking for it would imply it might.
+            isChild(p)
+              ? `<div class="person-times">
+              <label class="person-time"><span>Bed at</span>
+                <input type="time" data-person-field="bedtime" data-person="${i}"
+                       value="${esc(p.bedtime || "")}" /></label>
+            </div>`
+              : ""
+          }
           <input class="settings-input person-diet" data-person-field="diet" data-person="${i}"
                  type="text" value="${esc(p.diet || "")}" placeholder="Anything they can't eat (optional)" />
         </div>`
@@ -359,15 +394,23 @@
 
   function napWarning(time) {
     if (!clashesWithNap(time)) return "";
-    const who = napper();
+    // napWindow is the single answer to "who naps and when"; asking napper()
+    // separately is two answers to one question sitting in the same file.
+    const who = napWindow().who;
     return `<div class="plan-warn nap-warn">${icon("clock", { size: 15, cls: "ico-inline" })} Lands in ${esc(
       personLabel(who)
     )}'s nap.</div>`;
   }
 
-  // ---------- Naps ----------
+  // ---------- Naps and bedtimes ----------
   // Whoever planned the day knew about the nap. The app did not, so it put
   // the two-hour castle at half past one and said nothing.
+  //
+  // These two were the whole of it, hard-coded: everybody's child napped from
+  // one until three. They are the defaults now rather than the law, because a
+  // guess that cannot be corrected is worse than no guess - it is wrong in a
+  // way you cannot do anything about. Left blank they behave exactly as they
+  // always did, so nobody who never opens Settings notices this changed.
   const NAP_START = 13 * 60;
   const NAP_END = 15 * 60;
 
@@ -375,12 +418,61 @@
     return loadPeople().find((p) => p.naps) || null;
   }
 
+  // The window for whoever actually naps, falling back to the old constants.
+  function napWindow() {
+    const who = napper();
+    if (!who) return null;
+    const from = timeToMinutes(who.napFrom);
+    const to = timeToMinutes(who.napTo);
+    return {
+      who,
+      from: from == null ? NAP_START : from,
+      to: to == null ? NAP_END : to,
+    };
+  }
+
   // A stop that starts inside the nap window, for a day that has one.
   function clashesWithNap(time) {
-    if (!napper()) return false;
+    const nap = napWindow();
+    if (!nap) return false;
     const mins = timeToMinutes(time);
     if (mins == null) return false;
-    return mins >= NAP_START && mins < NAP_END;
+    return mins >= nap.from && mins < nap.to;
+  }
+
+  // Bedtime, which the app had no concept of at all - so a 19:30 gig and a
+  // 10:30 storytime were equally "on" for a family with a three-year-old.
+  // Only the youngest child's matters: they are the one who runs out first.
+  // Typed wins. But a field nobody has filled in is the state every family is
+  // in until they open Settings, and a feature that only works after you have
+  // configured it does not work. So there is an answer before anybody types
+  // one, and the typed value overrides it.
+  //
+  // Being half an hour out costs nothing here: this only ever adds a line to a
+  // row that was going to be shown either way. Not being there at all is what
+  // costs, because then the screen never mentions bedtime to anyone.
+  const BEDTIMES = [
+    [2, 19 * 60],
+    [5, 19 * 60 + 30],
+    [9, 20 * 60],
+    [12, 20 * 60 + 30],
+  ];
+
+  function bedtimeOf(person) {
+    const typed = timeToMinutes(person && person.bedtime);
+    if (typed != null) return typed;
+    if (!person || person.age == null || person.age > 12) return null;
+    const hit = BEDTIMES.find(([upTo]) => person.age <= upTo);
+    return hit ? hit[1] : null;
+  }
+
+  function earliestBedtime() {
+    const kids = loadPeople()
+      .filter(isChild)
+      .map((p) => ({ p, mins: bedtimeOf(p) }))
+      .filter((x) => x.mins != null)
+      .sort((a, b) => a.mins - b.mins);
+    return kids.length ? kids[0] : null;
   }
 
   // Everything the user has told us about how they want results, in one
@@ -3174,6 +3266,10 @@
                        <input type="checkbox" id="notifyClosing"${loadNotifySettings().closing ? " checked" : ""} />
                        <span>Somewhere is closing soon</span>
                      </label>
+                     <label class="settings-check">
+                       <input type="checkbox" id="notifyBooking"${loadNotifySettings().booking ? " checked" : ""} />
+                       <span>An event needs booking</span>
+                     </label>
                      <label class="settings-label" for="notifyMorning" style="margin-top:10px;">Morning brief at</label>
                      <input type="time" id="notifyMorning" class="settings-input" value="${esc(loadNotifySettings().morning)}" />
                    </div>
@@ -3214,6 +3310,24 @@
             </p>
             <button class="modal-btn" id="exportIcsBtn" style="width:100%;">${icon('download', { size: 17, cls: 'ico-inline' })} Export to calendar</button>
             <pre class="settings-result" id="icsResult" hidden></pre>
+${(() => {
+  const pending = eventsNeedingBackfill().length;
+  if (!pending) return "";
+  return `
+            <label class="settings-label">Events saved earlier</label>
+            <p class="settings-hint">
+              ${pending} saved event${pending === 1 ? "" : "s"} ${pending === 1 ? "was" : "were"} saved before the app
+              started asking whether things are indoors, what ages they suit and whether they need
+              booking. This asks about ${pending === 1 ? "it" : "them"} in one go. It only fills in
+              blanks — anything already answered is left exactly as it is, and it never touches a
+              name, a date or a location.
+            </p>
+            <button class="modal-btn" id="backfillEventsBtn" style="width:100%;">${icon("sparkle", {
+              size: 17,
+              cls: "ico-inline",
+            })} Fill in what's missing</button>
+            <pre class="settings-result" id="backfillResult" hidden></pre>`;
+})()}
             <input type="file" id="importBackupFile" accept="application/json,.json" hidden />
             <pre class="settings-result" id="backupResult" hidden></pre>
 
@@ -3305,6 +3419,15 @@
         // and then closing the sheet removes a focused element, which fires no
         // blur at all, and the age was simply gone.
         el.addEventListener(el.type === "checkbox" ? "change" : "input", commit);
+        // Two fields decide whether other fields exist: ticking "naps" reveals
+        // the nap times, and an age under 16 reveals a bedtime. Those need a
+        // redraw, which commit deliberately does not do. The value is already
+        // saved by the line above, so redrawing here cannot lose anything -
+        // and for the age it is hung on "change", which fires when focus is
+        // leaving anyway rather than on every keystroke.
+        const field = el.getAttribute("data-person-field");
+        if (field === "naps") el.addEventListener("change", redrawPeople);
+        if (field === "age") el.addEventListener("change", () => { commit(); redrawPeople(); });
       });
       peopleList.querySelectorAll("[data-remove-person]").forEach((btn) => {
         btn.addEventListener("click", () => {
@@ -3321,7 +3444,11 @@
     if (addPerson) {
       addPerson.addEventListener("click", () => {
         const list = loadPeople();
-        list.push({ name: "", age: null, naps: false, buggy: false, mobility: false, diet: "" });
+        list.push({
+          name: "", age: null,
+          naps: false, napFrom: "", napTo: "", bedtime: "",
+          buggy: false, mobility: false, diet: "",
+        });
         savePeople(list);
         redrawPeople();
         const last = peopleList && peopleList.querySelector(".person-row:last-child .person-name");
@@ -3374,6 +3501,7 @@
       ["notifyLeave", "leave"],
       ["notifyRain", "rain"],
       ["notifyClosing", "closing"],
+      ["notifyBooking", "booking"],
     ].forEach(([id, key]) => {
       const el = document.getElementById(id);
       if (!el) return;
@@ -3402,6 +3530,27 @@
         out.hidden = false;
         out.className = "settings-result " + (res.ok ? "ok" : "bad");
         out.textContent = res.message;
+      });
+    }
+
+    const backfillBtn = document.getElementById("backfillEventsBtn");
+    if (backfillBtn) {
+      backfillBtn.addEventListener("click", async () => {
+        const out = document.getElementById("backfillResult");
+        backfillBtn.disabled = true;
+        backfillBtn.textContent = "Asking…";
+        if (out) {
+          out.hidden = false;
+          out.className = "settings-result";
+          out.textContent = "Asking about the events you've saved…";
+        }
+        const res = await backfillEvents();
+        backfillBtn.disabled = false;
+        backfillBtn.textContent = "Fill in what's missing";
+        if (out) {
+          out.className = "settings-result " + (res.ok ? "ok" : "bad");
+          out.textContent = res.message;
+        }
       });
     }
 
@@ -7135,6 +7284,7 @@
   // map, the folders, the budget, the plan - works on them unchanged.
   function normaliseEvent(item, window) {
     const name = String(item.name || "").trim();
+    const band = ageRange(item);
     if (!name) return null;
     // An event with no date is not an event, it is a rumour. This is the one
     // field that cannot be missing.
@@ -7170,7 +7320,71 @@
       price: typeof item.price === "string" && /^(free|£{1,3})$/i.test(item.price.trim()) ? item.price.trim() : null,
       ticketUrl: /^https?:\/\//i.test(String(item.tickets || "")) ? String(item.tickets) : "",
       recurring: item.recurring === true,
+      // The four a parent actually decides on. Same rule as every field above:
+      // anything that is not exactly what was asked for becomes an honest
+      // blank, never a coerced value. A wrong "indoor" is worse than no
+      // answer, because the screen prints it as a finding.
+      // The plural is the same answer. Forgiving "Indoors" is punctuation,
+      // not interpretation - unlike "probably inside", which is refused.
+      setting: settingWord(item.setting),
+      minAge: band.min,
+      maxAge: band.max,
+      // "Aimed at children", "children are allowed" and "nobody said" are
+      // three answers and a boolean holds two. The one it dropped is the one
+      // this screen exists to be honest about: a false meaning "we didn't
+      // ask" would have been printed on a row as "not for children".
+      childFocus: /^(aimed|allowed|adults)$/i.test(String(item.childFocus || "").trim())
+        ? String(item.childFocus).trim().toLowerCase()
+        : "",
+      bookingLevel: /^(required|advised|none)$/i.test(String(item.booking || "").trim())
+        ? String(item.booking).trim().toLowerCase()
+        : "",
+      // Stored under the name a place already uses, so the morning brief's
+      // "N still to book" (which counts pick.booking && !pick.booked) starts
+      // counting events with no edit to it at all.
+      booking: /^(required|advised)$/i.test(String(item.booking || "").trim()),
     };
+  }
+
+  function settingWord(value) {
+    const m = /^(indoors?|outdoors?|both)$/i.exec(String(value || "").trim());
+    if (!m) return "";
+    const word = m[1].toLowerCase();
+    return word === "both" ? "both" : word.replace(/s$/, "");
+  }
+
+  // Every field that makes an event an event, in one place. There were two
+  // hand-kept lists of these and neither had all of them - which is exactly
+  // how a festival lost its run length and a town-centre pin lost the word
+  // "approx." the moment you saved it. Same failure as BOARD_PARTS, same fix.
+  const EVENT_FIELDS = [
+    "startsAt", "endsAt", "time", "endTime", "venue", "price", "ticketUrl",
+    "recurring", "approximate", "setting", "minAge", "maxAge", "childFocus",
+    "bookingLevel", "booking",
+  ];
+
+  function copyEventFields(from, to) {
+    EVENT_FIELDS.forEach((k) => {
+      if (from[k] !== undefined) to[k] = from[k];
+    });
+  }
+
+  // An age is a number of years or it is nothing. A model that answers "5+"
+  // or "all ages" has not answered the question that was asked, and turning
+  // that into a 5 is inventing precision.
+  function cleanAge(value) {
+    if (typeof value !== "number" || !Number.isFinite(value)) return null;
+    const n = Math.round(value);
+    return n >= 0 && n <= 120 ? n : null;
+  }
+
+  // "For ages 12 to 4" is not a band, it is a mistake, and there is no way to
+  // tell which half of it was meant. Both go.
+  function ageRange(item) {
+    const min = cleanAge(item.minAge);
+    const max = cleanAge(item.maxAge);
+    if (min != null && max != null && min > max) return { min: null, max: null };
+    return { min, max };
   }
 
   // Something with a listed start but no listed end. Guessing is unavoidable
@@ -7286,6 +7500,20 @@
       `Include something only if you have seen it listed with a date. Do not invent ` +
       `plausible-sounding events, and do not pad the list with permanent attractions - ` +
       `a castle that opens every day is not an event.\n\n` +
+      // Favour, never omit. Asked to skip what does not suit the family, the
+      // model does the deciding - and the thing you would have got a sitter
+      // for, or sent one parent to, never reaches you at all. The app can
+      // say "past bedtime" on a row; it cannot un-hide what was never listed.
+      `Where two listings are equally good, prefer the one that suits the people above. ` +
+      `Do not leave anything out on those grounds though - something at an awkward ` +
+      `hour is still worth listing, and we will decide.\n\n` +
+      // Four facts that decide whether a parent can actually go. An honest
+      // blank is wanted where the listing does not say - a guess here is
+      // worse than a gap, because the app prints these as findings.
+      `For each one, say what the listing actually states, and leave the field empty ` +
+      `rather than guessing: whether it is indoors or outdoors, what ages it is for, ` +
+      `whether it is aimed at children, merely allows them or is adults-only, and whether it has to be ` +
+      `booked in advance.\n\n` +
       `Reply with ONLY a JSON array, each item ` +
       `{"name": what it is called, ` +
       `"date": "YYYY-MM-DD" the day it is on, ` +
@@ -7298,7 +7526,14 @@
       `"what": one short sentence on what it actually is, ` +
       `"price": "free", "£", "££" or "£££", ` +
       `"tickets": the booking or information URL, or "", ` +
-      `"recurring": true if this happens every week rather than being a one-off}. ` +
+      `"recurring": true if this happens every week rather than being a one-off, ` +
+      `"setting": "indoor", "outdoor", "both" if there is a sheltered part, or "" if the listing doesn't say, ` +
+      `"minAge": the youngest age it is meant for as a number, or null, ` +
+      `"maxAge": the oldest age it is meant for as a number, or null, ` +
+      `"childFocus": "aimed" if it is put on for children, "allowed" if children may come ` +
+      `but it is not aimed at them, "adults" if it is adults-only, or "" if the listing doesn't say, ` +
+      `"booking": "required" if you must book ahead, "advised" if it sells out, ` +
+      `"none" if you can turn up, or "" if the listing doesn't say}. ` +
       `No other text.`
     );
   }
@@ -7323,6 +7558,245 @@
     return `${name}|${String(event.startsAt || "").slice(0, 10)}`;
   }
 
+  // ---------- Can we actually go? ----------
+  // The screen could tell you an event existed and nothing else. For a parent
+  // that is the easy half: the question is never "is this interesting", it is
+  // "can we pull this off", and the answer turns on four things every single
+  // time - the age it is pitched at, bedtime, the nap, and the weather if it
+  // is outside.
+  //
+  // One line, not six badges. A row carrying every fact is a row nobody reads,
+  // and only one of the facts is ever the reason you do not go. So: the worst
+  // thing that applies, in the order that things actually stop you, and
+  // everything else in the detail sheet.
+  //
+  // `null` most of the time is the right answer and the hardest one to keep.
+
+  // How long after a listed start a child is still fine to be out. Turning up
+  // at 18:45 for a 19:00 thing with a 19:00 bedtime is not a plan.
+  const BEDTIME_GRACE_MINS = 0;
+
+  function eventVerdict(event, opts) {
+    if (!event) return null;
+    const options = opts || {};
+
+    const kids = loadPeople().filter(isChild).map((p) => p.age).filter((a) => a != null);
+
+    // 0. A door that will not let you in. Nothing below this matters.
+    if (kids.length && event.childFocus === "adults") {
+      return { key: "adults-only", tone: "no", text: "Adults only" };
+    }
+
+    // 1. The age band, which is the next thing you cannot work around. A
+    //    listing that says 8+ is not going to entertain a three-year-old
+    //    whatever time it is on.
+    if (kids.length && event.minAge != null) {
+      const oldest = Math.max.apply(null, kids);
+      if (oldest < event.minAge) {
+        return { key: "too-young", tone: "no", text: `Aimed at ${event.minAge}+, and yours ${
+          kids.length === 1 ? `is ${kids[0]}` : `are ${kids.slice().sort((a, b) => a - b).join(" and ")}`
+        }` };
+      }
+    }
+    if (kids.length && event.maxAge != null) {
+      const youngest = Math.min.apply(null, kids);
+      if (youngest > event.maxAge) {
+        return { key: "too-old", tone: "no", text: `Aimed at under-${event.maxAge + 1}s, and yours ${
+          kids.length === 1 ? `is ${kids[0]}` : `are ${kids.slice().sort((a, b) => a - b).join(" and ")}`
+        }` };
+      }
+    }
+
+    // 2. Bedtime. Only the youngest child's, because they are the one who
+    //    runs out first, and only when a start time is actually listed.
+    const bed = earliestBedtime();
+    const starts = timeToMinutes(event.time);
+    if (bed && starts != null && starts + BEDTIME_GRACE_MINS >= bed.mins) {
+      return { key: "bedtime", tone: "no", text: `Starts after ${personLabel(bed.p)}'s bedtime` };
+    }
+
+    // 3. The nap - but only when you could not simply go earlier and leave.
+    if (napIsUnavoidable(event)) {
+      const nap = napWindow();
+      return { key: "nap", tone: "no", text: `Runs through ${personLabel(nap.who)}'s nap` };
+    }
+
+    // 4. A job rather than a blocker - but it is the one with a deadline, and
+    //    it is certain. Miss the booking and you definitely cannot go; a
+    //    forecast four days out might simply be wrong. So it outranks rain.
+    if (event.bookingLevel === "required") return { key: "book", tone: "warn", text: "Has to be booked ahead" };
+    if (event.bookingLevel === "advised") return { key: "book", tone: "warn", text: "Worth booking — these sell out" };
+
+    // 5. Outdoors with rain forecast. The only weather claim the data can
+    //    support: Open-Meteo gives a day, not an hour.
+    if (event.setting === "outdoor" && options.rainChance != null && options.rainChance >= WET_ENOUGH) {
+      return { key: "rain", tone: "warn", text: `Outdoors, and it's ${options.rainChance}% rain that day` };
+    }
+
+    // 6. And the one good thing worth saying, when the band genuinely fits.
+    if (event.childFocus === "aimed" && kids.length && (event.minAge != null || event.maxAge != null)) {
+      return { key: "aimed", tone: "yes", text: `Aimed at ${ageBandLabel(event)}` };
+    }
+    return null;
+  }
+
+  function ageBandLabel(event) {
+    if (event.minAge != null && event.maxAge != null) return `${event.minAge}-${event.maxAge}s`;
+    if (event.minAge != null) return `${event.minAge}+`;
+    return `under-${event.maxAge + 1}s`;
+  }
+
+  // clashesWithNap answers "does this start in the nap", which is the right
+  // question about a stop on a plan and the wrong one about an event with a
+  // run. A market open 10:00-16:00 spans the nap and is no problem at all:
+  // you go in the morning and leave. Only something you could not attend
+  // without being there through the nap is worth a word.
+  function napIsUnavoidable(event) {
+    const nap = napWindow();
+    if (!nap) return false;
+    const starts = timeToMinutes(event.time);
+    if (starts == null) return false;
+    const ends = timeToMinutes(event.endTime);
+    // No finish time: it is a fixed-time thing, so starting in the nap is it.
+    if (ends == null || ends <= starts) return starts >= nap.from && starts < nap.to;
+    // A run that reaches past the start of the nap but began before it is
+    // avoidable - turn up early. Only a run sitting wholly inside the window
+    // gives you no way out of it.
+    return starts >= nap.from && ends <= nap.to;
+  }
+
+  // ---------- Filling in the events saved before any of this existed ----------
+  // Everything saved before this change knows none of the four things that
+  // decide whether you can go, so without this the feature only ever applies
+  // to what you save from here on.
+  //
+  // Two rules make it safe, and they matter more than the backfill does:
+  //
+  // It fills blanks only. A field that already holds an answer is never
+  // overwritten, so asking again cannot replace something true with a worse
+  // guess - which is the whole risk of re-asking a model about something it
+  // already told you once.
+  //
+  // And it is not allowed to touch what the event IS. Name, date, venue,
+  // coordinates and sources are read-only to it; it answers the four new
+  // questions about an event and nothing else. A backfill that could move a
+  // pin or change a date would be a rewrite, not a top-up.
+  const BACKFILL_FIELDS = ["setting", "minAge", "maxAge", "childFocus", "bookingLevel"];
+
+  function eventsNeedingBackfill() {
+    return loadPicks().filter(
+      (p) =>
+        p.kind === "event" &&
+        !eventIsPast(p) &&
+        // Asked once is asked. Plenty of listings simply do not say whether a
+        // thing is indoors, and without this an event nobody can answer for
+        // would be offered up for asking again for ever - which is both a
+        // waste of somebody's quota and a to-do that never clears.
+        !p.askedAbout &&
+        BACKFILL_FIELDS.some((f) => p[f] == null || p[f] === "")
+    );
+  }
+
+  async function backfillEvents(onProgress) {
+    const key = loadTripSettings().geminiKey.trim();
+    if (!key) {
+      return { ok: false, message: "This needs an AI key — Settings has a Gemini key field." };
+    }
+    const todo = eventsNeedingBackfill();
+    if (!todo.length) return { ok: true, message: "Nothing to fill in — every saved event already has these." };
+
+    const lines = todo
+      .map((p, i) => `${i + 1}. ${p.name}${p.venue ? `, ${p.venue}` : ""}${p.city ? `, ${p.city}` : ""}${
+        p.startsAt ? ` on ${isoDate(new Date(p.startsAt))}` : ""
+      }`)
+      .join("\n");
+
+    const prompt =
+      `For each of these events, say what its listing states. Answer only these ` +
+      `questions - do not correct the name, the date or the place, and leave a field ` +
+      `empty rather than guessing.\n\n${lines}\n\n` +
+      `Reply with ONLY a JSON array of ${todo.length} items in the same order, each ` +
+      `{"n": the number above, ` +
+      `"setting": "indoor", "outdoor", "both" or "", ` +
+      `"minAge": number or null, "maxAge": number or null, ` +
+      `"childFocus": "aimed", "allowed", "adults" or "", ` +
+      `"booking": "required", "advised", "none" or ""}. No other text.`;
+
+    let answer = null;
+    for (const attempt of [{ grounded: true, maxTokens: 8192 }, { json: true, maxTokens: 8192 }]) {
+      try {
+        const res = await callGemini(key, prompt, attempt);
+        const list = extractJson(res.text);
+        if (Array.isArray(list) && list.length) {
+          answer = list;
+          break;
+        }
+      } catch (e) {
+        // The other attempt may still answer.
+      }
+    }
+    if (!answer) return { ok: false, message: "The model didn't come back with anything usable. Worth trying again." };
+
+    let filled = 0;
+    let touched = 0;
+    answer.forEach((row, i) => {
+      const index = typeof row.n === "number" ? row.n - 1 : i;
+      const target = todo[index];
+      if (!target) return;
+      // Run through the same whitelist the search results go through, so a
+      // backfilled event cannot hold a value a searched one could not.
+      const clean = normaliseEvent(
+        Object.assign({ name: target.name, date: isoDate(new Date(target.startsAt)) }, row),
+        { from: startOfDay(new Date(target.startsAt)), to: startOfDay(new Date(target.startsAt)) }
+      );
+      if (!clean) return;
+      const patch = {};
+      BACKFILL_FIELDS.forEach((f) => {
+        const has = target[f] != null && target[f] !== "";
+        const got = clean[f] != null && clean[f] !== "";
+        // Blanks only. An answer already on the pick stays exactly as it is.
+        if (!has && got) patch[f] = clean[f];
+      });
+      if (patch.bookingLevel) patch.booking = patch.bookingLevel !== "none";
+      if (Object.keys(patch).length) {
+        touched++;
+        filled += Object.keys(patch).length;
+      }
+      // Marked whether or not anything came back, because "we asked and the
+      // listing didn't say" is an answer too.
+      patch.askedAbout = Date.now();
+      updatePick(target.id, patch);
+      if (onProgress) onProgress(index + 1, todo.length);
+    });
+
+    return {
+      ok: true,
+      message: touched
+        ? `Filled in ${filled} thing${filled === 1 ? "" : "s"} across ${touched} event${touched === 1 ? "" : "s"}. Nothing already answered was changed.`
+        : `Asked about ${todo.length} event${todo.length === 1 ? "" : "s"} and the listings didn't say. Nothing changed.`,
+    };
+  }
+
+  // The forecast for the day an event is on, at the place it is at. Distinct
+  // from forecastForDay, which answers for a planned day and needs a day
+  // label; an event has its own date and its own coordinates and need not be
+  // on the plan at all.
+  //
+  // Returns null when there is nothing honest to say - no position, no date,
+  // or a date past the sixteen days Open-Meteo will forecast. A trip three
+  // weeks out gets no weather claim rather than a reassuring one.
+  function eventForecast(event, onUpdate) {
+    if (!event || event.lat == null || event.lon == null || !event.startsAt) return null;
+    const when = new Date(event.startsAt);
+    if (Number.isNaN(when.getTime())) return null;
+    const ahead = Math.round((startOfDay(when) - startOfDay(new Date())) / 86400000);
+    if (ahead < 0 || ahead > WEATHER_HORIZON_DAYS) return null;
+    const cached = weatherFor(event.lat, event.lon, onUpdate);
+    if (!cached || !cached.days) return null;
+    const iso = isoDate(when);
+    return cached.days.find((d) => d.date === iso) || null;
+  }
+
   // Said out loud on the screen after every search, not only after a failed
   // one. "Found 6" with nothing else on the page is what makes an app feel
   // like it is holding things back; "Found 6, left out 14" with the reasons
@@ -7335,7 +7809,10 @@
       d.finished ? `${d.finished} had already finished by then` : "",
       d.tooFar ? `${d.tooFar} looked like somewhere else` : "",
       d.unplaced ? `${d.unplaced} couldn't be placed on the map` : "",
-      d.merged ? `${d.merged} were the same thing found twice` : "",
+      // Deliberately not counted here. A listing found by two angles and
+      // merged into one row was not left out of anything - it is on the
+      // screen. Saying "left out: 3 were the same thing found twice" reads
+      // as three missing events, which is the opposite of what happened.
     ]
       .filter(Boolean)
       .join(", ");
@@ -7619,6 +8096,10 @@
     // Whether the form is open. It closes itself once a search has answered,
     // and any tap on it opens it again.
     editing: false,
+    // The indoor filter. Off by default and only offered when rain is
+    // actually forecast - a filter that is always there is a filter you
+    // scroll past, and one that appears on a wet day is an answer.
+    indoorOnly: false,
   };
 
   function savedEvents() {
@@ -7683,8 +8164,19 @@
     const tags = [
       e.price ? `<span class="ev-tag">${esc(e.price)}</span>` : "",
       e.recurring ? `<span class="ev-tag">every week</span>` : "",
+      // Said plainly rather than left to be inferred from silence, which is
+      // what "we don't know" looks like when nobody writes it down.
+      e.setting === "indoor" ? `<span class="ev-tag">indoors</span>` : "",
+      e.setting === "outdoor" ? `<span class="ev-tag">outdoors</span>` : "",
+      e.setting === "both" ? `<span class="ev-tag">some of it indoors</span>` : "",
+      !e.setting ? `<span class="ev-tag soft">indoors or out, not sure</span>` : "",
       e.approximate ? `<span class="ev-tag soft">approx. location</span>` : "",
     ].join("");
+
+    // The one thing that would stop you going. Six badges on a row is a row
+    // nobody reads, and only one of the six is ever the reason.
+    const forecast = eventForecast(e, redrawEventsOnWeather);
+    const verdict = eventVerdict(e, { rainChance: forecast ? forecast.rainChance : null });
 
     return `
       <div class="ev-row${saved ? " ev-saved" : ""}">
@@ -7693,6 +8185,14 @@
           <div class="ev-name">${esc(e.name)}${runs}</div>
           ${where ? `<div class="ev-where">${esc(where)}</div>` : ""}
           ${e.description ? `<div class="ev-what">${esc(e.description)}</div>` : ""}
+          ${
+            verdict
+              ? `<div class="ev-verdict ev-verdict-${esc(verdict.tone)}">${icon(
+                  verdict.tone === "yes" ? "check" : verdict.tone === "warn" ? "clock" : "alert",
+                  { size: 14, cls: "ico-inline" }
+                )} ${esc(verdict.text)}</div>`
+              : ""
+          }
           <div class="ev-tags">${tags}</div>
           <div class="ev-actions">
             ${
@@ -7806,6 +8306,36 @@
   // The answer to "there must be more than this". Everything the search threw
   // away, counted by reason - and the ones that are still perfectly good
   // listings, offered anyway rather than binned on your behalf.
+  // Whether any day these results fall on is forecast wet. Nothing is offered
+  // when nothing is known - a trip beyond the sixteen-day forecast gets no
+  // chip and no claim about the weather.
+  // The redraw a forecast arriving should cause. It has to be the same one
+  // everywhere on this screen: weatherFor only keeps the callback from the
+  // call that STARTS the fetch, so whichever asks first is the only one that
+  // gets told. Asking once without a callback - as this function used to -
+  // meant the rows asking afterwards silently registered nothing, and the
+  // forecast landed with nobody listening. No chip, no rain warning, no clue.
+  function redrawEventsOnWeather() {
+    if (view.dataset.activeTab === "events") renderEvents();
+  }
+
+  function rainIsComing(list) {
+    let worst = null;
+    list.forEach((e) => {
+      const f = eventForecast(e, redrawEventsOnWeather);
+      if (f && f.rainChance != null && (worst == null || f.rainChance > worst)) worst = f.rainChance;
+    });
+    return worst != null && worst >= WET_ENOUGH ? worst : null;
+  }
+
+  // An event nobody described is not an event we get to throw away. It stays
+  // in the list, marked "not sure", exactly as an approximate location and an
+  // unconfirmed listing already do on these rows.
+  function passesIndoorFilter(e) {
+    if (!eventSearch.indoorOnly) return true;
+    return e.setting !== "outdoor";
+  }
+
   // Directly under the count, not at the bottom of the list. The whole
   // complaint was "there must be more than this" - an explanation you only
   // reach by scrolling past everything answers it far too late.
@@ -7868,8 +8398,10 @@
 
     if (eventSearch.status === "done" && eventSearch.results.length) {
       const savedIds = new Set(saved.map((p) => p.id));
-      const fresh = eventSearch.results.filter((e) => !savedIds.has(pickId("custom", e.name)));
-      const already = eventSearch.results.length - fresh.length;
+      const unsaved = eventSearch.results.filter((e) => !savedIds.has(pickId("custom", e.name)));
+      const fresh = unsaved.filter(passesIndoorFilter);
+      const already = eventSearch.results.length - unsaved.length;
+      const hiddenByFilter = unsaved.length - fresh.length;
       // The count used to be the number found while the list below it showed
       // the number found minus the ones already saved - so "Found 12" sat on
       // top of seven rows with nothing to explain the other five. The header
@@ -7881,9 +8413,29 @@
           already === 1 ? "is" : "are"
         } already in your list, below.</p>`;
       }
+      // The chip only exists on a day the forecast has an opinion about, and
+      // it changes nothing until it is tapped.
+      const wet = rainIsComing(unsaved);
+      if (wet != null || eventSearch.indoorOnly) {
+        html += `
+          <div class="search-chips ev-weather-chips">
+            <button class="search-chip${eventSearch.indoorOnly ? " on" : ""}" id="evIndoorOnly">
+              Under cover${wet != null ? ` · ${wet}% rain` : ""}
+            </button>
+          </div>`;
+        html += `<p class="settings-hint ev-note">${
+          eventSearch.indoorOnly
+            ? `Hiding ${hiddenByFilter} that ${
+                hiddenByFilter === 1 ? "is" : "are"
+              } definitely outdoors. Anything nobody described is still here, marked as such.`
+            : "Rain forecast. This keeps the indoor ones, and the ones nobody described either way."
+        }</p>`;
+      }
       html += renderEventsLeftOutNote();
       if (!fresh.length) {
-        html += `<div class="card"><p class="pick-status">Everything found is already saved.</p></div>`;
+        html += `<div class="card"><p class="pick-status">${
+          unsaved.length ? "Nothing left once the outdoor ones are hidden." : "Everything found is already saved."
+        }</p></div>`;
       }
       groupEventsByDay(fresh).forEach((day) => {
         html += `<div class="ev-day">${esc(eventDayHeading(day.when))} <span class="ev-day-date">${esc(
@@ -7997,6 +8549,14 @@
       });
     }
 
+    const indoorOnly = document.getElementById("evIndoorOnly");
+    if (indoorOnly) {
+      indoorOnly.addEventListener("click", () => {
+        eventSearch.indoorOnly = !eventSearch.indoorOnly;
+        renderEvents();
+      });
+    }
+
     const showHeld = document.getElementById("evShowHeld");
     if (showHeld) {
       showHeld.addEventListener("click", () => {
@@ -8063,6 +8623,7 @@
     eventSearch.results = [];
     eventSearch.editing = false;
     eventSearch.showHeld = false;
+    eventSearch.indoorOnly = false;
     renderEvents();
 
     const radius = (centre.miles || DEFAULT_ANCHOR_MILES) * 1609;
@@ -8644,15 +9205,16 @@
         // does not know about is dropped on the way in - which is exactly
         // what happened to every event: it arrived with a date and a venue
         // and was saved as an ordinary place with neither.
+        // Unreachable today - nothing that fills explore.results sets
+        // kind:"event" since the Explore events category was removed - and
+        // left as it was it is a trap for whoever brings it back: it listed
+        // the event fields by hand and the list was missing endTime and
+        // endsAt. It shares the one list now, so reviving it cannot revive
+        // the bug.
         if (r.kind === "event") {
+          copyEventFields(r, candidate);
           Object.assign(candidate, {
             kind: "event",
-            startsAt: r.startsAt,
-            time: r.time || "",
-            venue: r.venue || "",
-            price: r.price || null,
-            ticketUrl: r.ticketUrl || "",
-            recurring: !!r.recurring,
             sources: r.sources || [],
             category: r.category || "Event",
           });
@@ -13627,13 +14189,15 @@
     // unchanged; these are the fields a place has no use for.
     if (candidate.kind === "event") {
       pick.kind = "event";
-      pick.startsAt = candidate.startsAt;
-      pick.time = candidate.time || "";
-      pick.endTime = candidate.endTime || "";
-      pick.venue = candidate.venue || "";
-      pick.price = candidate.price || null;
-      pick.ticketUrl = candidate.ticketUrl || "";
-      pick.recurring = !!candidate.recurring;
+      // Every event field at once. The hand-written version of this list was
+      // missing endsAt and approximate, so a festival that said "until Sat 5
+      // Sept" in the results became a one-day thing the moment you saved it,
+      // and the "approx. location" caveat vanished - which is the worse half,
+      // because the pin then looked exactly as trustworthy as a confirmed one.
+      copyEventFields(candidate, pick);
+      // booking is stored under the name a place already uses, so the morning
+      // brief's "N still to book" counts events without a line of change.
+      pick.booking = !!candidate.booking;
       // A model naming a festival that is not happening is the obvious way
       // this goes wrong, so the row says so and links what it read.
       pick.unverified = true;
@@ -14066,7 +14630,11 @@
   // than passed off as current.
   const WEATHER_KEY = "weather-cache-v1";
   const WEATHER_TTL_MS = 60 * 60 * 1000; // an hour; daily forecasts don't move faster
-  const WEATHER_HORIZON_DAYS = 16; // as far as Open-Meteo forecasts
+  const WEATHER_HORIZON_DAYS = 16;
+  // What counts as a wet day. One number, used by the forecast line, by the
+  // events verdict and by the indoor filter, so those three cannot drift into
+  // disagreeing with each other on screen.
+  const WET_ENOUGH = 50; // as far as Open-Meteo forecasts
 
   // WMO weather codes, grouped to the differences you'd actually change plans
   // over rather than all 28 of them.
@@ -14248,7 +14816,7 @@
     }
     const d = f.day;
     const look = weatherLook(d.code == null ? 3 : d.code);
-    const wet = d.rainChance != null && d.rainChance >= 50;
+    const wet = d.rainChance != null && d.rainChance >= WET_ENOUGH;
     const bits = [
       `${look.icon} ${esc(look.label)}`,
       d.max != null ? `${d.max}°/${d.min}°` : null,
@@ -14333,8 +14901,11 @@
 
   // Fixed id blocks, so a reschedule can cancel precisely what it replaces
   // rather than clearing the lot and hoping.
-  const NOTIFY_IDS = { morning: 1000, leave: 2000, rain: 3000, closing: 4000 };
+  const NOTIFY_IDS = { morning: 1000, leave: 2000, rain: 3000, closing: 4000, booking: 5000 };
   const NOTIFY_BLOCK = 900;
+  // Far enough ahead that booking is still possible, close enough that you
+  // have not forgotten what the thing is.
+  const BOOKING_NUDGE_DAYS = 3;
 
   function loadNotifySettings() {
     const s = readJson(NOTIFY_KEY, null);
@@ -14344,6 +14915,7 @@
       leave: !s || s.leave !== false,
       rain: !s || s.rain !== false,
       closing: !s || s.closing !== false,
+      booking: !s || s.booking !== false,
     };
   }
 
@@ -14405,8 +14977,14 @@
   const OUTDOOR_RE =
     /walk|trail|hill|mountain|glen|beach|coast|loch|falls?|waterfall|garden|park|zoo|farm|forest|wood|viewpoint|island|harbour|pier|castle ruin|ruins?/i;
 
+  // A guess from words in a name, which is all there was. An event now often
+  // carries the answer outright, and a stated fact beats a regex reading
+  // "Woodland Craft Fair" as a walk in a forest - so the field wins when
+  // there is one, and the guess only fills the silence.
   function looksOutdoor(pick) {
     if (!pick) return false;
+    if (pick.setting === "outdoor" || pick.setting === "both") return true;
+    if (pick.setting === "indoor") return false;
     return OUTDOOR_RE.test(`${pick.category || ""} ${pick.name || ""} ${pick.description || ""}`);
   }
 
@@ -14528,6 +15106,37 @@
         });
       }
     });
+
+    // ---- Book it before it goes ----
+    // The one reminder that is not about a day in the plan. An event you saved
+    // and never scheduled still needs booking, and a nudge on the morning of
+    // an event that sold out a fortnight ago is no use to anybody - so this
+    // walks the saved events by their own date rather than walking the plan.
+    if (settings.booking) {
+      loadPicks()
+        // kind === "event" is load-bearing: a place can carry booking too,
+        // and a place has no date to count back from.
+        .filter((p) => p.kind === "event" && p.booking && !p.booked && p.startsAt)
+        // Sorted, so an event keeps the same notification id from one
+        // reschedule to the next and the fingerprint does not churn every
+        // time the app is opened.
+        .sort((a, b) => String(a.startsAt).localeCompare(String(b.startsAt)) || String(a.id).localeCompare(String(b.id)))
+        .forEach((pick, i) => {
+          const when = new Date(pick.startsAt);
+          if (Number.isNaN(when.getTime())) return;
+          const nudge = new Date(when);
+          nudge.setDate(nudge.getDate() - BOOKING_NUDGE_DAYS);
+          out.push({
+            id: NOTIFY_IDS.booking + (i % NOTIFY_BLOCK),
+            at: atTimeOn(nudge, morningMins),
+            title: `Book ${pick.name}?`,
+            body:
+              `It's on ${humanDate(when)}${pick.time ? ` at ${pick.time}` : ""}` +
+              `${pick.bookingLevel === "required" ? " and has to be booked ahead" : " and these sell out"}.`,
+            tab: "events",
+          });
+        });
+    }
 
     // Nothing in the past, and nothing so far out that the plan will have
     // changed twice before it fires.
@@ -15683,6 +16292,16 @@
   // and there is no way to wait for forever. These read; none of them changes
   // anything.
   window.__tripTest = {
+    eventVerdict,
+    backfillEvents,
+    eventsNeedingBackfill,
+    napIsUnavoidable,
+    napWindow,
+    earliestBedtime,
+    bedtimeOf,
+    looksOutdoor,
+    copyEventFields,
+    EVENT_FIELDS,
     // Places and Eats are views with no tab of their own; a suite that wants
     // to render one has no button to press.
     showView,
