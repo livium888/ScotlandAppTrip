@@ -12,6 +12,7 @@
 // screen gives it. And the verdict is ONE line: a row wearing six badges is a
 // row nobody reads, and only one of the six is ever the reason you don't go.
 import { chromium } from 'playwright';
+import { ANGLE_MARKERS, angleFromPrompt, ANGLE_KEYS } from './lib/angles.mjs';
 import fs from 'node:fs';
 const SANDBOX_CHROMIUM = '/opt/pw-browsers/chromium';
 const LAUNCH_OPTS = fs.existsSync(SANDBOX_CHROMIUM) ? { executablePath: SANDBOX_CHROMIUM } : {};
@@ -313,13 +314,14 @@ await page.route(/generativelanguage\.googleapis\.com/, (route) => {
   // hits every prompt, because the contract itself asks whether a thing is
   // aimed at children - so the market angle would be answered with the
   // storytime and the outdoor event would never exist.
+  const angle = angleFromPrompt(p);
   let list = [];
-  if (/farmers' markets/.test(p)) list = [{ name: 'Farmers Market', date: evDay, time: '09:00', endTime: '16:00',
+  if (angle === 'market') list = [{ name: 'Farmers Market', date: evDay, time: '09:00', endTime: '16:00',
     venue: 'Market Place', area: 'Bakewell', what: 'Producers.', price: 'free', setting: 'outdoor' }];
-  else if (/things on for children/.test(p)) list = [{ name: 'Toddler Storytime', date: evDay, time: '10:30', endTime: '11:15',
+  else if (angle === 'family') list = [{ name: 'Toddler Storytime', date: evDay, time: '10:30', endTime: '11:15',
     venue: 'Library', area: 'Bakewell', what: 'Songs.', price: 'free', setting: 'indoor',
     minAge: 1, maxAge: 4, childFocus: 'aimed' }];
-  else if (/a local would know/.test(p)) list = [{ name: 'Village Fete', date: evDay, time: '11:00', endTime: '17:00',
+  else if (angle === 'fetes') list = [{ name: 'Village Fete', date: evDay, time: '11:00', endTime: '17:00',
     venue: 'The Green', area: 'Bakewell', what: 'Cakes.', price: 'free' }];
   return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
     candidates: [{ content: { parts: [{ text: JSON.stringify(list) }] },

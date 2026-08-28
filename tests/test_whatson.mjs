@@ -15,6 +15,7 @@
 // mixed into a list of permanent places where the one thing that matters
 // about them — when — had nowhere to sit.
 import { chromium } from 'playwright';
+import { ANGLE_MARKERS, angleFromPrompt, ANGLE_KEYS } from './lib/angles.mjs';
 import fs from 'node:fs';
 const SANDBOX_CHROMIUM = '/opt/pw-browsers/chromium';
 const LAUNCH_OPTS = fs.existsSync(SANDBOX_CHROMIUM) ? { executablePath: SANDBOX_CHROMIUM } : {};
@@ -42,16 +43,12 @@ const ANGLES = {
   family: [{ name: 'Toddler Storytime', time: '10:30', venue: 'Stirling Library', area: 'Stirling', what: 'Under fives.', price: 'free' }],
   arts: [{ name: 'Macbeth at the Tolbooth', time: '19:30', venue: 'The Tolbooth', area: 'Stirling', what: 'Am-dram.', price: '££', tickets: 'https://example.com/tix' }],
   outdoors: [{ name: 'Ochils Guided Walk', time: '10:00', venue: 'Dumyat car park', area: 'Stirling', what: 'Five miles.', price: '£' }],
-  local: [
+  fetes: [
     { name: 'The Folk Session at the Settle Inn', time: '21:00', venue: 'Settle Inn', area: 'Stirling', what: 'The same one, found twice.', price: 'free' },
     { name: 'Bridge of Allan Quiz Night', time: '20:00', venue: 'Westerton Arms', area: 'Bridge of Allan', what: 'Quiz.', price: 'free' },
     { name: 'A Thing In London', time: '19:00', venue: 'Somewhere', area: 'Chelsea, London', what: 'The model got lost.', price: 'free' },
     { name: 'Nowhere At All Gathering', time: '', venue: '', area: '', what: 'No place, no town.', price: 'free' },
   ],
-};
-const ANGLE_MARKERS = {
-  music: 'live music', market: "farmers' markets", family: 'things on for children',
-  arts: 'theatre, comedy', outdoors: 'guided walks', local: 'a local would know',
 };
 
 let geminiCalls = 0;
@@ -65,8 +62,10 @@ await page.route(/generativelanguage\.googleapis\.com/, (route) => {
   geminiCalls++;
   const prompt = JSON.parse(route.request().postData() || '{}').contents[0].parts[0].text;
   promptsSeen.push(prompt);
-  const angle = Object.keys(ANGLE_MARKERS).find((k) => prompt.includes(ANGLE_MARKERS[k])) || 'music';
-  let list = ANGLES[angle].map((e) => ({ ...e, date: soonIso }));
+  const angle = angleFromPrompt(prompt) || 'music';
+  // An angle with no fixture answers nothing, which is a real thing that
+  // happens and must not crash the mock.
+  let list = (ANGLES[angle] || []).map((e) => ({ ...e, date: soonIso }));
   // The arts angle also returns a run of days that began before the window.
   if (angle === 'arts') {
     list = list.concat([{ name: 'Stirling Fringe', date: iso(new Date(Date.now() - 3 * 86400000)),
@@ -147,19 +146,28 @@ check('the screen explains itself before you have searched anything',
 // The presets by name rather than by count, so adding one does not fail this.
 check('it offers the date window up front', await page.evaluate(() =>
   ['trip', 'weekend', 'week'].every((k) => !!document.querySelector(`[data-ev-when="${k}"]`))));
-check('and the kinds of thing to look for', await page.evaluate(() =>
-  document.querySelectorAll('[data-ev-kind]').length === 6));
+check('and the kinds of thing to look for', await page.evaluate(
+  (n) => document.querySelectorAll('[data-ev-kind]').length === n, ANGLE_KEYS.length),
+  await page.evaluate(() => document.querySelectorAll('[data-ev-kind]').length));
 
 // ---------- Recall: six questions, not one ----------
 
 await page.evaluate(() => document.getElementById('evSearch').click());
 await searchDone();
 
-check('it asks six different questions rather than one general one',
-  geminiCalls === 6, `${geminiCalls} calls`);
+const anglesAsked = new Set(promptsSeen.map(angleFromPrompt).filter(Boolean));
+check('it asks one question per kind rather than one general one',
+  anglesAsked.size === ANGLE_KEYS.length,
+  `${anglesAsked.size} of ${ANGLE_KEYS.length}: ${[...anglesAsked].join(',')}`);
 check('and no longer tells the model to hold back',
   promptsSeen.every((p) => !/worth more than twelve guesses|Leave out anything/.test(p)));
-check('it asks for breadth instead', promptsSeen.some((p) => /Twenty real listings/.test(p)));
+check('it asks for breadth instead', promptsSeen.every((p) => /better answer than five/.test(p)));
+// The part that goes after the small stuff: named sources, and permission to
+// list a thing with six people at it.
+check('and names where small things are actually written down',
+  promptsSeen.every((p) => /parish magazines and community newsletters/.test(p)));
+check('and says plainly that tiny counts',
+  promptsSeen.every((p) => /six people at it is exactly what is wanted/.test(p)));
 check('while still refusing invention', promptsSeen.every((p) => /[Dd]o not invent/.test(p)));
 
 const names = () => page.evaluate(() =>

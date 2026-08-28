@@ -190,6 +190,8 @@
       // actually changed is stored; everything else uses the built-in
       // phrasing, so improvements to the defaults still reach them.
       catPrompts: stored.catPrompts && typeof stored.catPrompts === "object" ? stored.catPrompts : {},
+      anglePrompts:
+        stored.anglePrompts && typeof stored.anglePrompts === "object" ? stored.anglePrompts : {},
     };
   }
 
@@ -485,6 +487,17 @@
     if (who) lines.push(`Travellers: ${who}`);
     if (s.preferences.trim()) lines.push(`What matters to us: ${s.preferences.trim()}`);
     return lines.length ? `\n${lines.join("\n")}` : "";
+  }
+
+  // An angle's question, with the user's rewrite winning if there is one.
+  // Same contract as categoryPrompt below: the app still adds how far, when,
+  // who is travelling and the formatting rules, so an edit can change what
+  // comes back but cannot break the search.
+  function anglePrompt(key) {
+    const custom = loadTripSettings().anglePrompts[key];
+    if (custom && custom.trim()) return custom.trim();
+    const angle = EVENT_ANGLES.find((a) => a.key === key);
+    return angle ? angle.ask : String(key);
   }
 
   // A category's question, with the user's rewrite winning if there is one.
@@ -7460,43 +7473,116 @@ ${(() => {
   // about what one used to.
   const EVENT_ANGLES = [
     { key: "music", label: "Music & nightlife",
-      ask: "live music, gigs, folk sessions, open mic nights, club nights, ceilidhs, choirs, brass bands" },
+      ask: "live music, gigs, folk and trad sessions, open mic nights, club nights, ceilidhs, " +
+           "choirs and singing groups, brass and silver bands, organ recitals, pub music, " +
+           "battle of the bands, tribute acts, karaoke nights" },
     { key: "market", label: "Markets & food",
-      ask: "farmers' markets, street food, food festivals, craft fairs, car boot sales, night markets, tastings" },
+      ask: "farmers' markets, street food, food and drink festivals, craft and makers' markets, " +
+           "car boot sales, table top sales, night markets, tastings and tap takeovers, " +
+           "produce shows, cake sales, pop-up kitchens, supper clubs, foraging walks" },
     { key: "family", label: "For children",
-      ask: "things on for children and families - storytimes, workshops, holiday clubs, kids' theatre, farm and animal events, fetes" },
+      ask: "things on for children and families - storytime and rhyme time, stay and play, " +
+           "toddler groups, holiday clubs, craft workshops, kids' theatre and puppet shows, " +
+           "farm and animal events, forest school and nature tots, junior parkrun, " +
+           "soft play sessions, messy play, teddy bears' picnics, pantomimes" },
     { key: "arts", label: "Arts & theatre",
-      ask: "theatre, comedy, cinema screenings, exhibitions with an end date, talks, book events, open studios" },
+      ask: "theatre and am-dram, comedy nights, cinema and film club screenings, exhibitions with " +
+           "an end date, artist talks, author and book events, open studios and art trails, " +
+           "poetry nights, craft classes, life drawing, museum lates" },
     { key: "outdoors", label: "Outdoors & sport",
-      ask: "guided walks, races, matches, shows, agricultural and county shows, regattas, park runs, wildlife events" },
-    { key: "local", label: "Local & one-off",
-      ask: "things a local would know about - village hall events, church and community centre listings, fundraisers, quiz nights, anniversaries, seasonal celebrations" },
+      ask: "guided and heritage walks, races and fun runs, parkrun, local matches and fixtures, " +
+           "agricultural and county shows, ploughing matches, sheepdog trials, regattas, " +
+           "steam and vintage rallies, wildlife and birdwatching events, open gardens, " +
+           "conservation work days, cycling sportives, orienteering" },
+    // The three that replaced one catch-all called "Local & one-off". That
+    // single angle was doing the work of four, and it was the one covering the
+    // smallest events - which is to say the ones this whole screen is for.
+    { key: "hall", label: "Village hall & church",
+      ask: "village hall, community centre, church and chapel events - coffee mornings, " +
+           "jumble sales, bring and buy, table top sales, beetle drives, whist drives, bingo, " +
+           "quiz nights, harvest suppers, community lunches, messy church, parish notices, " +
+           "flower festivals, bell ringing, hall AGMs and open days, warm spaces" },
+    { key: "clubs", label: "Clubs & societies",
+      ask: "what the local clubs and societies have on - WI, horticultural and gardening " +
+           "societies, allotment associations, camera clubs, history and heritage societies, " +
+           "u3a, model railway and modelling clubs, bell ringers, bowls and cricket club " +
+           "socials, angling clubs, open rehearsals, talks to members that visitors may attend" },
+    { key: "fetes", label: "Fetes & fundraisers",
+      ask: "fetes, gala days, carnivals and processions, school fairs and PTA events, " +
+           "summer and Christmas fairs, duck races, sponsored walks and runs, tombolas, " +
+           "charity coffee mornings, macmillan mornings, scout and guide fundraisers, " +
+           "raffles, village weekends" },
+    // The ninth, and deliberately the vaguest: the things that fit nowhere
+    // else are exactly the ones a tidy set of categories loses. The old
+    // catch-all was doing this job badly while also covering halls, clubs and
+    // fetes; with those three taken off it, it can do only this.
+    { key: "oneoff", label: "Seasonal & one-off",
+      ask: "the odd one-off things that fit no category - wassails, well dressings, " +
+           "beating the bounds, lantern parades, bonfire and firework nights, light switch-ons, " +
+           "remembrance and anniversary events, open days at places usually closed, " +
+           "behind-the-scenes tours, pop-ups, repair cafes, community litter picks, " +
+           "swap shops, seed swaps, apple days, and anything unusual happening once" },
   ];
 
-  function eventPrompt(centre, window, radiusMetres, angle) {
+  // Said once, to every angle, so nine prompts cannot drift apart. This is the
+  // part that goes after the small stuff.
+  //
+  // The old prompt said "small and local counts as much as big and ticketed",
+  // which is a hint rather than an instruction: it named no source and no
+  // vocabulary, and a model that is not told where to look reaches for the
+  // tourist board. The things worth finding are one layer under that, and they
+  // are written down - just not on the sites a general search reaches for.
+  const SMALL_EVENT_SOURCES =
+    `Look where small things are actually written down, not just the obvious sites: ` +
+    `parish magazines and community newsletters; village hall and community centre pages; ` +
+    `church, chapel and cathedral noticeboards; library and council what's-on pages; ` +
+    `town and parish council minutes and agendas; school and PTA pages; tourist board and ` +
+    `visitor centre diaries; National Trust, RSPB, Wildlife Trust and country park listings; ` +
+    `farm shops, garden centres, pubs and village shops; sports, social and working men's clubs; ` +
+    `local newspapers and their listings columns; community radio; and the small ticketing ` +
+    `sites that tiny organisers actually use - TicketSource, Ticket Tailor, Eventbrite. ` +
+    `Public Facebook Pages for venues and community groups are worth reading where they are ` +
+    `reachable.`;
+
+  const SMALL_EVENT_APPETITE =
+    `Be exhaustive, and prefer the small. A coffee morning in a village hall with six people ` +
+    `at it is exactly what is wanted here; so is a talk to a gardening society, a school fair, ` +
+    `a duck race, a jumble sale, a beetle drive. Something with no website at all, mentioned ` +
+    `once in a parish newsletter, is worth listing. Do not restrict yourself to things that ` +
+    `are ticketed, promoted or aimed at visitors - most of what is on in a place is aimed at ` +
+    `the people who live there, and that is the good stuff. Thirty real listings is a better ` +
+    `answer than five.`;
+
+  function eventPrompt(centre, window, radiusMetres, angle, towns) {
     const miles = Math.max(1, Math.round(toMiles(radiusMetres / 1000)));
     const who = aiContextBlock();
+    // Named places rather than a radius, when we know them. The radius stays
+    // as well - it is what bounds the answer - but the names are what make it
+    // answerable.
+    const where = towns && towns.length
+      ? `within about ${miles} miles of ${centre.name}. That area covers ${towns.join(", ")}` +
+        `${towns.length >= SETTLEMENT_LIMIT ? " and other villages nearby" : ""} - ` +
+        `go through them, not just the biggest one`
+      : `within about ${miles} miles of ${centre.name}`;
     const sameDay = isoDate(window.from) === isoDate(window.to);
     const when = sameDay
       ? `on ${humanDate(window.from)} ${window.from.getFullYear()}`
       : `between ${humanDate(window.from)} and ${humanDate(window.to)} ${window.from.getFullYear()}`;
 
     return (
-      `List events happening ${when}, within about ${miles} miles of ${centre.name}.` +
+      `List events happening ${when}, ${where}.` +
       (window.fromTime
         ? ` On ${humanDate(window.from)} only things still going at ${window.fromTime} or later - ` +
           `something that finishes before then is no use, but something that runs across it is.`
         : "") +
       `\n\n` +
-      `Specifically: ${angle.ask}.${who}\n\n` +
+      `Specifically: ${anglePrompt(angle.key)}.${who}\n\n` +
       // The old prompt said "leave out anything you cannot confirm; six real
       // ones are worth more than twelve guesses", and the model did as it was
       // told. Breadth is the job here - the app filters afterwards, and an
       // event nobody lists is one nobody can go to.
-      `Be thorough. Search venue listings, local newspapers, council and tourist board ` +
-      `what's-on pages, venue social media, ticketing sites and community noticeboards. ` +
-      `Small and local counts as much as big and ticketed. Twenty real listings is a ` +
-      `better answer than three.\n\n` +
+      `${SMALL_EVENT_APPETITE}\n\n` +
+      `${SMALL_EVENT_SOURCES}\n\n` +
       `Include something only if you have seen it listed with a date. Do not invent ` +
       `plausible-sounding events, and do not pad the list with permanent attractions - ` +
       `a castle that opens every day is not an event.\n\n` +
@@ -7863,8 +7949,8 @@ ${(() => {
     return townA === townB || townA.includes(townB) || townB.includes(townA);
   }
 
-  async function askOneAngle(key, centre, window, radiusMetres, angle) {
-    const prompt = eventPrompt(centre, window, radiusMetres, angle);
+  async function askOneAngle(key, centre, window, radiusMetres, angle, towns) {
+    const prompt = eventPrompt(centre, window, radiusMetres, angle, towns);
     // Grounded first, because grounding is what makes an event real rather
     // than plausible; JSON mode as the fallback, because a grounded reply
     // comes back as prose often enough to fail outright.
@@ -8343,12 +8429,17 @@ ${(() => {
           w.fromTime ? `, from ${esc(w.fromTime)}` : ""
         }</p>
         <div class="search-chips ev-kinds">
-          ${EVENT_ANGLES.map(
-            (a) =>
-              `<button class="search-chip${eventSearch.kinds.includes(a.key) ? " on" : ""}" data-ev-kind="${esc(
-                a.key
-              )}">${esc(a.label)}</button>`
-          ).join("")}
+          ${EVENT_ANGLES.map((a) => {
+            const tuned = !!loadTripSettings().anglePrompts[a.key];
+            return `<span class="ev-kind-wrap">
+              <button class="search-chip${eventSearch.kinds.includes(a.key) ? " on" : ""}${
+                tuned ? " tuned" : ""
+              }" data-ev-kind="${esc(a.key)}">${esc(a.label)}</button>
+              <button class="ev-kind-tune" data-ev-tune="${esc(a.key)}" aria-label="Change what ${esc(
+                a.label
+              )} looks for">✎</button>
+            </span>`;
+          }).join("")}
         </div>
         <p class="settings-hint">
           ${
@@ -8597,6 +8688,19 @@ ${(() => {
         size: 14,
         cls: "ico-inline",
       })} Found by searching the web. Worth a check before you set off — every one links where it came from.</p>`;
+      // Said once, plainly. A closed Facebook group needs a login and is not
+      // indexed by anything; neither is an Instagram feed. Without saying so,
+      // a genuinely quiet week and a village that only posts to a group look
+      // identical - and the difference decides whether you go looking
+      // elsewhere or assume the app is broken.
+      html += `<p class="settings-hint ev-caveat">${icon("info", {
+        size: 14,
+        cls: "ico-inline",
+      })} Nine searches, through parish newsletters, hall and church pages, council and library
+         listings, clubs and the small ticketing sites. Closed Facebook groups and Instagram
+         can't be searched by anything — if you know about something from there,
+         <button class="link-btn" id="evAddByHand">add it by hand</button> and it gets a pin,
+         a day and reminders like the rest.</p>`;
     }
 
     if (upcoming.length) {
@@ -8644,6 +8748,13 @@ ${(() => {
       b.addEventListener("click", () => {
         eventSearch.when = b.getAttribute("data-ev-when");
         renderEvents();
+      })
+    );
+
+    view.querySelectorAll("[data-ev-tune]").forEach((b) =>
+      b.addEventListener("click", (e) => {
+        e.stopPropagation();
+        openAngleTuner(b.getAttribute("data-ev-tune"));
       })
     );
 
@@ -8703,6 +8814,9 @@ ${(() => {
         renderEvents();
       });
     }
+
+    const byHand = document.getElementById("evAddByHand");
+    if (byHand) byHand.addEventListener("click", () => openSearchOverlay(""));
 
     const stopBtn = document.getElementById("evStop");
     if (stopBtn) stopBtn.addEventListener("click", () => stopEventSearch());
@@ -8770,6 +8884,30 @@ ${(() => {
   // the streaming work and is far more likely with it.
   let eventGeneration = 0;
   let eventQueue = null;
+  const ANGLE_STAGGER_MS = 180;
+
+  // One Overpass lookup per area, remembered. The villages around a place do
+  // not change, so asking twice is asking a free community service for
+  // something we already know.
+  const townsCache = {};
+
+  async function townsAround(centre, radiusMetres) {
+    const key = `${centre.lat.toFixed(2)},${centre.lon.toFixed(2)},${Math.round(radiusMetres / 1609)}`;
+    if (townsCache[key]) return townsCache[key];
+    const towns = await settlementsNear(centre.lat, centre.lon, radiusMetres);
+    // The centre itself is already named in the prompt; repeating it in the
+    // list of what the area covers reads as a mistake.
+    const flat = String(centre.name || "").toLowerCase().trim();
+    const out = towns.filter((t) => t.toLowerCase().trim() !== flat);
+    // An empty answer is never cached. Overpass is a free community service
+    // that is sometimes briefly down, and remembering "there are no villages
+    // near Bakewell" would mean one bad minute costs every future search of
+    // that area its village names, for as long as the app is open. Exactly
+    // the trap the geocode cache already documents: caching a miss means the
+    // right answer can never be learned.
+    if (out.length) townsCache[key] = out;
+    return out;
+  }
 
   // One redraw for a burst of arrivals rather than one each. The photo loader
   // has done this since Phase 1 for the same reason: results land in clumps.
@@ -8811,7 +8949,7 @@ ${(() => {
   async function runOneAngle(angle, ctx, generation) {
     eventSearch.angles[angle.key] = "running";
     scheduleEventsRedraw();
-    const answer = await askOneAngle(ctx.key, ctx.centre, ctx.window, ctx.radius, angle);
+    const answer = await askOneAngle(ctx.key, ctx.centre, ctx.window, ctx.radius, angle, ctx.towns);
     if (generation !== eventGeneration) return;
 
     // An angle that answered nothing at all is the one case worth calling a
@@ -8885,9 +9023,21 @@ ${(() => {
       radius,
       cutoff,
       seen: new Map(),
+      towns: [],
       anchor: { name: centre.name, lat: centre.lat, lon: centre.lon, miles: toMiles(radius / 1000) },
     };
     eventSearch.ctx = ctx;
+
+    // The village names, before the questions go out. Cheap - one Overpass
+    // call, no key, no AI quota - and it is what turns "within 15 miles of
+    // Bakewell" into a question about places that actually have parish halls.
+    // Cached per area, so a second search of the same place pays nothing.
+    try {
+      ctx.towns = await townsAround(centre, radius);
+    } catch (e) {
+      // The prompt falls back to the radius wording. Never fatal.
+    }
+    if (generation !== eventGeneration) return;
 
     if (eventQueue) eventQueue.stop();
     eventQueue = makePlaceQueue(scheduleEventsRedraw);
@@ -8895,11 +9045,23 @@ ${(() => {
     const angles = anglesForSearch();
     angles.forEach((a) => { eventSearch.angles[a.key] = "waiting"; });
 
-    // Six independent chains rather than a Promise.all barrier. The fastest
+    // Independent chains rather than a Promise.all barrier. The fastest
     // angle's results are on screen while the slowest is still thinking,
     // which is the whole point: one dead angle used to hold the other five
     // for a minute and a half with nothing to look at.
-    await Promise.all(angles.map((angle) => runOneAngle(angle, ctx, generation)));
+    //
+    // Started a beat apart rather than all together. Nine simultaneous
+    // grounded calls is a plausible way to meet a free-tier rate limit, and
+    // because results stream in the stagger costs almost nothing - the last
+    // angle starts about a second and a half after the first, against calls
+    // that take fifteen.
+    await Promise.all(
+      angles.map(async (angle, i) => {
+        if (i) await new Promise((r) => setTimeout(r, i * ANGLE_STAGGER_MS));
+        if (generation !== eventGeneration) return;
+        await runOneAngle(angle, ctx, generation);
+      })
+    );
     if (generation !== eventGeneration) return;
     await eventQueue.whenIdle();
     if (generation !== eventGeneration) return;
@@ -9097,6 +9259,69 @@ ${(() => {
   // Lets the question behind a category be rewritten. Only the description
   // is editable - the app still adds the "reply with JSON" scaffolding, so
   // an edit can change what comes back but can't break the search.
+  // The same sheet as the category tuner, for the nine event searches. This is
+  // where local knowledge the app cannot guess belongs - the name of a village
+  // newsletter, a listings site you happen to know about.
+  function openAngleTuner(key) {
+    const angle = EVENT_ANGLES.find((a) => a.key === key);
+    if (!angle) return;
+    const current = anglePrompt(key);
+    const edited = current !== angle.ask;
+
+    placeModal.innerHTML = `
+      <div class="modal-backdrop" data-close="1">
+        <div class="modal-sheet" role="dialog" aria-label="Change what this looks for">
+          <div class="modal-handle"></div>
+          <button class="modal-close" data-close="1" aria-label="Close">${icon("close", { size: 17, cls: "ico-inline" })}</button>
+          <div class="modal-body">
+            <h2 class="modal-title">${esc(angle.label)}</h2>
+            <div class="modal-subtitle">What this search asks for</div>
+
+            <textarea class="settings-input notes-box" id="anglePromptBox" rows="6">${esc(current)}</textarea>
+            <p class="settings-hint">
+              Describe the kind of thing you want back. The app adds the rest — where, when,
+              who's travelling, where to go looking, and the formatting rules. Naming somewhere
+              specific helps: a village newsletter, a hall, a listings page you know about.
+            </p>
+
+            <div class="settings-btn-row" style="margin-top:12px;">
+              <button class="modal-btn modal-btn-primary" id="anglePromptSave">Save</button>
+              <button class="modal-btn" id="anglePromptReset" ${edited ? "" : "disabled"}>Reset to default</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+    placeModal.classList.add("open");
+    makeSheetDraggable(placeModal, closePlaceModal);
+
+    placeModal.querySelectorAll("[data-close]").forEach((el) => {
+      el.addEventListener("click", (e) => {
+        if (e.target === el) closePlaceModal();
+      });
+    });
+
+    document.getElementById("anglePromptSave").addEventListener("click", () => {
+      const text = document.getElementById("anglePromptBox").value.trim();
+      const map = Object.assign({}, loadTripSettings().anglePrompts);
+      // Storing only real changes means later improvements to the built-in
+      // wording still reach anyone who never edited that search.
+      if (!text || text === angle.ask) delete map[key];
+      else map[key] = text;
+      saveTripSettings({ anglePrompts: map });
+      closePlaceModal();
+      renderEvents();
+    });
+
+    document.getElementById("anglePromptReset").addEventListener("click", () => {
+      const map = Object.assign({}, loadTripSettings().anglePrompts);
+      delete map[key];
+      saveTripSettings({ anglePrompts: map });
+      closePlaceModal();
+      renderEvents();
+    });
+  }
+
   function openCategoryTuner(key) {
     const cat = findCategory(key);
     if (!cat) return;
@@ -9555,6 +9780,68 @@ ${(() => {
   // gets you blocked, so the fallback is capped and the cap is announced
   // rather than silently returning a smaller area than was asked for.
   const OVERPASS_MAX_RADIUS_M = Math.round((10 / MILES_PER_KM) * 1000); // 10 miles
+
+  // Settlements get their own, larger cap. "Every village within 25 miles" is
+  // a far lighter question than "every restaurant within 25 miles" - there are
+  // tens of answers rather than thousands - so the reason for the tight cap
+  // above does not apply to it.
+  const OVERPASS_PLACES_RADIUS_M = Math.round((30 / MILES_PER_KM) * 1000);
+
+  // The towns, villages and hamlets actually inside the search area, by name.
+  //
+  // This is the single biggest thing that was missing from the prompt. "Within
+  // 15 miles of Bakewell" is close to meaningless to a model - it cannot draw
+  // a circle and read what is inside it. "Anything on in Ashford-in-the-Water,
+  // Baslow, Hassop, Great Longstone" is a question it can actually answer, and
+  // it is the form the answers exist in: a parish hall event is written down
+  // under the name of its village and nowhere else.
+  //
+  // Free, no key, no AI call - the same OpenStreetMap data the map tiles and
+  // the geocoder already use.
+  async function settlementsNear(lat, lon, radiusMetres) {
+    const radius = Math.min(radiusMetres || OVERPASS_PLACES_RADIUS_M, OVERPASS_PLACES_RADIUS_M);
+    const filter = `["place"~"^(city|town|village|hamlet)$"]["name"]`;
+    const q = `[out:json][timeout:25];(node${filter}(around:${radius},${lat},${lon}););out ${SETTLEMENT_LIMIT * 3};`;
+
+    let data = null;
+    for (const endpoint of OVERPASS_ENDPOINTS) {
+      try {
+        const res = await fetchWithTimeout(
+          endpoint,
+          { method: "POST", body: q, headers: { "Content-Type": "text/plain" } },
+          NET_TIMEOUT_SLOW_MS
+        );
+        if (!res.ok) continue;
+        data = await res.json();
+        break;
+      } catch (e) {
+        // Try the next mirror.
+      }
+    }
+    // Deliberately not a throw. A missing village list makes the prompt
+    // slightly worse; it must never make the search fail.
+    if (!data || !Array.isArray(data.elements)) return [];
+
+    const rank = { city: 0, town: 1, village: 2, hamlet: 3 };
+    return data.elements
+      .filter((el) => el.tags && el.tags.name && el.lat != null)
+      .map((el) => ({
+        name: el.tags.name,
+        place: el.tags.place,
+        km: haversineKm(lat, lon, el.lat, el.lon),
+      }))
+      // Nearest first, but a town ahead of a hamlet at the same distance: the
+      // bigger places carry the listings pages, the smaller ones carry the
+      // village hall.
+      .sort((a, b) => a.km - b.km || rank[a.place] - rank[b.place])
+      .filter((x, i, all) => all.findIndex((y) => y.name === x.name) === i)
+      .slice(0, SETTLEMENT_LIMIT)
+      .map((x) => x.name);
+  }
+
+  // Enough to be concrete, few enough that the prompt does not become a list
+  // of places instead of a question.
+  const SETTLEMENT_LIMIT = 18;
 
   async function overpassNearby(lat, lon, cat, radius) {
     radius = Math.min(radius || 1200, OVERPASS_MAX_RADIUS_M);

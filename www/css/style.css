@@ -3675,3 +3675,24 @@ html, body {
 .ev-angle-failed { border-style: dashed; }
 .ev-angle-stopped { opacity: 0.6; }
 .ev-progress .link-btn { margin-top: 6px; margin-right: 12px; }
+
+/* Nine searches now, each with a way to change what it asks for. The pencil
+   sits against its chip rather than inside it, so tapping the chip still
+   toggles the search and only the pencil opens the wording. */
+.ev-kind-wrap { display: inline-flex; align-items: center; }
+.ev-kinds .ev-kind-wrap .search-chip { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.ev-kind-tune {
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  padding: 7px 8px;
+  border: 1px solid var(--line);
+  border-left: 0;
+  border-radius: 0 999px 999px 0;
+  background: var(--card);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+/* A search whose wording you have changed says so, the way an edited Explore
+   category already does. */
+.search-chip.tuned { border-style: dashed; }

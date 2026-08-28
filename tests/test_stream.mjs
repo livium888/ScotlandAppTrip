@@ -14,6 +14,7 @@
 // fast searches are on screen while the slow one is still thinking. It cannot
 // pass by accident, and it could not pass at all before this change.
 import { chromium } from 'playwright';
+import { ANGLE_MARKERS, angleFromPrompt, ANGLE_KEYS } from './lib/angles.mjs';
 import fs from 'node:fs';
 const SANDBOX_CHROMIUM = '/opt/pw-browsers/chromium';
 const LAUNCH_OPTS = fs.existsSync(SANDBOX_CHROMIUM) ? { executablePath: SANDBOX_CHROMIUM } : {};
@@ -51,8 +52,17 @@ const ANGLES = {
   outdoors: [{ name: 'Monsal Ramble', date: day, time: '10:00', endTime: '13:00',
     venue: 'Monsal Head', area: 'Bakewell', what: 'Five miles.', price: 'free', setting: 'outdoor' }],
   // Found by two angles: one row, not two.
-  local: [{ name: 'Farmers Market', date: day, time: '09:00', venue: 'Market Place',
+  fetes: [{ name: 'Farmers Market', date: day, time: '09:00', venue: 'Market Place',
     area: 'Bakewell', what: 'The same one, found twice.', price: 'free', tickets: 'https://example.com/mkt' }],
+  // The three that replaced the old catch-all. Present so that "failed" means
+  // the one angle this suite deliberately breaks, and not simply an angle the
+  // mock forgot to answer for.
+  hall: [{ name: 'Village Hall Coffee Morning', date: day, time: '10:00', endTime: '12:00',
+    venue: 'Village Hall', area: 'Bakewell', what: 'Cake and a natter.', price: 'free', setting: 'indoor' }],
+  clubs: [{ name: 'Horticultural Society Talk', date: day, time: '19:00', endTime: '20:30',
+    venue: 'The Institute', area: 'Bakewell', what: 'Dahlias.', price: '£', setting: 'indoor' }],
+  oneoff: [{ name: 'Well Dressing', date: day, time: '', venue: 'The Square',
+    area: 'Bakewell', what: 'Once a year.', price: 'free', setting: 'outdoor' }],
   // Lands last, and belongs at 08:00 - above everything already on screen.
   music: [{ name: 'Dawn Chorus Walk', date: day, time: '08:00', endTime: '09:30',
     venue: 'The Woods', area: 'Bakewell', what: 'Early.', price: 'free', setting: 'outdoor' }],
@@ -64,13 +74,7 @@ await page.route(/generativelanguage\.googleapis\.com/, async (route) => {
       models: [{ name: 'models/gemini-3.5-flash-lite', supportedGenerationMethods: ['generateContent'] }] }) });
   }
   const p = JSON.parse(route.request().postData() || '{}').contents[0].parts[0].text;
-  let key = null;
-  if (/live music/.test(p)) key = 'music';
-  else if (/farmers' markets/.test(p)) key = 'market';
-  else if (/things on for children/.test(p)) key = 'family';
-  else if (/theatre, comedy/.test(p)) key = 'arts';
-  else if (/guided walks/.test(p)) key = 'outdoors';
-  else if (/a local would know/.test(p)) key = 'local';
+  const key = angleFromPrompt(p);
 
   if (key === 'music') {
     musicCalls++;
@@ -159,7 +163,8 @@ check('including one that has been placed on the map, not just listed',
 const progress = await page.evaluate(() =>
   Array.from(document.querySelectorAll('.ev-angle')).map((e) => e.textContent.replace(/\s+/g, ' ').trim()));
 check('each search is named while it runs, with where it has got to',
-  progress.length === 6 && progress.some((t) => /Music & nightlife/.test(t)), JSON.stringify(progress));
+  progress.length === ANGLE_KEYS.length && progress.some((t) => /Music & nightlife/.test(t)),
+  JSON.stringify(progress));
 check('and says how many have been found so far', /so far/.test(await screen()), (await screen()).slice(0, 400));
 check('with a way to stop and keep them', await page.evaluate(() => !!document.getElementById('evStop')));
 // The form is three rows of chips, a date line, six more chips and a button.
@@ -178,8 +183,13 @@ const final = await names();
 check('the slow one arrives in the end', final.includes('Dawn Chorus Walk'), JSON.stringify(final));
 // It is an 08:00 event arriving after a 09:00 and a 10:30 were already shown.
 // A diary is sorted by time, not by which search happened to answer first.
+// It is an 08:00 event arriving after a 09:00 and a 10:30 were already shown,
+// so it has to end up above both. (An all-day thing with no time at all sits
+// above the lot, which is why this compares positions rather than taking the
+// first row.)
 check('and slots into the diary above what was already there',
-  final[0] === 'Dawn Chorus Walk', JSON.stringify(final));
+  final.indexOf('Dawn Chorus Walk') < final.indexOf('Farmers Market') &&
+  final.indexOf('Farmers Market') < final.indexOf('Toddler Storytime'), JSON.stringify(final));
 check('a listing found by two searches is still one row',
   final.filter((n) => /Farmers Market/.test(n)).length === 1, JSON.stringify(final));
 check('and the row kept what the second search knew about it',

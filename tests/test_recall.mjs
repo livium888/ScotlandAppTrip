@@ -19,6 +19,7 @@
 // counted the results while the list underneath it counted the results minus
 // the ones already saved, so the number never matched the rows.
 import { chromium } from 'playwright';
+import { ANGLE_MARKERS, angleFromPrompt, ANGLE_KEYS } from './lib/angles.mjs';
 import fs from 'node:fs';
 const SANDBOX_CHROMIUM = '/opt/pw-browsers/chromium';
 const LAUNCH_OPTS = fs.existsSync(SANDBOX_CHROMIUM) ? { executablePath: SANDBOX_CHROMIUM } : {};
@@ -64,15 +65,11 @@ const ANGLES = {
     { name: 'Christmas Market', date: wayOutIso, venue: 'The Square', area: 'Stirling', what: 'Months away.', price: 'free' },
   ],
   // Held back rather than binned: real listings that couldn't be pinned.
-  local: [
+  fetes: [
     { name: 'A Thing In London', date: soonIso, time: '19:00', venue: 'Somewhere', area: 'Chelsea, London', what: 'The model got lost.', price: 'free' },
     { name: 'Nowhere Gathering', date: soonIso, time: '18:00', venue: '', area: '', what: 'No place, no town.', price: 'free',
       tickets: 'https://example.com/nowhere' },
   ],
-};
-const ANGLE_MARKERS = {
-  music: 'live music', market: "farmers' markets", family: 'things on for children',
-  arts: 'theatre, comedy', outdoors: 'guided walks', local: 'a local would know',
 };
 
 await page.route(/generativelanguage\.googleapis\.com/, (route) => {
@@ -82,7 +79,7 @@ await page.route(/generativelanguage\.googleapis\.com/, (route) => {
       models: [{ name: 'models/gemini-3.5-flash-lite', supportedGenerationMethods: ['generateContent'] }] }) });
   }
   const prompt = JSON.parse(route.request().postData() || '{}').contents[0].parts[0].text;
-  const angle = Object.keys(ANGLE_MARKERS).find((k) => prompt.includes(ANGLE_MARKERS[k])) || 'music';
+  const angle = angleFromPrompt(prompt) || 'music';
   return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
     candidates: [{ content: { parts: [{ text: JSON.stringify(ANGLES[angle]) }] },
       groundingMetadata: { groundingChunks: [{ web: { uri: 'https://example.com/whats-on', title: "What's on" } }] } }] }) });

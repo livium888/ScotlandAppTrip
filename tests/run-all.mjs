@@ -74,6 +74,7 @@ const SUITES = [
   "test_more.mjs",
   "test_doable.mjs",
   "test_stream.mjs",
+  "test_smallstuff.mjs",
 ];
 
 const MIME = {
