@@ -122,9 +122,10 @@ await page.waitForTimeout(600);
 // flaky or slow, and this suite was both. The loading card is on screen for
 // exactly as long as the search runs, so that is the thing to wait on.
 const searchDone = async () => {
-  await page.waitForFunction(
-    () => !/Asking six different ways/.test(document.getElementById('view').textContent),
-    null, { timeout: 40000 });
+  // A real end condition rather than the absence of a sentence. Results now
+  // stream in, so "the loading copy has gone" was never the right question -
+  // and the copy has changed anyway.
+  await page.waitForFunction(() => !window.__tripTest.eventsBusy(), null, { timeout: 40000 });
   await page.waitForTimeout(250);
 };
 

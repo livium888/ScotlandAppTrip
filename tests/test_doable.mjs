@@ -355,8 +355,7 @@ const runSearch = async () => {
   await page.evaluate(() => document.querySelector('[data-ev-when="week"]').click());
   await page.waitForTimeout(200);
   await page.evaluate(() => document.getElementById('evSearch').click());
-  await page.waitForFunction(() => !/Asking six different ways/.test(document.getElementById('view').textContent),
-    null, { timeout: 40000 });
+  await page.waitForFunction(() => !window.__tripTest.eventsBusy(), null, { timeout: 40000 });
   // The forecast lands after the first paint and redraws the screen.
   await page.waitForTimeout(1500);
 };

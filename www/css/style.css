@@ -3653,3 +3653,25 @@ html, body {
 .ev-verdict-warn { color: var(--warn); }
 .ev-verdict-yes { color: var(--success); }
 .ev-weather-chips { margin-top: 10px; }
+
+/* The six searches, named, while they run. Quiet on purpose: this is a
+   progress report, not a control, and it disappears into a plain summary the
+   moment there is nothing left to wait for. */
+.ev-progress { margin-top: 10px; }
+.ev-progress-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.ev-angle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--text-muted);
+}
+.ev-angle-mark { font-weight: 700; }
+.ev-angle-running { border-color: var(--navy); color: var(--text); }
+.ev-angle-done { border-color: var(--success); color: var(--success); }
+.ev-angle-failed { border-style: dashed; }
+.ev-angle-stopped { opacity: 0.6; }
+.ev-progress .link-btn { margin-top: 6px; margin-right: 12px; }

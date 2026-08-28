@@ -7576,11 +7576,32 @@ ${(() => {
   // at 18:45 for a 19:00 thing with a 19:00 bedtime is not a plan.
   const BEDTIME_GRACE_MINS = 0;
 
+  // Read once per render rather than once per row. eventVerdict was parsing
+  // the people list, the nap window and the bedtime out of localStorage for
+  // every single event on screen - which cost nothing when the screen was
+  // drawn twice a search, and costs forty times that now results stream in.
+  let renderPass = null;
+
+  function beginRenderPass() {
+    renderPass = { kids: null, weather: {} };
+  }
+
+  function endRenderPass() {
+    renderPass = null;
+  }
+
+  function kidAges() {
+    if (renderPass && renderPass.kids) return renderPass.kids;
+    const kids = loadPeople().filter(isChild).map((p) => p.age).filter((a) => a != null);
+    if (renderPass) renderPass.kids = kids;
+    return kids;
+  }
+
   function eventVerdict(event, opts) {
     if (!event) return null;
     const options = opts || {};
 
-    const kids = loadPeople().filter(isChild).map((p) => p.age).filter((a) => a != null);
+    const kids = kidAges();
 
     // 0. A door that will not let you in. Nothing below this matters.
     if (kids.length && event.childFocus === "adults") {
@@ -7791,7 +7812,17 @@ ${(() => {
     if (Number.isNaN(when.getTime())) return null;
     const ahead = Math.round((startOfDay(when) - startOfDay(new Date())) / 86400000);
     if (ahead < 0 || ahead > WEATHER_HORIZON_DAYS) return null;
-    const cached = weatherFor(event.lat, event.lon, onUpdate);
+    // weatherFor reads and parses the whole weather cache out of
+    // localStorage. Once per row was invisible when this screen was drawn
+    // twice; it is not, now that it is drawn every time a result lands.
+    const key = `${event.lat.toFixed(2)},${event.lon.toFixed(2)}`;
+    let cached;
+    if (renderPass && Object.prototype.hasOwnProperty.call(renderPass.weather, key)) {
+      cached = renderPass.weather[key];
+    } else {
+      cached = weatherFor(event.lat, event.lon, onUpdate);
+      if (renderPass) renderPass.weather[key] = cached;
+    }
     if (!cached || !cached.days) return null;
     const iso = isoDate(when);
     return cached.days.find((d) => d.date === iso) || null;
@@ -7933,137 +7964,79 @@ ${(() => {
     };
   }
 
-  // A handful at a time. Serial with a second's pause between each was thirteen
-  // seconds of doing nothing for twelve events, and the geocode cache added in
-  // Phase 1 means most of these never touch the network at all.
-  async function inBatches(items, size, worker) {
-    const out = [];
-    for (let i = 0; i < items.length; i += size) {
-      const batch = items.slice(i, i + size);
-      out.push(...(await Promise.all(batch.map(worker))));
-      // Politeness to Nominatim between batches rather than between items.
-      if (i + size < items.length) await new Promise((r) => setTimeout(r, 900));
+  // ---------- Placing events, politely, one queue for all six angles ----------
+  // This used to be inBatches(candidates, 4): four at a time with a 900ms
+  // pause between batches, and it could not start until every angle had
+  // answered. Two problems with that, now the angles report independently.
+  //
+  // Six angles each running their own batches would hit Nominatim six times
+  // harder than the old code did, which is the opposite of polite. So there is
+  // one queue, shared, and it is the only thing that talks to the geocoder.
+  //
+  // And the pause was unconditional. geocodeCandidates has recorded
+  // lastGeocodeFromCache since Phase 1 precisely so a caller can skip it, and
+  // the old code never read it - so a re-search of forty events that answered
+  // entirely from the cache still sat there sleeping for eight seconds on
+  // nobody's behalf. The pause is owed for a request that actually went out.
+  const GEOCODE_PAUSE_MS = 900;
+
+  function makePlaceQueue(onPlaced) {
+    const items = [];
+    let running = false;
+    let stopped = false;
+    let idle = null;
+    let markIdle = null;
+
+    async function drain() {
+      running = true;
+      while (items.length && !stopped) {
+        const next = items.shift();
+        let wentToNetwork = false;
+        try {
+          lastGeocodeFromCache = true;
+          await next();
+          wentToNetwork = !lastGeocodeFromCache;
+        } catch (e) {
+          // One event failing to place is not the queue failing.
+        }
+        if (items.length && !stopped && wentToNetwork) {
+          await new Promise((r) => setTimeout(r, GEOCODE_PAUSE_MS));
+        }
+        if (onPlaced) onPlaced();
+      }
+      running = false;
+      if (markIdle) {
+        markIdle();
+        markIdle = null;
+        idle = null;
+      }
     }
-    return out;
+
+    return {
+      push(job) {
+        if (stopped) return;
+        items.push(job);
+        if (!running) drain();
+      },
+      stop() {
+        stopped = true;
+        items.length = 0;
+      },
+      // Resolves when everything queued so far has been dealt with.
+      whenIdle() {
+        if (!running && !items.length) return Promise.resolve();
+        if (!idle) idle = new Promise((r) => { markIdle = r; });
+        return idle;
+      },
+    };
   }
 
-  async function eventsWithGemini(centre, windowKey, radiusMetres, key, angleKeys) {
-    eventsDropped = Object.assign({}, NO_DROPS);
-    eventsHeldBack = [];
-    const window = eventWindow(windowKey);
-    const angles = EVENT_ANGLES.filter(
-      (a) => !angleKeys || !angleKeys.length || angleKeys.includes(a.key)
-    );
-
-    // All six at once. One slow angle no longer holds up the other five, and
-    // one failing angle does not fail the search.
-    const answers = await Promise.all(
-      angles.map((angle) => askOneAngle(key, centre, window, radiusMetres, angle))
-    );
-
-    const anchor = { name: centre.name, lat: centre.lat, lon: centre.lon, miles: toMiles(radiusMetres / 1000) };
-
-    // The moment to search from, when one was given: on that day, anything
-    // already finished is not an answer to "what can I still go to".
-    let cutoff = null;
-    if (window.fromTime) {
-      const mins = timeToMinutes(window.fromTime);
-      if (mins != null) {
-        cutoff = new Date(window.from);
-        cutoff.setHours(0, mins, 0, 0);
-      }
-    }
-
-    // Normalise and dedupe before geocoding: the same ceilidh found by both
-    // the music and the local angle should cost one lookup, not two.
-    const seen = new Map();
-    answers.forEach(({ list, sources, angle }) => {
-      list.slice(0, 40).forEach((item) => {
-        const event = normaliseEvent(item, window);
-        if (!event) {
-          // Two different failures wearing one name. "The model gave no
-          // usable date" and "it is real but not in the days you asked
-          // about" want different answers from you, so they are counted
-          // apart and said apart.
-          if (!parseEventDate(item && item.date)) eventsDropped.undated++;
-          else eventsDropped.outside++;
-          return;
-        }
-        if (!stillOnAt(event, cutoff)) {
-          eventsDropped.finished++;
-          return;
-        }
-        const id = eventFingerprint(event);
-        const existing = seen.get(id);
-        if (existing && sameEventPlace(existing.event, event)) {
-          // Found from two angles is a small vote of confidence, and worth
-          // keeping whichever version knows more.
-          eventsDropped.merged++;
-          existing.angles.push(angle);
-          if (!existing.event.ticketUrl && event.ticketUrl) existing.event.ticketUrl = event.ticketUrl;
-          if (!existing.event.venue && event.venue) existing.event.venue = event.venue;
-          if (!existing.event.time && event.time) existing.event.time = event.time;
-          if (!existing.event.endTime && event.endTime) existing.event.endTime = event.endTime;
-          if (!existing.event.description && event.description) existing.event.description = event.description;
-          return;
-        }
-        // Same name, same day, different town: two events, not one.
-        const key = existing ? `${id}|${String(event.area || "").toLowerCase()}` : id;
-        if (seen.has(key)) return;
-        seen.set(key, { event, sources, angles: [angle] });
-      });
-    });
-
-    const candidates = Array.from(seen.values());
-    if (!candidates.length) {
-      throw new Error(`Nothing found on ${window.label} near ${centre.name}.`);
-    }
-
-    const placed = await inBatches(candidates, 4, async ({ event, sources, angles: found }) => {
-      const spot = await placeEvent(event, centre, anchor);
-      // Neither of these is a reason to pretend the listing does not exist.
-      // It has a name, a date, usually a venue and often a ticket link; the
-      // only thing missing is a pin, and hiding the whole thing over a pin is
-      // how a list of forty turns into a list of six. They are kept aside,
-      // counted, and shown on request with the reason attached.
-      if (!spot) {
-        eventsDropped.unplaced++;
-        eventsHeldBack.push(Object.assign({}, event, { kinds: found, sources, why: "couldn't be placed on the map" }));
-        return null;
-      }
-      if (spot.tooFar) {
-        eventsDropped.tooFar++;
-        eventsHeldBack.push(Object.assign({}, event, { kinds: found, sources, why: "looks like it's somewhere else" }));
-        return null;
-      }
-      return Object.assign(event, {
-        lat: spot.lat,
-        lon: spot.lon,
-        address: spot.address,
-        approximate: spot.approximate,
-        website: event.ticketUrl || spot.website || null,
-        kinds: found,
-        // Said out loud on every row. A model inventing a festival is the
-        // obvious way this goes wrong, and the honest answer is not to hide
-        // it but to hand over the page it came from.
-        aiSuggested: true,
-        unverified: true,
-        sources,
-      });
-    });
-
-    const out = placed.filter(Boolean);
-    if (!out.length) {
-      const why = describeEventDrops();
-      throw new Error(
-        why
-          ? `Nothing could be confirmed as on ${window.label} — ${why}.`
-          : `Nothing found on ${window.label} near ${centre.name}.`
-      );
-    }
-    // Soonest first: an event list is a diary, not a ranking - and within a
-    // day, by the clock rather than by whichever angle answered first.
-    return out.sort((a, b) => {
+  // Soonest first: an event list is a diary, not a ranking - and within a day,
+  // by the clock rather than by whichever angle happened to answer first.
+  // Applied on every arrival now rather than once at the end, which is what
+  // lets a 09:00 market landing after a 21:00 gig appear above it.
+  function sortEventsByWhen(list) {
+    return list.sort((a, b) => {
       const day = new Date(a.startsAt) - new Date(b.startsAt);
       if (day) return day;
       const at = timeToMinutes(a.time);
@@ -8072,6 +8045,86 @@ ${(() => {
       if (at == null) return -1;
       if (bt == null) return 1;
       return at - bt;
+    });
+  }
+
+  // Everything one angle's answer has to go through on its way to the screen.
+  // Pulled out of the old all-at-once loop unchanged; the only difference is
+  // that it now runs six times, as each angle reports, instead of once after
+  // all six have.
+  function absorbAngle(answer, ctx) {
+    const fresh = [];
+    (answer.list || []).slice(0, 40).forEach((item) => {
+      const event = normaliseEvent(item, ctx.window);
+      if (!event) {
+        // Two different failures wearing one name. "The model gave no usable
+        // date" and "it is real but not in the days you asked about" want
+        // different answers from you, so they are counted and said apart.
+        if (!parseEventDate(item && item.date)) eventsDropped.undated++;
+        else eventsDropped.outside++;
+        return;
+      }
+      if (!stillOnAt(event, ctx.cutoff)) {
+        eventsDropped.finished++;
+        return;
+      }
+      const id = eventFingerprint(event);
+      const existing = ctx.seen.get(id);
+      if (existing && sameEventPlace(existing.event, event)) {
+        // Found from two angles is a small vote of confidence, and worth
+        // keeping whichever version knows more. The row may already be on
+        // screen by now, so this enriches it in place rather than adding one.
+        eventsDropped.merged++;
+        existing.angles.push(answer.angle);
+        if (!existing.event.ticketUrl && event.ticketUrl) existing.event.ticketUrl = event.ticketUrl;
+        if (!existing.event.venue && event.venue) existing.event.venue = event.venue;
+        if (!existing.event.time && event.time) existing.event.time = event.time;
+        if (!existing.event.endTime && event.endTime) existing.event.endTime = event.endTime;
+        if (!existing.event.description && event.description) existing.event.description = event.description;
+        return;
+      }
+      // Same name, same day, different town: two events, not one.
+      const dedupeKey = existing ? `${id}|${String(event.area || "").toLowerCase()}` : id;
+      if (ctx.seen.has(dedupeKey)) return;
+      const entry = { event, sources: answer.sources || [], angles: [answer.angle] };
+      ctx.seen.set(dedupeKey, entry);
+      fresh.push(entry);
+    });
+    return fresh;
+  }
+
+  // Placing one event: unchanged in what it decides, only in when it runs.
+  async function placeOne(entry, ctx) {
+    const { event, sources, angles: found } = entry;
+    const spot = await placeEvent(event, ctx.centre, ctx.anchor);
+    // Neither of these is a reason to pretend the listing does not exist. It
+    // has a name, a date, usually a venue and often a ticket link; the only
+    // thing missing is a pin, and hiding the whole thing over a pin is how a
+    // list of forty turns into a list of six. They are kept aside, counted,
+    // and shown on request with the reason attached.
+    if (!spot) {
+      eventsDropped.unplaced++;
+      eventsHeldBack.push(Object.assign({}, event, { kinds: found, sources, why: "couldn't be placed on the map" }));
+      return null;
+    }
+    if (spot.tooFar) {
+      eventsDropped.tooFar++;
+      eventsHeldBack.push(Object.assign({}, event, { kinds: found, sources, why: "looks like it's somewhere else" }));
+      return null;
+    }
+    return Object.assign(event, {
+      lat: spot.lat,
+      lon: spot.lon,
+      address: spot.address,
+      approximate: spot.approximate,
+      website: event.ticketUrl || spot.website || null,
+      kinds: found,
+      // Said out loud on every row. A model inventing a festival is the
+      // obvious way this goes wrong, and the honest answer is not to hide it
+      // but to hand over the page it came from.
+      aiSuggested: true,
+      unverified: true,
+      sources,
     });
   }
 
@@ -8096,6 +8149,14 @@ ${(() => {
     // Whether the form is open. It closes itself once a search has answered,
     // and any tap on it opens it again.
     editing: false,
+    // Which of the six have reported: waiting | running | done | failed |
+    // stopped. The one piece of state this object never had, and the reason
+    // a search could only ever say "this takes a few seconds".
+    angles: {},
+    stopped: false,
+    // The search's own context, kept so a single failed angle can be re-run
+    // against the same question rather than starting over.
+    ctx: null,
     // The indoor filter. Off by default and only offered when rain is
     // actually forecast - a filter that is always there is a filter you
     // scroll past, and one that appears on a wet day is an answer.
@@ -8218,11 +8279,11 @@ ${(() => {
     const w = eventWindow(eventSearch.when);
     const centre = eventSearch.centre || loadAnchor() || derivedAnchor();
 
-    // Once it has run, the form has done its job. Left open it is three rows
-    // of chips, a date line, six more chips and a button - the whole screen,
-    // with the answers you asked for starting below the fold. Collapsed, it
-    // is one line saying what was asked, and the results are the screen.
-    if (eventSearch.status === "done" && !eventSearch.editing) {
+    // The form has done its job the moment you press the button, not when the
+    // search finishes. Left open it is three rows of chips, a date line, six
+    // more chips and a button - the whole screen - so results streaming in
+    // arrive below the fold and you are back to looking at nothing.
+    if ((eventSearch.status === "done" || eventSearch.status === "loading") && !eventSearch.editing) {
       const kinds = eventSearch.kinds.length
         ? EVENT_ANGLES.filter((a) => eventSearch.kinds.includes(a.key)).map((a) => a.label).join(", ")
         : "everything";
@@ -8232,7 +8293,7 @@ ${(() => {
             <b>${centre ? esc(centre.name) : "Nearby"}</b>
             <span class="ev-asked-meta">${esc(w.label)}${w.fromTime ? `, from ${esc(w.fromTime)}` : ""} · ${esc(kinds)}</span>
           </span>
-          <span class="ev-asked-change">Change</span>
+          <span class="ev-asked-change">${eventSearch.status === "loading" ? "Looking…" : "Change"}</span>
         </button>
       `;
     }
@@ -8336,6 +8397,57 @@ ${(() => {
     return e.setting !== "outdoor";
   }
 
+  // Six searches, named, each saying where it has got to. The old version was
+  // one motionless sentence for the length of the slowest of them - which,
+  // when one angle hangs, is ninety seconds of an app that looks broken.
+  const ANGLE_STATE_LABEL = { waiting: "…", running: "…", done: "✓", failed: "—", stopped: "—" };
+
+  function renderAngleProgress() {
+    const angles = anglesForSearch();
+    const state = (k) => eventSearch.angles[k] || "waiting";
+    const running = angles.some((a) => state(a.key) === "running" || state(a.key) === "waiting");
+    const failed = angles.filter((a) => state(a.key) === "failed");
+
+    let html = `<div class="card ev-progress">`;
+    html += `<div class="ev-progress-chips">${angles
+      .map(
+        (a) =>
+          `<span class="ev-angle ev-angle-${esc(state(a.key))}">${esc(a.label)} <span class="ev-angle-mark">${
+            ANGLE_STATE_LABEL[state(a.key)]
+          }</span></span>`
+      )
+      .join("")}</div>`;
+
+    if (running) {
+      html += `<p class="settings-hint">${
+        eventSearch.results.length
+          ? `${eventSearch.results.length} so far — the rest are still looking.`
+          : "Looking. Results appear as each search answers rather than all at the end."
+      }</p>`;
+      html += `<button class="link-btn" id="evStop">Stop and keep what's found</button>`;
+    } else if (eventSearch.stopped) {
+      html += `<p class="settings-hint">Stopped — the ${eventSearch.results.length} already found ${
+        eventSearch.results.length === 1 ? "is" : "are"
+      } kept.</p>`;
+    }
+
+    if (failed.length && !running) {
+      // A search that died and a town with nothing on look identical unless
+      // this is said out loud - and the answer to one is to try again, while
+      // the answer to the other is to look somewhere else.
+      html += `<p class="settings-hint">${failed
+        .map((a) => esc(a.label))
+        .join(" and ")} came back with nothing. ${
+        failed.length === 1 ? "That may be the search failing rather than a quiet week." : ""
+      }</p>`;
+      html += failed
+        .map((a) => `<button class="link-btn" data-ev-retry="${esc(a.key)}">Try ${esc(a.label)} again</button>`)
+        .join(" ");
+    }
+    html += `</div>`;
+    return html;
+  }
+
   // Directly under the count, not at the bottom of the list. The whole
   // complaint was "there must be more than this" - an explanation you only
   // reach by scrolling past everything answers it far too late.
@@ -8370,7 +8482,42 @@ ${(() => {
     return html;
   }
 
+  // What screen this is, for the purposes of keeping your place. Deliberately
+  // not the result count: results arriving is exactly when the position must
+  // be kept, so counting them would defeat the whole thing.
+  let eventsScreenId = "";
+
   function renderEvents() {
+    // Results arrive one at a time now and each arrival redraws this screen.
+    // Without keeping the scroll, the list jumps back to the top under your
+    // thumb every couple of seconds - the same bug the search overlay and the
+    // trip planner both already had, and fixed this way.
+    beginRenderPass();
+    const previousScroll = view.scrollTop;
+    const screenId = `${eventSearch.when}|${eventSearch.editing}|${eventSearch.indoorOnly}|${eventSearch.showHeld}`;
+    // A redraw destroys whatever is focused, so a date being typed into the
+    // custom-window editor is lost mid-edit. The search overlay guards this
+    // same way: while somebody is in a field, the screen waits.
+    const active = document.activeElement;
+    if (active && view.contains(active) && (active.tagName === "INPUT" || active.tagName === "TEXTAREA")) {
+      // Refused, not forgotten: the listener goes on the field being typed in,
+      // because wireEvents does not run on a render that did not happen - and
+      // without it the results that arrived mid-edit would never appear.
+      endRenderPass();
+      if (!eventsRedrawPending) {
+        eventsRedrawPending = true;
+        active.addEventListener(
+          "blur",
+          () => {
+            if (eventsRedrawPending) renderEvents();
+          },
+          { once: true }
+        );
+      }
+      return;
+    }
+    eventsRedrawPending = false;
+
     const saved = savedEvents();
     const upcoming = saved.filter((e) => !eventIsPast(e));
     const past = saved.filter(eventIsPast);
@@ -8392,11 +8539,11 @@ ${(() => {
       html += `<div class="card"><p class="pick-status">${esc(eventSearch.error)}</p></div>`;
     }
 
-    if (eventSearch.status === "loading") {
-      html += `<div class="card"><p class="pick-status">Asking six different ways — markets, music, family, arts, outdoors and whatever the locals are up to. This takes a few seconds.</p></div>`;
+    if (eventSearch.status === "loading" || Object.keys(eventSearch.angles).length) {
+      html += renderAngleProgress();
     }
 
-    if (eventSearch.status === "done" && eventSearch.results.length) {
+    if (eventSearch.results.length) {
       const savedIds = new Set(saved.map((p) => p.id));
       const unsaved = eventSearch.results.filter((e) => !savedIds.has(pickId("custom", e.name)));
       const fresh = unsaved.filter(passesIndoorFilter);
@@ -8481,8 +8628,16 @@ ${(() => {
     }
 
     view.innerHTML = html;
+    view.scrollTop = screenId === eventsScreenId ? previousScroll : 0;
+    eventsScreenId = screenId;
+    endRenderPass();
     wireEvents();
   }
+
+  // A redraw refused while a field was focused still has to happen once the
+  // field is done with, or the results that arrived while you were typing
+  // never appear at all.
+  let eventsRedrawPending = false;
 
   function wireEvents() {
     view.querySelectorAll("[data-ev-when]").forEach((b) =>
@@ -8549,6 +8704,13 @@ ${(() => {
       });
     }
 
+    const stopBtn = document.getElementById("evStop");
+    if (stopBtn) stopBtn.addEventListener("click", () => stopEventSearch());
+
+    view.querySelectorAll("[data-ev-retry]").forEach((b) =>
+      b.addEventListener("click", () => retryAngle(b.getAttribute("data-ev-retry")))
+    );
+
     const indoorOnly = document.getElementById("evIndoorOnly");
     if (indoorOnly) {
       indoorOnly.addEventListener("click", () => {
@@ -8600,6 +8762,77 @@ ${(() => {
     );
   }
 
+  // Whatever is in flight can no longer write once this moves on. The same
+  // discipline as searchGeneration and ideaGeneration: bump on a new run,
+  // re-check after every await, and pass it into anything that outlives the
+  // call. Without it, searching twice quickly lets whichever finishes last
+  // win regardless of which you asked for - which was true here before any of
+  // the streaming work and is far more likely with it.
+  let eventGeneration = 0;
+  let eventQueue = null;
+
+  // One redraw for a burst of arrivals rather than one each. The photo loader
+  // has done this since Phase 1 for the same reason: results land in clumps.
+  let eventRedrawTimer = null;
+  function scheduleEventsRedraw() {
+    if (eventRedrawTimer) return;
+    eventRedrawTimer = setTimeout(() => {
+      eventRedrawTimer = null;
+      if (view.dataset.activeTab !== "events") return;
+      // A throw inside a render reached from a callback is not wrapped by
+      // showView, so it would blank the screen with no way back.
+      try {
+        renderEvents();
+      } catch (e) {
+        console.error("renderEvents failed:", e);
+      }
+    }, 120);
+  }
+
+  // Whether a search is still going. A real terminal condition, rather than
+  // the absence of a particular sentence - which is what the suites used to
+  // wait on, and which broke the moment the sentence changed.
+  function eventsBusy() {
+    if (eventSearch.status === "loading") return true;
+    return Object.keys(eventSearch.angles).some(
+      (k) => eventSearch.angles[k] === "waiting" || eventSearch.angles[k] === "running"
+    );
+  }
+
+  function anglesForSearch() {
+    return EVENT_ANGLES.filter(
+      (a) => !eventSearch.kinds.length || eventSearch.kinds.includes(a.key)
+    );
+  }
+
+  // Runs one angle and feeds whatever it finds straight into the queue. Called
+  // six times at the start of a search, and again on its own when you retry a
+  // single angle that failed.
+  async function runOneAngle(angle, ctx, generation) {
+    eventSearch.angles[angle.key] = "running";
+    scheduleEventsRedraw();
+    const answer = await askOneAngle(ctx.key, ctx.centre, ctx.window, ctx.radius, angle);
+    if (generation !== eventGeneration) return;
+
+    // An angle that answered nothing at all is the one case worth calling a
+    // failure. It used to be indistinguishable from a quiet town, and it cost
+    // 90 seconds of silence to get there - callGemini waits AI_TIMEOUT_MS
+    // twice - so it is worth saying which of the two happened.
+    eventSearch.angles[angle.key] = answer.list && answer.list.length ? "done" : "failed";
+
+    const fresh = absorbAngle(answer, ctx);
+    scheduleEventsRedraw();
+    fresh.forEach((entry) => {
+      eventQueue.push(async () => {
+        const placed = await placeOne(entry, ctx);
+        if (generation !== eventGeneration || !placed) return;
+        eventSearch.results.push(placed);
+        sortEventsByWhen(eventSearch.results);
+      });
+    });
+    await eventQueue.whenIdle();
+  }
+
   async function runEventSearch() {
     const key = loadTripSettings().geminiKey.trim();
     if (!key) {
@@ -8624,22 +8857,98 @@ ${(() => {
     eventSearch.editing = false;
     eventSearch.showHeld = false;
     eventSearch.indoorOnly = false;
+    eventSearch.stopped = false;
+    eventSearch.angles = {};
+    eventsDropped = Object.assign({}, NO_DROPS);
+    eventsHeldBack = [];
     renderEvents();
 
+    const generation = ++eventGeneration;
     const radius = (centre.miles || DEFAULT_ANCHOR_MILES) * 1609;
-    try {
-      eventSearch.results = await eventsWithGemini(
-        centre,
-        eventSearch.when,
-        radius,
-        key,
-        eventSearch.kinds
-      );
-      eventSearch.status = "done";
-    } catch (e) {
-      eventSearch.status = "error";
-      eventSearch.error = e && e.message ? e.message : String(e);
+    const window = eventWindow(eventSearch.when);
+
+    // The moment to search from, when one was given: on that day, anything
+    // already finished is not an answer to "what can I still go to".
+    let cutoff = null;
+    if (window.fromTime) {
+      const mins = timeToMinutes(window.fromTime);
+      if (mins != null) {
+        cutoff = new Date(window.from);
+        cutoff.setHours(0, mins, 0, 0);
+      }
     }
+
+    const ctx = {
+      key,
+      centre,
+      window,
+      radius,
+      cutoff,
+      seen: new Map(),
+      anchor: { name: centre.name, lat: centre.lat, lon: centre.lon, miles: toMiles(radius / 1000) },
+    };
+    eventSearch.ctx = ctx;
+
+    if (eventQueue) eventQueue.stop();
+    eventQueue = makePlaceQueue(scheduleEventsRedraw);
+
+    const angles = anglesForSearch();
+    angles.forEach((a) => { eventSearch.angles[a.key] = "waiting"; });
+
+    // Six independent chains rather than a Promise.all barrier. The fastest
+    // angle's results are on screen while the slowest is still thinking,
+    // which is the whole point: one dead angle used to hold the other five
+    // for a minute and a half with nothing to look at.
+    await Promise.all(angles.map((angle) => runOneAngle(angle, ctx, generation)));
+    if (generation !== eventGeneration) return;
+    await eventQueue.whenIdle();
+    if (generation !== eventGeneration) return;
+
+    // "Nothing found" can only be known once every angle has reported, so it
+    // is a final state rather than something thrown from inside the search.
+    if (!eventSearch.results.length) {
+      const why = describeEventDrops();
+      eventSearch.status = "error";
+      eventSearch.error = why
+        ? `Nothing could be confirmed as on ${window.label} — ${why}.`
+        : `Nothing found on ${window.label} near ${centre.name}.`;
+    } else {
+      eventSearch.status = "done";
+    }
+    renderEvents();
+  }
+
+  // Re-runs a single angle that came back with nothing, merging whatever it
+  // finds into the list already on screen. A dead angle is one bad request,
+  // not a reason to pay for the other five again.
+  async function retryAngle(key) {
+    const angle = EVENT_ANGLES.find((a) => a.key === key);
+    const ctx = eventSearch.ctx;
+    if (!angle || !ctx) return;
+    const generation = eventGeneration;
+    if (!eventQueue) eventQueue = makePlaceQueue(scheduleEventsRedraw);
+    eventSearch.status = "loading";
+    renderEvents();
+    await runOneAngle(angle, ctx, generation);
+    if (generation !== eventGeneration) return;
+    eventSearch.status = eventSearch.results.length ? "done" : "error";
+    renderEvents();
+  }
+
+  // Keeps what has arrived and stops the rest, the way the trip planner's
+  // "Stop waiting" does. The requests already sent are not aborted - nothing
+  // in this app aborts one - but the generation bump means nothing they bring
+  // back can be written.
+  function stopEventSearch() {
+    eventGeneration++;
+    if (eventQueue) eventQueue.stop();
+    eventSearch.stopped = true;
+    Object.keys(eventSearch.angles).forEach((k) => {
+      if (eventSearch.angles[k] === "waiting" || eventSearch.angles[k] === "running") {
+        eventSearch.angles[k] = "stopped";
+      }
+    });
+    eventSearch.status = eventSearch.results.length ? "done" : "idle";
     renderEvents();
   }
 
@@ -16292,6 +16601,9 @@ ${(() => {
   // and there is no way to wait for forever. These read; none of them changes
   // anything.
   window.__tripTest = {
+    eventsBusy,
+    renderEvents,
+    stopEventSearch,
     eventVerdict,
     backfillEvents,
     eventsNeedingBackfill,
