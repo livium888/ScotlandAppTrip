@@ -356,6 +356,7 @@ const runSearch = async () => {
   await page.waitForTimeout(200);
   await page.evaluate(() => document.querySelector('[data-ev-when="week"]').click());
   await page.waitForTimeout(200);
+  await page.evaluate(() => localStorage.removeItem('event-cache-v1'));
   await page.evaluate(() => document.getElementById('evSearch').click());
   await page.waitForFunction(() => !window.__tripTest.eventsBusy(), null, { timeout: 40000 });
   // The forecast lands after the first paint and redraws the screen.

@@ -152,6 +152,7 @@ check('and the kinds of thing to look for', await page.evaluate(
 
 // ---------- Recall: six questions, not one ----------
 
+await page.evaluate(() => localStorage.removeItem('event-cache-v1'));
 await page.evaluate(() => document.getElementById('evSearch').click());
 await searchDone();
 
@@ -236,6 +237,7 @@ await page.evaluate(() => document.getElementById('evEdit').click());
 await page.waitForTimeout(300);
 await page.evaluate(() => document.querySelector('[data-ev-kind="market"]').click());
 await page.waitForTimeout(300);
+await page.evaluate(() => localStorage.removeItem('event-cache-v1'));
 await page.evaluate(() => document.getElementById('evSearch').click());
 await searchDone();
 check('picking one kind asks one question, not six', geminiCalls === 1, `${geminiCalls} calls`);
@@ -251,6 +253,7 @@ await page.reload({ waitUntil: 'load' });
 await page.waitForTimeout(500);
 await page.evaluate(() => document.querySelector('[data-view="events"]').click());
 await page.waitForTimeout(400);
+await page.evaluate(() => localStorage.removeItem('event-cache-v1'));
 await page.evaluate(() => document.getElementById('evSearch').click());
 await page.waitForTimeout(700);
 check('with no AI key it says why rather than showing nothing',
@@ -387,6 +390,7 @@ check('the chosen moment is shown back to you', await page.evaluate(() =>
 
 // The model is told, so it does not spend its answer on the morning.
 promptsSeen = [];
+await page.evaluate(() => localStorage.removeItem('event-cache-v1'));
 await page.evaluate(() => document.getElementById('evSearch').click());
 await searchDone();
 check('and the model is told to skip what finishes before then',

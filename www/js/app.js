@@ -920,12 +920,34 @@
   // And on the free tier the true answer is zero, which is why that is the
   // default rather than a rate nobody is paying.
   const AI_RATES_ASOF = "May 2026";
-  const DEFAULT_RATES = {
-    // Dollars per million tokens, as published for the flash-lite tier. Only
-    // used when somebody has said they are on a paid plan.
-    in: 0.1,
-    out: 0.4,
-  };
+
+  // Dollars per million tokens, by model family, so the figure follows
+  // whichever model the key actually resolved to rather than assuming the
+  // cheapest one. Matched longest-name-first, because "flash-lite" contains
+  // "flash" and would otherwise be priced as the dearer model.
+  //
+  // These are published rates as of the date above and this app has no way to
+  // check them, which is why the one in use is printed next to the number and
+  // can be corrected. A price that cannot be seen is a claim, not an estimate.
+  const MODEL_RATES = [
+    { match: "flash-lite", label: "Flash-Lite", in: 0.1, out: 0.4 },
+    { match: "flash", label: "Flash", in: 0.3, out: 2.5 },
+    { match: "pro", label: "Pro", in: 1.25, out: 10 },
+  ];
+  const FALLBACK_RATE = { label: "unknown model", in: 0.1, out: 0.4 };
+
+  // The rate for the model this key is on. Falls back to the cheapest rather
+  // than to nothing: an unrecognised model name is far more likely to be a
+  // newer small model than a reason to stop counting.
+  function rateForModel(modelName) {
+    const name = String(modelName || "").toLowerCase();
+    const hit = MODEL_RATES.find((r) => name.indexOf(r.match) >= 0);
+    return hit || FALLBACK_RATE;
+  }
+
+  function currentModelRate() {
+    return rateForModel(loadTripSettings().geminiModel);
+  }
 
   function loadAiRates() {
     const s = loadTripSettings();
@@ -934,12 +956,22 @@
       const n = Number(v);
       return Number.isFinite(n) && n >= 0 ? n : fallback;
     };
+    // Whatever the model in use costs, unless the number has been corrected
+    // by hand. Nothing to tick, nothing to type: change the model in Settings
+    // and the price follows it.
+    const auto = currentModelRate();
     return {
       // Free tier until somebody says otherwise. This is the honest default:
       // most people using this app are on it, and for them the answer is £0.
       paid: !!r.paid,
-      in: num(r.in, DEFAULT_RATES.in),
-      out: num(r.out, DEFAULT_RATES.out),
+      model: auto.label,
+      autoIn: auto.in,
+      autoOut: auto.out,
+      // A hand-typed rate wins, and only for as long as it differs from the
+      // model's - so correcting Flash and then switching to Pro does not
+      // silently keep costing Pro tokens at Flash prices.
+      in: num(r.in, auto.in),
+      out: num(r.out, auto.out),
       // Roughly, and said to be roughly. Nobody is making a decision on the
       // third decimal place of a currency conversion here.
       usdToGbp: num(r.usdToGbp, 0.79),
@@ -7363,10 +7395,15 @@ ${(() => {
   // grounded AI search, with two consequences taken seriously: every event
   // carries the page it came from, and none of it is presented as certain.
 
+  // Today and tomorrow first, because "what can we do this afternoon" is the
+  // question actually asked on a trip, and it used to mean opening the date
+  // pickers and choosing the same day twice.
   const EVENT_WINDOWS = [
-    { key: "trip", label: "While we're there" },
+    { key: "today", label: "Today" },
+    { key: "tomorrow", label: "Tomorrow" },
     { key: "weekend", label: "This weekend" },
     { key: "week", label: "Next 7 days" },
+    { key: "trip", label: "While we're there" },
   ];
 
   function startOfDay(d) {
@@ -7399,6 +7436,14 @@ ${(() => {
       };
     }
 
+    if (key === "today") {
+      return { from: today, to: today, label: "today" };
+    }
+    if (key === "tomorrow") {
+      const d = new Date(today);
+      d.setDate(d.getDate() + 1);
+      return { from: d, to: d, label: "tomorrow" };
+    }
     if (key === "trip") {
       const dated = datedDays(loadPlan().days).filter((x) => x.when);
       if (dated.length) {
@@ -8279,7 +8324,12 @@ ${(() => {
   // all six have.
   function absorbAngle(answer, ctx) {
     const fresh = [];
-    (answer.list || []).slice(0, 40).forEach((item) => {
+    // Uncapped. The cap was a guard against a model returning something
+    // enormous, but everything downstream already filters hard - the date
+    // window, the anchor, the dedupe - and the one thing this screen must not
+    // do is throw away real answers to keep a list tidy. Fifty found is fifty
+    // shown.
+    (answer.list || []).forEach((item) => {
       const event = normaliseEvent(item, ctx.window);
       if (!event) {
         // Two different failures wearing one name. "The model gave no usable
@@ -8374,6 +8424,9 @@ ${(() => {
     // Whether the form is open. It closes itself once a search has answered,
     // and any tap on it opens it again.
     editing: false,
+    // When these results were originally found, if they came from the cache
+    // rather than from nine fresh requests. Zero means they are new.
+    fromCache: 0,
     // Which of the six have reported: waiting | running | done | failed |
     // stopped. The one piece of state this object never had, and the reason
     // a search could only ever say "this takes a few seconds".
@@ -8529,6 +8582,7 @@ ${(() => {
           <b>${centre ? `What's on near ${esc(centre.name)}` : "What's on"}</b>
           <button class="link-btn" id="evCentre">${centre ? "Somewhere else" : "Choose where"}</button>
         </div>
+        <div class="ev-field-label">When</div>
         <div class="search-chips">
           ${EVENT_WINDOWS.map(
             (x) =>
@@ -8564,9 +8618,17 @@ ${(() => {
           </p>`
             : ""
         }
-        <p class="explore-note">${esc(humanDate(w.from))} – ${esc(humanDate(w.to))}${
-          w.fromTime ? `, from ${esc(w.fromTime)}` : ""
-        }</p>
+        <p class="explore-note">${
+          // One day is a day, not a range from itself to itself.
+          isoDate(w.from) === isoDate(w.to)
+            ? esc(humanDate(w.from))
+            : `${esc(humanDate(w.from))} – ${esc(humanDate(w.to))}`
+        }${w.fromTime ? `, from ${esc(w.fromTime)}` : ""}</p>
+        <div class="ev-field-label">What to find ${
+          eventSearch.kinds.length
+            ? `<button class="link-btn" id="evAllKinds">all ${EVENT_ANGLES.length}</button>`
+            : `<span class="ev-field-note">all ${EVENT_ANGLES.length}</span>`
+        }</div>
         <div class="search-chips ev-kinds">
           ${EVENT_ANGLES.map((a) => {
             const tuned = !!loadTripSettings().anglePrompts[a.key];
@@ -8583,8 +8645,10 @@ ${(() => {
         <p class="settings-hint">
           ${
             eventSearch.kinds.length
-              ? "Only the kinds you've picked."
-              : "All of them — six searches at once, which is how it finds the folk night as well as the festival."
+              ? `${eventSearch.kinds.length} of ${EVENT_ANGLES.length} picked — ${eventSearch.kinds.length} request${
+                  eventSearch.kinds.length === 1 ? "" : "s"
+                } rather than ${EVENT_ANGLES.length}.`
+              : `All ${EVENT_ANGLES.length} at once, which is how it finds the coffee morning as well as the festival. Tap any to narrow it.`
           }
         </p>
         <button class="modal-btn modal-btn-primary" id="evSearch" style="width:100%;margin-top:10px;">
@@ -8808,6 +8872,13 @@ ${(() => {
             : "Rain forecast. This keeps the indoor ones, and the ones nobody described either way."
         }</p>`;
       }
+      if (eventSearch.fromCache) {
+        const mins = Math.round((Date.now() - eventSearch.fromCache) / 60000);
+        const when =
+          mins < 60 ? `${mins || 1} min ago` : mins < 1440 ? `${Math.round(mins / 60)} h ago` : `${Math.round(mins / 1440)} days ago`;
+        html += `<p class="settings-hint ev-note">Remembered from ${esc(when)} — no requests used.
+          <button class="link-btn" id="evFresh">Look again</button></p>`;
+      }
       html += renderEventsLeftOutNote();
       if (!fresh.length) {
         html += `<div class="card"><p class="pick-status">${
@@ -8964,6 +9035,17 @@ ${(() => {
       b.addEventListener("click", () => retryAngle(b.getAttribute("data-ev-retry")))
     );
 
+    const allKinds = document.getElementById("evAllKinds");
+    if (allKinds) {
+      allKinds.addEventListener("click", () => {
+        eventSearch.kinds = [];
+        renderEvents();
+      });
+    }
+
+    const freshBtn = document.getElementById("evFresh");
+    if (freshBtn) freshBtn.addEventListener("click", () => runEventSearch({ fresh: true }));
+
     const indoorOnly = document.getElementById("evIndoorOnly");
     if (indoorOnly) {
       indoorOnly.addEventListener("click", () => {
@@ -9024,6 +9106,59 @@ ${(() => {
   let eventGeneration = 0;
   let eventQueue = null;
   const ANGLE_STAGGER_MS = 180;
+
+  // ---------- Not paying twice for the same question ----------
+  // Nine grounded calls is the most expensive thing this app does, and going
+  // back to a screen you were on ten minutes ago was buying all nine again.
+  //
+  // Kept for a week, then dropped. Seven days is the useful life of the
+  // answer rather than an arbitrary number: an event list is a diary, so
+  // anything older is mostly about days that have already gone - and the
+  // stored copy is filtered on the way out anyway, so a cached search never
+  // shows you something that has since finished.
+  const EVENT_CACHE_KEY = "event-cache-v1";
+  const EVENT_CACHE_MS = 7 * 24 * 60 * 60 * 1000;
+  const EVENT_CACHE_MAX = 12;
+
+  function eventCacheKey(centre, windowKey, radius, kinds) {
+    const w = eventWindow(windowKey);
+    return [
+      centre.lat.toFixed(2),
+      centre.lon.toFixed(2),
+      Math.round(radius / 1609),
+      // The dates rather than the window name: "today" means something
+      // different tomorrow, and a cached answer keyed on the word would be
+      // yesterday's news presented as today's.
+      isoDate(w.from),
+      isoDate(w.to),
+      w.fromTime || "",
+      kinds.slice().sort().join("+") || "all",
+    ].join("|");
+  }
+
+  function loadEventCache() {
+    const c = readJson(EVENT_CACHE_KEY, null);
+    return c && typeof c === "object" ? c : {};
+  }
+
+  function readEventCache(key) {
+    const hit = loadEventCache()[key];
+    if (!hit || Date.now() - hit.at > EVENT_CACHE_MS) return null;
+    return hit;
+  }
+
+  function writeEventCache(key, results, dropped, held) {
+    const cache = loadEventCache();
+    cache[key] = { at: Date.now(), results, dropped, held };
+    // Oldest out first, and anything past its week goes regardless. Without
+    // the cap this grows for ever on a device that searches a lot of places.
+    Object.keys(cache).forEach((k) => {
+      if (Date.now() - cache[k].at > EVENT_CACHE_MS) delete cache[k];
+    });
+    const keys = Object.keys(cache).sort((a, b) => cache[b].at - cache[a].at);
+    keys.slice(EVENT_CACHE_MAX).forEach((k) => delete cache[k]);
+    store(EVENT_CACHE_KEY, JSON.stringify(cache));
+  }
 
   // One Overpass lookup per area, remembered. The villages around a place do
   // not change, so asking twice is asking a free community service for
@@ -9110,7 +9245,8 @@ ${(() => {
     await eventQueue.whenIdle();
   }
 
-  async function runEventSearch() {
+  async function runEventSearch(opts) {
+    const fresh = !!(opts && opts.fresh);
     const key = loadTripSettings().geminiKey.trim();
     if (!key) {
       eventSearch.status = "error";
@@ -9143,6 +9279,27 @@ ${(() => {
     const generation = ++eventGeneration;
     const radius = (centre.miles || DEFAULT_ANCHOR_MILES) * 1609;
     const window = eventWindow(eventSearch.when);
+
+    // The same question asked twice inside a week is answered from what it
+    // said the first time. Everything past its date is dropped on the way out,
+    // so yesterday's cached answer never shows you yesterday's events.
+    const cacheKey = eventCacheKey(centre, eventSearch.when, radius, eventSearch.kinds);
+    if (!fresh) {
+      const hit = readEventCache(cacheKey);
+      if (hit) {
+        eventSearch.results = sortEventsByWhen((hit.results || []).filter((e) => !eventIsPast(e)));
+        eventsDropped = Object.assign({}, NO_DROPS, hit.dropped || {});
+        eventsHeldBack = hit.held || [];
+        eventSearch.fromCache = hit.at;
+        eventSearch.status = eventSearch.results.length ? "done" : "error";
+        if (!eventSearch.results.length) {
+          eventSearch.error = `Nothing found on ${window.label} near ${centre.name}.`;
+        }
+        renderEvents();
+        return;
+      }
+    }
+    eventSearch.fromCache = 0;
 
     // The moment to search from, when one was given: on that day, anything
     // already finished is not an answer to "what can I still go to".
@@ -9204,6 +9361,10 @@ ${(() => {
     if (generation !== eventGeneration) return;
     await eventQueue.whenIdle();
     if (generation !== eventGeneration) return;
+
+    // Kept whether or not anything was found: a search that legitimately
+    // returns nothing is exactly the one not worth paying for twice.
+    writeEventCache(cacheKey, eventSearch.results, eventsDropped, eventsHeldBack);
 
     // "Nothing found" can only be known once every angle has reported, so it
     // is a final state rather than something thrown from inside the search.
@@ -16491,13 +16652,15 @@ ${(() => {
         <p class="settings-hint">
           ${
             rates.paid
-              ? `Costing at $${esc(String(rates.in))} per million tokens in and $${esc(
-                  String(rates.out)
-                )} out, converted at ${esc(String(rates.usdToGbp))}. Those were the published rates
-                 for the small models as of ${esc(AI_RATES_ASOF)} — correct them if they've moved,
-                 because this app has no way to check.`
+              ? `Your key is on <b>${esc(rates.model)}</b>, priced at $${esc(String(rates.in))} per
+                 million tokens in and $${esc(String(rates.out))} out, converted at ${esc(
+                  String(rates.usdToGbp)
+                )}. The rate follows whichever model Settings is using — change the model and this
+                 changes with it. Published rates as of ${esc(AI_RATES_ASOF)}; correct them below if
+                 they've moved, because this app has no way to check.`
               : `On the free tier the answer is £0, which is why nothing above shows a price.
-                 The tokens are still real, and they're what the free allowance is measured in.`
+                 The tokens are still real, and they're what the free allowance is measured in.
+                 Your key is on <b>${esc(rates.model)}</b>.`
           }
         </p>
         ${

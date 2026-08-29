@@ -105,6 +105,7 @@ const search = async () => {
   await page.waitForTimeout(150);
   await page.evaluate(() => document.querySelector('[data-ev-when="week"]').click());
   await page.waitForTimeout(150);
+  await page.evaluate(() => localStorage.removeItem('event-cache-v1'));
   await page.evaluate(() => document.getElementById('evSearch').click());
   await settle();
 };

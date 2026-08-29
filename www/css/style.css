@@ -868,6 +868,20 @@ body {
   min-height: 40px;
 }
 .search-chip:active { opacity: 0.6; }
+/* A chosen chip has to LOOK chosen. This class was being written into the
+   markup by the events screen, the category filters and the welcome flow, and
+   styled in exactly one of them - so everywhere else "on" changed nothing at
+   all and there was no way to tell what you had picked. Every other chip in
+   the app (.day-chip, .map-chip, .sort-chip) fills in when selected; this one
+   now does the same, plus a weight change so it does not rely on colour
+   alone. */
+.search-chip.on {
+  background: var(--navy);
+  border-color: var(--navy);
+  color: var(--on-accent);
+  font-weight: 600;
+}
+.search-chip.on .ico { color: var(--on-accent); }
 .search-tip { margin-top: 16px; }
 
 .search-filters { display: flex; gap: 8px; overflow-x: auto; padding: 10px 0; scrollbar-width: none; }
@@ -3680,12 +3694,13 @@ html, body {
    sits against its chip rather than inside it, so tapping the chip still
    toggles the search and only the pencil opens the wording. */
 .ev-kind-wrap { display: inline-flex; align-items: center; }
-.ev-kinds .ev-kind-wrap .search-chip { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.ev-kinds .ev-kind-wrap .search-chip { border-top-right-radius: 0; border-bottom-right-radius: 0; padding-right: 10px; }
+.ev-kinds .search-chip { font-size: 13px; padding-left: 12px; }
 .ev-kind-tune {
   font: inherit;
-  font-size: 12px;
+  font-size: 11px;
   line-height: 1;
-  padding: 7px 8px;
+  padding: 7px 6px;
   border: 1px solid var(--line);
   border-left: 0;
   border-radius: 0 999px 999px 0;
@@ -3696,6 +3711,7 @@ html, body {
 /* A search whose wording you have changed says so, the way an edited Explore
    category already does. */
 .search-chip.tuned { border-style: dashed; }
+.search-chip.on.tuned { border-color: var(--on-accent); }
 
 /* What the AI is costing. Three figures side by side rather than a table:
    the comparison between today, this week and all time is the whole point,
@@ -3715,3 +3731,20 @@ html, body {
 .usage-cost { font-size: 13px; font-weight: 600; margin-top: 3px; }
 .usage-rates { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 8px; }
 .usage-rates input { width: 84px; }
+
+/* Labels over each row of chips. Two unlabelled rows of pills, one choosing
+   when and one choosing what, were indistinguishable at a glance. */
+.ev-field-label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  margin: 14px 0 7px;
+}
+.ev-field-label .link-btn { font-size: 12px; text-transform: none; letter-spacing: 0; }
+.ev-field-note { font-size: 12px; font-weight: 400; text-transform: none; letter-spacing: 0; }

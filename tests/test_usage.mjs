@@ -81,6 +81,7 @@ check('nothing is counted before anything has been asked', (await stored()) === 
 
 await page.evaluate(() => document.querySelector('[data-view="events"]').click());
 await page.waitForTimeout(300);
+await page.evaluate(() => localStorage.removeItem('event-cache-v1'));
 await page.evaluate(() => document.getElementById('evSearch').click());
 await page.waitForFunction(() => !window.__tripTest.eventsBusy(), null, { timeout: 40000 });
 
@@ -157,6 +158,7 @@ check('a corrected rate is kept', await page.evaluate(() =>
 reportUsage = false;
 await page.evaluate(() => document.querySelector('[data-view="events"]').click());
 await page.waitForTimeout(300);
+await page.evaluate(() => localStorage.removeItem('event-cache-v1'));
 await page.evaluate(() => document.getElementById('evSearch').click());
 await page.waitForFunction(() => !window.__tripTest.eventsBusy(), null, { timeout: 40000 });
 const later = await stored();
