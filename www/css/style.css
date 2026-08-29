@@ -3696,3 +3696,22 @@ html, body {
 /* A search whose wording you have changed says so, the way an edited Explore
    category already does. */
 .search-chip.tuned { border-style: dashed; }
+
+/* What the AI is costing. Three figures side by side rather than a table:
+   the comparison between today, this week and all time is the whole point,
+   and a table would make it a reading exercise. */
+.usage-grid { display: flex; flex-wrap: wrap; gap: 4px; }
+.usage-block { flex: 1 1 120px; min-width: 0; padding: 4px 2px; }
+.usage-label {
+  font-size: 11.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  font-weight: 700;
+}
+.usage-figure { font-size: 22px; font-weight: 700; margin-top: 2px; }
+.usage-figure span { font-size: 13px; font-weight: 400; color: var(--text-muted); }
+.usage-detail { font-size: 12px; color: var(--text-muted); margin-top: 2px; line-height: 1.35; }
+.usage-cost { font-size: 13px; font-weight: 600; margin-top: 3px; }
+.usage-rates { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 8px; }
+.usage-rates input { width: 84px; }

@@ -190,6 +190,7 @@
       // actually changed is stored; everything else uses the built-in
       // phrasing, so improvements to the defaults still reach them.
       catPrompts: stored.catPrompts && typeof stored.catPrompts === "object" ? stored.catPrompts : {},
+      aiRates: stored.aiRates && typeof stored.aiRates === "object" ? stored.aiRates : {},
       anglePrompts:
         stored.anglePrompts && typeof stored.anglePrompts === "object" ? stored.anglePrompts : {},
     };
@@ -838,7 +839,141 @@
         }
       });
     }
+    // Google counts the tokens itself and puts the answer in every reply. It
+    // was being thrown away with the rest of the envelope - so the app could
+    // spend nine grounded searches on your allowance and have nothing to say
+    // about it. These are its numbers, not an estimate of ours.
+    recordAiUsage(data.usageMetadata, { grounded, model: path });
+
     return { text, sources };
+  }
+
+  // ---------- What the AI is costing ----------
+  // Per device, and it says so. There is no endpoint that answers "how much of
+  // my allowance is left" from an API key - that lives in the Cloud Console -
+  // so the honest thing is to count what this phone spent and be clear that
+  // the same key used elsewhere is invisible here.
+  const AI_USAGE_KEY = "ai-usage-v1";
+  const USAGE_DAYS_KEPT = 60;
+
+  function loadAiUsage() {
+    const u = readJson(AI_USAGE_KEY, null);
+    const base = { days: {}, total: { calls: 0, grounded: 0, inTokens: 0, outTokens: 0 }, last: null };
+    if (!u || typeof u !== "object") return base;
+    return {
+      days: u.days && typeof u.days === "object" ? u.days : {},
+      total: Object.assign({}, base.total, u.total),
+      last: u.last || null,
+    };
+  }
+
+  function blankDay() {
+    return { calls: 0, grounded: 0, inTokens: 0, outTokens: 0 };
+  }
+
+  function recordAiUsage(meta, opts) {
+    // No usageMetadata means an older API version or an error shape. Count the
+    // call anyway - "we made a request and cannot say how big" is still worth
+    // knowing, and silently recording nothing would understate the total.
+    const m = meta || {};
+    const inTok = Number(m.promptTokenCount) || 0;
+    const outTok = Number(m.candidatesTokenCount) || 0;
+    const usage = loadAiUsage();
+    const key = isoDate(new Date());
+    const day = usage.days[key] || blankDay();
+    day.calls += 1;
+    if (opts && opts.grounded) day.grounded += 1;
+    day.inTokens += inTok;
+    day.outTokens += outTok;
+    usage.days[key] = day;
+
+    usage.total.calls += 1;
+    if (opts && opts.grounded) usage.total.grounded += 1;
+    usage.total.inTokens += inTok;
+    usage.total.outTokens += outTok;
+    usage.last = {
+      at: Date.now(),
+      inTokens: inTok,
+      outTokens: outTok,
+      grounded: !!(opts && opts.grounded),
+      model: (opts && opts.model) || "",
+      counted: !!(m.promptTokenCount || m.candidatesTokenCount),
+    };
+
+    // Sixty days of daily rows is a few kilobytes; older ones are dropped, and
+    // the all-time totals are kept separately so dropping a day never makes
+    // the total go backwards.
+    const cutoff = isoDate(new Date(Date.now() - USAGE_DAYS_KEPT * 86400000));
+    Object.keys(usage.days).forEach((d) => {
+      if (d < cutoff) delete usage.days[d];
+    });
+    store(AI_USAGE_KEY, JSON.stringify(usage));
+  }
+
+  // ---------- Turning tokens into money, carefully ----------
+  // Tokens are a fact; a price is not. Google can change what it charges
+  // without telling this app, and a figure that looks exact while being
+  // quietly a year out of date is worse than no figure at all. So the rate is
+  // shown next to the number, dated, and can be corrected - an estimate that
+  // says what it assumed is an estimate; one that doesn't is a claim.
+  //
+  // And on the free tier the true answer is zero, which is why that is the
+  // default rather than a rate nobody is paying.
+  const AI_RATES_ASOF = "May 2026";
+  const DEFAULT_RATES = {
+    // Dollars per million tokens, as published for the flash-lite tier. Only
+    // used when somebody has said they are on a paid plan.
+    in: 0.1,
+    out: 0.4,
+  };
+
+  function loadAiRates() {
+    const s = loadTripSettings();
+    const r = s.aiRates && typeof s.aiRates === "object" ? s.aiRates : {};
+    const num = (v, fallback) => {
+      const n = Number(v);
+      return Number.isFinite(n) && n >= 0 ? n : fallback;
+    };
+    return {
+      // Free tier until somebody says otherwise. This is the honest default:
+      // most people using this app are on it, and for them the answer is £0.
+      paid: !!r.paid,
+      in: num(r.in, DEFAULT_RATES.in),
+      out: num(r.out, DEFAULT_RATES.out),
+      // Roughly, and said to be roughly. Nobody is making a decision on the
+      // third decimal place of a currency conversion here.
+      usdToGbp: num(r.usdToGbp, 0.79),
+    };
+  }
+
+  function estimateCost(totals) {
+    const rates = loadAiRates();
+    if (!rates.paid) return null;
+    const usd = (totals.inTokens / 1e6) * rates.in + (totals.outTokens / 1e6) * rates.out;
+    return { usd, gbp: usd * rates.usdToGbp, rates };
+  }
+
+  function money4(n) {
+    // Fractions of a penny are the normal case here, and rounding them to
+    // "£0.00" would read as "this is free" when it is not.
+    if (n === 0) return "£0";
+    if (n < 0.01) return `less than 1p`;
+    return `£${n.toFixed(2)}`;
+  }
+
+  function usageOverDays(n) {
+    const usage = loadAiUsage();
+    const out = blankDay();
+    const from = isoDate(new Date(Date.now() - (n - 1) * 86400000));
+    Object.keys(usage.days).forEach((d) => {
+      if (d < from) return;
+      const day = usage.days[d];
+      out.calls += day.calls || 0;
+      out.grounded += day.grounded || 0;
+      out.inTokens += day.inTokens || 0;
+      out.outTokens += day.outTokens || 0;
+    });
+    return out;
   }
 
   // Models wrap JSON in prose or code fences often enough that this is worth
@@ -2552,6 +2687,10 @@
     // Who is travelling belongs in a backup for the same reason the picks do:
     // it is typed once and nobody would think to type it again after a
     // reinstall, and half the app's answers change without it.
+    // The AI usage count is deliberately not in here either. It is a meter for
+    // one device, and it says so on its own screen; restoring it onto a second
+    // phone would add two devices' spending together and present the result as
+    // one phone's, which is a wrong number rather than a missing one.
     const keys = [BOARDS_KEY, TRIP_KEY, STORAGE_KEY, RECENT_KEY, PEOPLE_KEY, NOTIFY_KEY, LEGACY.picks, LEGACY.folders, LEGACY.plan];
     loadBoards().boards.forEach((b) => {
       BOARD_PARTS.forEach((part) => keys.push(boardKey(b.id, part)));
@@ -16175,6 +16314,7 @@ ${(() => {
     events: { render: renderEvents, sub: () => "Things with a date on them" },
     budget: { render: renderBudget, sub: () => "What this is costing", parent: "more", label: "Budget" },
     tips: { render: renderTips, sub: () => "Notes & packing", parent: "more", label: "Notes & packing" },
+    usage: { render: renderUsage, sub: () => "What the AI is costing", parent: "more", label: "AI usage" },
     more: { render: renderMore, sub: () => "Everything else" },
   };
 
@@ -16192,6 +16332,7 @@ ${(() => {
       // Reachable as views from the More hub, which is where their buttons
       // are now. Listed here so showView does not bounce them to a tab.
       kids: true,
+      usage: true,
       // Reachable as views, but no longer tabs - there are no buttons for
       // these to hide or show.
       places: true,
@@ -16280,6 +16421,142 @@ ${(() => {
     if (own && own.label) topbarSub.textContent = own.label;
   }
 
+  function tokens(n) {
+    if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`;
+    if (n >= 1000) return `${Math.round(n / 1000)}k`;
+    return String(n);
+  }
+
+  function renderUsage() {
+    const usage = loadAiUsage();
+    const today = usage.days[isoDate(new Date())] || blankDay();
+    const week = usageOverDays(7);
+    const rates = loadAiRates();
+
+    const block = (label, d, note) => {
+      const cost = estimateCost(d);
+      return `
+        <div class="usage-block">
+          <div class="usage-label">${esc(label)}</div>
+          <div class="usage-figure">${esc(tokens(d.inTokens + d.outTokens))} <span>tokens</span></div>
+          <div class="usage-detail">${esc(tokens(d.inTokens))} in · ${esc(tokens(d.outTokens))} out · ${
+            d.calls
+          } request${d.calls === 1 ? "" : "s"}${d.grounded ? `, ${d.grounded} with web search` : ""}</div>
+          ${cost ? `<div class="usage-cost">about ${esc(money4(cost.gbp))}</div>` : ""}
+          ${note ? `<div class="usage-detail">${note}</div>` : ""}
+        </div>`;
+    };
+
+    let html = `
+      <div class="kids-head">
+        <h1 class="kids-title">AI usage</h1>
+        <p class="kids-sub">What this phone has spent on the Gemini key</p>
+      </div>
+      <div class="section-label">Tokens</div>
+      <div class="card usage-grid">
+        ${block("Today", today)}
+        ${block("Last 7 days", week)}
+        ${block("All time", usage.total)}
+      </div>
+    `;
+
+    if (usage.last) {
+      const ago = Math.round((Date.now() - usage.last.at) / 60000);
+      html += `<div class="section-label">The last request</div>
+        <div class="card">
+          <p class="settings-hint">
+            ${esc(tokens(usage.last.inTokens))} in, ${esc(tokens(usage.last.outTokens))} out${
+              usage.last.grounded ? ", with web search" : ""
+            } — ${ago < 1 ? "just now" : ago < 60 ? `${ago} min ago` : `${Math.round(ago / 60)} h ago`}.
+            ${
+              usage.last.counted
+                ? ""
+                : "Google didn't report a token count for it, so it is counted as a request but not as tokens."
+            }
+          </p>
+          <p class="settings-hint">
+            A What's on search is nine requests, all of them with web search — by a distance the
+            most expensive thing the app does. Explore and the trip planner are one each.
+          </p>
+        </div>`;
+    }
+
+    html += `
+      <div class="section-label">What it costs</div>
+      <div class="card">
+        <label class="settings-check">
+          <input type="checkbox" id="usagePaid"${rates.paid ? " checked" : ""} />
+          <span>I'm on a paid plan, not the free tier</span>
+        </label>
+        <p class="settings-hint">
+          ${
+            rates.paid
+              ? `Costing at $${esc(String(rates.in))} per million tokens in and $${esc(
+                  String(rates.out)
+                )} out, converted at ${esc(String(rates.usdToGbp))}. Those were the published rates
+                 for the small models as of ${esc(AI_RATES_ASOF)} — correct them if they've moved,
+                 because this app has no way to check.`
+              : `On the free tier the answer is £0, which is why nothing above shows a price.
+                 The tokens are still real, and they're what the free allowance is measured in.`
+          }
+        </p>
+        ${
+          rates.paid
+            ? `<div class="usage-rates">
+                 <label class="person-time"><span>$ per 1M in</span>
+                   <input type="number" step="0.01" min="0" id="rateIn" value="${esc(String(rates.in))}" /></label>
+                 <label class="person-time"><span>$ per 1M out</span>
+                   <input type="number" step="0.01" min="0" id="rateOut" value="${esc(String(rates.out))}" /></label>
+                 <label class="person-time"><span>$ to £</span>
+                   <input type="number" step="0.01" min="0" id="rateFx" value="${esc(String(rates.usdToGbp))}" /></label>
+               </div>
+               <p class="settings-hint">Web search grounding is billed separately by Google, per request
+                  rather than per token, so it is counted above but not priced here.</p>`
+            : ""
+        }
+      </div>
+
+      <div class="card">
+        <p class="settings-hint">
+          These are Google's own numbers, taken from each reply — not an estimate of what was sent.
+          They only cover this phone, though: the same key used on another device, or by anything
+          else, is invisible here. There is no way to ask Google how much of an allowance is left
+          from inside an app; that only exists in the Cloud Console.
+        </p>
+        <button class="modal-btn" id="usageReset" style="width:100%;margin-top:8px;">Reset the count</button>
+        <pre class="settings-result" id="usageResetResult" hidden></pre>
+      </div>
+    `;
+
+    view.innerHTML = html;
+
+    const paid = document.getElementById("usagePaid");
+    if (paid) {
+      paid.addEventListener("change", () => {
+        const r = Object.assign({}, loadTripSettings().aiRates, { paid: paid.checked });
+        saveTripSettings({ aiRates: r });
+        renderUsage();
+      });
+    }
+    [["rateIn", "in"], ["rateOut", "out"], ["rateFx", "usdToGbp"]].forEach(([id, field]) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.addEventListener("input", () => {
+        const r = Object.assign({}, loadTripSettings().aiRates);
+        r[field] = Number(el.value);
+        saveTripSettings({ aiRates: r });
+      });
+    });
+
+    const reset = document.getElementById("usageReset");
+    if (reset) {
+      reset.addEventListener("click", () => {
+        store(AI_USAGE_KEY, JSON.stringify({ days: {}, total: blankDay(), last: null }));
+        renderUsage();
+      });
+    }
+  }
+
   // One place that lists everything the app can do, so that nothing has to be
   // remembered and nothing needs its own tab. Each row carries the number that
   // makes it worth opening - "8 marked", "3 of 9 packed" - because a menu of
@@ -16332,6 +16609,16 @@ ${(() => {
       <div class="card more-list">
         ${row("map", "map", "Map of everything", pinned ? `${pinned} on the map` : "Nothing placed yet")}
         ${row("boards", "folder", "Your trips", `${boards.length} saved`)}
+        ${row(
+          "usage",
+          "sparkle",
+          "AI usage",
+          (() => {
+            const t = loadAiUsage().days[isoDate(new Date())] || blankDay();
+            const all = t.inTokens + t.outTokens;
+            return all ? `${tokens(all)} tokens today` : "Nothing used today";
+          })()
+        )}
         ${row("settings", "settings", "Settings", "Keys, units, backup")}
       </div>
     `;
