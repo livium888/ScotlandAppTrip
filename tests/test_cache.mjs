@@ -233,6 +233,96 @@ await searchWindow('today');
 check('and it is not shown, because the diary is filtered on the way out',
   !/Last Month Fair/.test(await screen()));
 
+// ---------- The searches themselves, listed ----------
+//
+// "I don't wanna have to do the search again today. You need to show me the
+// last searches for the last seven days."
+//
+// The cache was doing its job invisibly: it only ever helped if you happened
+// to ask the identical question again, so the only way to read Tuesday's
+// answers was to run Tuesday's search. The searches have to be on the screen.
+
+// A second, different search so there is more than one to list.
+await searchWindow('week');
+const twoSearches = await page.evaluate(() =>
+  Object.keys(JSON.parse(localStorage.getItem('event-cache-v1') || '{}')).length);
+check('two different searches are both remembered', twoSearches >= 2, String(twoSearches));
+
+// The state that used to force a fresh search: arriving with nothing loaded.
+await page.reload({ waitUntil: 'load' });
+await page.waitForTimeout(500);
+await page.evaluate(() => document.querySelector('[data-view="events"]').click());
+await page.waitForTimeout(400);
+
+const listed = await page.evaluate(() =>
+  Array.from(document.querySelectorAll('[data-recent]')).map((b) => b.textContent.replace(/\s+/g, ' ').trim()));
+// This is the assertion the change exists for.
+check('after closing and reopening, earlier searches are on the screen',
+  listed.length >= 2, JSON.stringify(listed));
+check('each says where and when it was for', /Bakewell/.test(listed.join(' ')), JSON.stringify(listed));
+check('and how much is still to come', /still to come/.test(listed.join(' ')), JSON.stringify(listed));
+check('and how long ago it was found', /ago|just now/.test(listed.join(' ')), JSON.stringify(listed));
+
+calls = 0;
+await page.evaluate(() => { const b = document.querySelector('[data-recent]'); if (b) b.click(); });
+await page.waitForTimeout(500);
+// The whole point: reading an old answer is not a search.
+check('opening one asks the AI for nothing at all', calls === 0, `${calls} calls`);
+check('and puts its results back on screen', (await rows()) > 0, String(await rows()));
+check('saying they were remembered rather than just found',
+  /Remembered from/.test(await screen()), (await screen()).slice(0, 700));
+// Offering to reload what you are already looking at is a row that does nothing.
+check('and the one on screen is no longer offered in the list', await page.evaluate(() =>
+  document.querySelectorAll('[data-recent]').length === 1),
+  await page.evaluate(() => document.querySelectorAll('[data-recent]').length));
+
+// ---------- What drops off the list ----------
+
+const gone = await page.evaluate(() => {
+  const c = JSON.parse(localStorage.getItem('event-cache-v1') || '{}');
+  const key = Object.keys(c)[0];
+  if (!key) return null;
+  // Everything it found has since happened.
+  c[key].results.forEach((e) => { e.startsAt = new Date(Date.now() - 20 * 86400000).toISOString(); });
+  localStorage.setItem('event-cache-v1', JSON.stringify(c));
+  return key;
+});
+await page.reload({ waitUntil: 'load' });
+await page.waitForTimeout(400);
+await page.evaluate(() => document.querySelector('[data-view="events"]').click());
+await page.waitForTimeout(400);
+const afterGone = await page.evaluate(() =>
+  Array.from(document.querySelectorAll('[data-recent]')).map((b) => b.getAttribute('data-recent')));
+check('a search whose events have all been and gone is not offered',
+  !afterGone.includes(gone), JSON.stringify(afterGone));
+
+await page.evaluate(() => {
+  const c = JSON.parse(localStorage.getItem('event-cache-v1') || '{}');
+  Object.keys(c).forEach((k) => { c[k].at = Date.now() - 8 * 24 * 60 * 60 * 1000; });
+  localStorage.setItem('event-cache-v1', JSON.stringify(c));
+});
+await page.reload({ waitUntil: 'load' });
+await page.waitForTimeout(400);
+await page.evaluate(() => document.querySelector('[data-view="events"]').click());
+await page.waitForTimeout(400);
+check('and nothing older than the week is either', await page.evaluate(() =>
+  document.querySelectorAll('[data-recent]').length === 0),
+  await page.evaluate(() => document.querySelectorAll('[data-recent]').length));
+
+// ---------- Forgetting them ----------
+
+await searchWindow('today');
+await page.reload({ waitUntil: 'load' });
+await page.waitForTimeout(400);
+await page.evaluate(() => document.querySelector('[data-view="events"]').click());
+await page.waitForTimeout(400);
+check('a fresh search shows up in the list again', await page.evaluate(() =>
+  document.querySelectorAll('[data-recent]').length >= 1));
+await page.evaluate(() => { const b = document.getElementById('evForget'); if (b) b.click(); });
+await page.waitForTimeout(300);
+check('and they can all be forgotten', await page.evaluate(() =>
+  document.querySelectorAll('[data-recent]').length === 0));
+
 await browser.close();
 console.log(failures === 0 ? '\nALL TESTS PASSED' : `\n${failures} FAILED`);
 process.exit(failures ? 1 : 0);

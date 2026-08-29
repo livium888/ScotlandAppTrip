@@ -8553,6 +8553,54 @@ ${(() => {
     `;
   }
 
+  function agoWords(at) {
+    const mins = Math.round((Date.now() - at) / 60000);
+    if (mins < 1) return "just now";
+    if (mins < 60) return `${mins} min ago`;
+    const hours = Math.round(mins / 60);
+    if (hours < 24) return `${hours} h ago`;
+    const days = Math.round(hours / 24);
+    return days === 1 ? "yesterday" : `${days} days ago`;
+  }
+
+  // The searches of the last week, on the screen rather than only in the
+  // cache. Kept above the results so it is the first thing you see when you
+  // arrive with nothing loaded - which is the state that used to force a
+  // fresh search just to read Tuesday's answers.
+  function renderRecentSearches() {
+    const recent = recentEventSearches();
+    if (!recent.length) return "";
+    // Not the one already on screen: offering to reload what you are looking
+    // at is a row that does nothing.
+    const showing = recent.filter((r) => !(eventSearch.fromCache && r.at === eventSearch.fromCache));
+    if (!showing.length) return "";
+
+    let html = `<div class="section-label list-head"><span>Earlier searches</span><span class="list-head-count">${showing.length}</span></div>`;
+    html += `<div class="card more-list">`;
+    html += showing
+      .map((r) => {
+        const m = r.meta || {};
+        const kinds = Array.isArray(m.kinds) && m.kinds.length
+          ? EVENT_ANGLES.filter((a) => m.kinds.includes(a.key)).map((a) => a.label).join(", ")
+          : "everything";
+        return `
+          <button class="more-row" data-recent="${esc(r.key)}">
+            <span class="more-row-ico">${icon("events", { size: 20 })}</span>
+            <span class="more-row-main">
+              <span class="more-row-title">${esc(m.centre || "Nearby")} · ${esc(m.label || "")}</span>
+              <span class="more-row-meta">${r.count} still to come · ${esc(kinds)} · found ${esc(agoWords(r.at))}</span>
+            </span>
+            ${icon("forward", { size: 16, cls: "more-row-go" })}
+          </button>`;
+      })
+      .join("");
+    html += `</div>`;
+    html += `<p class="settings-hint">Kept for a week, then dropped. Opening one costs nothing —
+      it shows what was found at the time, with anything that has since been and gone taken out.
+      <button class="link-btn" id="evForget">Forget these</button></p>`;
+    return html;
+  }
+
   function renderEventsSearchBar() {
     const w = eventWindow(eventSearch.when);
     const centre = eventSearch.centre || loadAnchor() || derivedAnchor();
@@ -8833,6 +8881,10 @@ ${(() => {
       html += `<div class="card"><p class="pick-status">${esc(eventSearch.error)}</p></div>`;
     }
 
+    // Above the results, because when there are none this is the whole point
+    // of the screen: what you already know, without asking again.
+    if (eventSearch.status !== "loading") html += renderRecentSearches();
+
     if (eventSearch.status === "loading" || Object.keys(eventSearch.angles).length) {
       html += renderAngleProgress();
     }
@@ -9035,6 +9087,19 @@ ${(() => {
       b.addEventListener("click", () => retryAngle(b.getAttribute("data-ev-retry")))
     );
 
+    view.querySelectorAll("[data-recent]").forEach((b) =>
+      b.addEventListener("click", () => openRecentSearch(b.getAttribute("data-recent")))
+    );
+
+    const forget = document.getElementById("evForget");
+    if (forget) {
+      forget.addEventListener("click", () => {
+        forgetRecentSearches();
+        eventSearch.fromCache = 0;
+        renderEvents();
+      });
+    }
+
     const allKinds = document.getElementById("evAllKinds");
     if (allKinds) {
       allKinds.addEventListener("click", () => {
@@ -9141,15 +9206,66 @@ ${(() => {
     return c && typeof c === "object" ? c : {};
   }
 
+  // Every search of the last week that still has something to show, newest
+  // first. The cache was doing its job and doing it invisibly: it only ever
+  // helped if you happened to ask the identical question again, so the only
+  // way to see Tuesday's results was to run Tuesday's search. This is that
+  // list, and opening one costs nothing.
+  function recentEventSearches() {
+    const cache = loadEventCache();
+    return Object.keys(cache)
+      .map((key) => {
+        const hit = cache[key];
+        if (!hit || Date.now() - hit.at > EVENT_CACHE_MS) return null;
+        const upcoming = (hit.results || []).filter((e) => !eventIsPast(e));
+        // A search whose events have all been and gone is not worth offering.
+        // It stays in the cache until its week is up - so re-running it is
+        // still free - it simply has nothing to put on this list.
+        if (!upcoming.length) return null;
+        return { key, at: hit.at, count: upcoming.length, meta: hit.meta || {} };
+      })
+      .filter(Boolean)
+      .sort((a, b) => b.at - a.at);
+  }
+
+  // Opening one is not a search. Nothing is asked for, nothing is spent.
+  function openRecentSearch(key) {
+    const hit = readEventCache(key);
+    if (!hit) return;
+    const meta = hit.meta || {};
+    eventGeneration++;
+    if (eventQueue) eventQueue.stop();
+    if (meta.lat != null) {
+      eventSearch.centre = { name: meta.centre, lat: meta.lat, lon: meta.lon, miles: meta.miles };
+    }
+    if (meta.when) eventSearch.when = meta.when;
+    if (Array.isArray(meta.kinds)) eventSearch.kinds = meta.kinds.slice();
+    eventSearch.results = sortEventsByWhen((hit.results || []).filter((e) => !eventIsPast(e)));
+    eventsDropped = Object.assign({}, NO_DROPS, hit.dropped || {});
+    eventsHeldBack = hit.held || [];
+    eventSearch.fromCache = hit.at;
+    eventSearch.angles = {};
+    eventSearch.stopped = false;
+    eventSearch.editing = false;
+    eventSearch.showHeld = false;
+    eventSearch.indoorOnly = false;
+    eventSearch.status = "done";
+    renderEvents();
+  }
+
+  function forgetRecentSearches() {
+    store(EVENT_CACHE_KEY, JSON.stringify({}));
+  }
+
   function readEventCache(key) {
     const hit = loadEventCache()[key];
     if (!hit || Date.now() - hit.at > EVENT_CACHE_MS) return null;
     return hit;
   }
 
-  function writeEventCache(key, results, dropped, held) {
+  function writeEventCache(key, results, dropped, held, meta) {
     const cache = loadEventCache();
-    cache[key] = { at: Date.now(), results, dropped, held };
+    cache[key] = { at: Date.now(), results, dropped, held, meta: meta || {} };
     // Oldest out first, and anything past its week goes regardless. Without
     // the cap this grows for ever on a device that searches a lot of places.
     Object.keys(cache).forEach((k) => {
@@ -9364,7 +9480,19 @@ ${(() => {
 
     // Kept whether or not anything was found: a search that legitimately
     // returns nothing is exactly the one not worth paying for twice.
-    writeEventCache(cacheKey, eventSearch.results, eventsDropped, eventsHeldBack);
+    // Enough to describe the search on a list without re-deriving any of it.
+    writeEventCache(cacheKey, eventSearch.results, eventsDropped, eventsHeldBack, {
+      centre: centre.name,
+      lat: centre.lat,
+      lon: centre.lon,
+      miles: centre.miles || DEFAULT_ANCHOR_MILES,
+      when: eventSearch.when,
+      label: window.label,
+      from: isoDate(window.from),
+      to: isoDate(window.to),
+      fromTime: window.fromTime || "",
+      kinds: eventSearch.kinds.slice(),
+    });
 
     // "Nothing found" can only be known once every angle has reported, so it
     // is a final state rather than something thrown from inside the search.
