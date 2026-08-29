@@ -76,6 +76,28 @@
     return p.googleUrl || mapsUrlFor(pickMapsQuery(p), p);
   }
 
+  // A place's own name is the right thing to look for on a map. An event's is
+  // not: "Toddler Storytime" is on no map anywhere, and the thing you actually
+  // want to walk to is the library it is happening in. So the venue leads, and
+  // the event's name is only a fallback for a listing that never named one.
+  function eventMapsQuery(e) {
+    const venue = String(e.venue || "").trim();
+    if (!venue) return pickMapsQuery(e);
+    // With coordinates the venue alone is best - the search is already centred
+    // on the spot. Without them it needs a town to sit in, or "The Institute"
+    // finds one four counties away.
+    if (e.lat != null && e.lon != null) return venue;
+    const where = e.area || townFromAddress(e.address) || "";
+    return [venue, where].filter(Boolean).join(", ");
+  }
+
+  // Google's own id for the venue when we have been given one, and a centred
+  // search when we have not. Same rule saved places already follow: an id
+  // addresses the exact place, a name search can land on the wrong one.
+  function eventMapsUrl(e) {
+    return e.googleUrl || mapsUrlFor(eventMapsQuery(e), e);
+  }
+
   // Opens a link in an in-app Chrome Custom Tab when running natively. A
   // Custom Tab is real Chrome, so it reuses the browser's cookies - the
   // Google consent/sign-in already accepted there carries over, which a
@@ -2457,6 +2479,76 @@
     fresh.enrichStatus = geo || wiki ? "done" : "empty";
     savePicks(picks);
     if (view.dataset.activeTab === "picks") renderPicks();
+  }
+
+  // ---------- Pinning an event's venue properly ----------
+  // The search places events with the free OSM lookup, which is a gazetteer of
+  // mapped features and knows a castle far better than it knows a village
+  // hall. That is why so many event rows carry "approx. location": the town
+  // centre was the best answer available.
+  //
+  // Google Places does know the hall, the library and the pub - but it is
+  // billed per request, and nine angles of twenty events would be a hundred
+  // and eighty of them for one search. So it is not asked during a search at
+  // all. It is asked once, for one venue, at the moment you open or save that
+  // event - which is the moment the pin stops being decoration and becomes
+  // somewhere you might drive to.
+  const venueLookups = {};
+
+  function eventNeedsVenue(pick) {
+    if (!pick || pick.kind !== "event") return false;
+    if (pick.googleUrl || pick.venueChecked) return false;
+    if (!String(pick.venue || "").trim()) return false;
+    return !!loadTripSettings().googleKey.trim();
+  }
+
+  async function refineEventVenue(id, after) {
+    const pick = loadPicks().find((p) => p.id === id);
+    if (!eventNeedsVenue(pick)) return;
+    const query = [pick.venue, pick.area || pick.city].filter(Boolean).join(", ");
+    if (venueLookups[query]) return;
+    venueLookups[query] = true;
+
+    let hit = null;
+    try {
+      // Bounded to where the event already is, so a venue name that exists in
+      // fifty towns cannot resolve to the wrong one. The same rule the rest of
+      // the app follows: a coordinate outside the area is never assigned.
+      const anchor =
+        pick.lat != null
+          ? { name: pick.area || pick.city || "", lat: pick.lat, lon: pick.lon, miles: 12 }
+          : loadAnchor();
+      const results = await searchGooglePlaces(query, loadTripSettings().googleKey.trim(), anchor);
+      hit = results.find((r) => r.lat != null && (!anchor || confirmedWithinAnchor(anchor, r.lat, r.lon, ANCHOR_GRACE)));
+    } catch (e) {
+      // A failed lookup is not worth retrying on every open; it is marked
+      // below either way, the same as a photo that could not be found.
+    }
+
+    const picks = loadPicks();
+    const fresh = picks.find((p) => p.id === id);
+    if (!fresh) return;
+    // Marked whether or not it worked, so opening the same event ten times is
+    // one request rather than ten.
+    fresh.venueChecked = true;
+    if (hit) {
+      fresh.lat = hit.lat;
+      fresh.lon = hit.lon;
+      // An exact pin is no longer an approximate one, and the row must stop
+      // saying that it is.
+      delete fresh.approximate;
+      if (hit.googleUrl) fresh.googleUrl = hit.googleUrl;
+      if (hit.address) fresh.address = hit.address;
+      if (!fresh.website && hit.website) fresh.website = hit.website;
+      if (!fresh.phone && hit.phone) fresh.phone = hit.phone;
+      if (!fresh.openingHours && hit.openingHours) fresh.openingHours = hit.openingHours;
+      if (fresh.rating == null && hit.rating != null) {
+        fresh.rating = hit.rating;
+        fresh.ratingCount = hit.ratingCount;
+      }
+    }
+    savePicks(picks);
+    if (after) after();
   }
 
   // ---------- Place detail modal ----------
@@ -7558,6 +7650,10 @@ ${(() => {
     "startsAt", "endsAt", "time", "endTime", "venue", "price", "ticketUrl",
     "recurring", "approximate", "setting", "minAge", "maxAge", "childFocus",
     "bookingLevel", "booking",
+    // Google's own id for the venue, once one has been found. Without it here
+    // the exact link would be dropped by the same list that already lost
+    // endsAt and approximate once.
+    "googleUrl", "venueChecked",
   ];
 
   function copyEventFields(from, to) {
@@ -8540,6 +8636,16 @@ ${(() => {
                 : held != null
                   ? `<button class="ev-btn" data-save-held="${held}">＋ Save anyway</button>`
                   : `<button class="ev-btn ev-btn-primary" data-save-event="${index}">＋ Save</button>`
+            }
+            ${
+              // Free: a URL, not a request. Every event that has been placed
+              // at all can be opened on a map, which is most of them.
+              eventMapsUrl(e)
+                ? `<button class="ev-btn" data-open-maps="${esc(eventMapsUrl(e))}">${icon("pin", {
+                    size: 14,
+                    cls: "ico-inline",
+                  })} Maps</button>`
+                : ""
             }
             ${e.ticketUrl ? `<button class="ev-btn" data-open-maps="${esc(e.ticketUrl)}">Tickets & info</button>` : ""}
             ${
@@ -10442,7 +10548,12 @@ ${(() => {
     wantPhoto(p, () => {
       if (placeModal.classList.contains("open")) openPickDetail(id);
     });
-    const mapsUrl = pickGoogleUrl(p);
+    // And the one moment an event's venue is worth pinning exactly, for the
+    // same reason: this is where you decide whether you are going.
+    refineEventVenue(id, () => {
+      if (placeModal.classList.contains("open")) openPickDetail(id);
+    });
+    const mapsUrl = p.kind === "event" ? eventMapsUrl(p) : pickGoogleUrl(p);
     const plan = loadPlan();
     const folders = loadFolders();
     const scheduled = {};
@@ -15233,7 +15344,15 @@ ${(() => {
     savePicks(picks);
     // The whole point of an event having a date: it goes in the day it is on,
     // at the time it starts, without being dragged there.
-    if (pick.kind === "event") addEventToItsDay(pick);
+    if (pick.kind === "event") {
+      addEventToItsDay(pick);
+      // Saved is the other moment it matters: it now has a pin on your map and
+      // a day in your plan, and a town-centre approximation for both is worse
+      // than one request.
+      refineEventVenue(pick.id, () => {
+        if (view.dataset.activeTab === "events") renderEvents();
+      });
+    }
     // Deliberately does NOT clear the search: results now live on their own
     // screen that stays open so several places can be added in a row, and
     // wiping the list out from under the second tap is exactly the bug that
