@@ -136,7 +136,14 @@ const chooseCategory = async (key) => {
 };
 await chooseCategory('cafe');
 await page.waitForFunction(() => !/Looking for/.test(document.getElementById('view').textContent), { timeout: 20000 });
-await page.waitForTimeout(300);
+// The search being over is not the screen being finished: distances are
+// measured after the results land and redraw them. Waiting a guessed 300ms
+// for that passed on a quiet machine and failed on a loaded CI runner, which
+// is the definition of a test that is not really checking anything.
+await page.waitForFunction(
+  () => /\d+(\.\d+)?\s*(yd|mi) away/.test(document.getElementById('view').textContent),
+  { timeout: 20000 }
+).catch(() => {});
 
 check('Gemini was asked for the category', /caf[eé]s/i.test(promptSeen), promptSeen.slice(0, 80));
 check('traveller context included', /4-year-old/.test(promptSeen));
@@ -154,7 +161,12 @@ check('distance computed from the centre, in miles', /\d+(\.\d+)?\s*(yd|mi) away
 // --- Saving one keeps the AI description and OSM position ---
 await page.evaluate(() => document.querySelector('[data-explore-add]').click());
 await chooseFolder();
-await page.waitForTimeout(900);
+// Saving geocodes before it writes, so how long it takes depends on the
+// machine. Wait for the thing being asserted rather than for a number.
+await page.waitForFunction(() => {
+  const id = JSON.parse(localStorage.getItem('boards-v1')).activeId;
+  return JSON.parse(localStorage.getItem('board:' + id + ':picks') || '[]').some((p) => p.name === 'Lovecrumbs');
+}, { timeout: 20000 }).catch(() => {});
 const picks = await page.evaluate(() => JSON.parse(localStorage.getItem('board:'+JSON.parse(localStorage.getItem('boards-v1')).activeId+':picks') || '[]'));
 const saved = picks.find((p) => p.name === 'Lovecrumbs');
 check('AI explore result can be saved', !!saved, JSON.stringify(picks.map((p) => p.name)));
@@ -165,7 +177,10 @@ geminiFail = true;
 overpassCalls = 0;
 await chooseCategory('museum');
 await page.waitForFunction(() => !/Looking for/.test(document.getElementById('view').textContent), { timeout: 20000 });
-await page.waitForTimeout(300);
+await page.waitForFunction(
+  () => /Fell back to OpenStreetMap/.test(document.getElementById('view').textContent),
+  { timeout: 20000 }
+).catch(() => {});
 
 check('Overpass used when Gemini fails', overpassCalls >= 1, String(overpassCalls));
 const text2 = await page.evaluate(() => document.getElementById('view').textContent);
