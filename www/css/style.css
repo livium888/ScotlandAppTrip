@@ -3866,3 +3866,30 @@ html, body {
   cursor: pointer;
 }
 .order-toggle:active { opacity: 0.6; }
+
+
+/* The banner's dismiss. Deliberately quieter than "Back up" - taking the
+   backup is the better answer, and this is only the way to say "not now". */
+.app-banner-dismiss {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: inherit;
+  opacity: 0.55;
+  padding: var(--space-1);
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+}
+.app-banner-dismiss:active { opacity: 1; }
+
+/* A row on More that wants attention. Not colour alone - it is a shape that
+   is either there or not, so it does not depend on distinguishing hues. */
+.more-row-dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--warn);
+  margin-right: var(--space-2);
+}

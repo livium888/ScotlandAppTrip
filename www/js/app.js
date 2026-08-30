@@ -2801,11 +2801,12 @@
       appBanner.hidden = false;
       return;
     }
-    if (backupIsOverdue()) {
+    if (backupIsOverdue() && !backupNudgeSnoozed()) {
       appBanner.className = "app-banner nudge";
       appBanner.innerHTML =
         `<span>${esc(backupAgeLine())} Everything is only on this phone.</span>` +
-        `<button class="app-banner-action" id="bannerBackup">Back up</button>`;
+        `<button class="app-banner-action" id="bannerBackup">Back up</button>` +
+        `<button class="app-banner-dismiss" id="bannerDismiss" aria-label="Not now">${icon('close', { size: 15 })}</button>`;
       appBanner.hidden = false;
       const btn = document.getElementById("bannerBackup");
       if (btn) {
@@ -2813,6 +2814,16 @@
           const res = await exportBackup();
           toast(res.message);
           refreshBanner();
+        });
+      }
+      const off = document.getElementById("bannerDismiss");
+      if (off) {
+        off.addEventListener("click", () => {
+          snoozeBackupNudge();
+          refreshBanner();
+          // More carries the mark from now on, so a dismissed warning is
+          // still findable rather than forgotten.
+          if (view.dataset.activeTab === "more") renderMore();
         });
       }
       return;
@@ -2925,6 +2936,25 @@
     if (loadPicks().length < 3) return false;
     const at = lastBackupAt();
     return !at || Date.now() - at > BACKUP_STALE_MS;
+  }
+
+  // A warning nobody can answer is furniture. The nudge sat at the top of
+  // every screen, permanently, with no reply available except taking a
+  // backup - and a message that cannot be acknowledged stops being read
+  // within a day, which means the one moment it matters is the moment it
+  // gets ignored. Dismissing quiets it for a week, not for ever: the data
+  // really is only on this phone, and that does not stop being true because
+  // somebody was busy.
+  const BACKUP_SNOOZE_KEY = "backup-nudge-snoozed-v1";
+  const BACKUP_SNOOZE_MS = 7 * 24 * 60 * 60 * 1000;
+
+  function backupNudgeSnoozed() {
+    const at = readJson(BACKUP_SNOOZE_KEY, 0);
+    return typeof at === "number" && at > 0 && Date.now() - at < BACKUP_SNOOZE_MS;
+  }
+
+  function snoozeBackupNudge() {
+    store(BACKUP_SNOOZE_KEY, JSON.stringify(Date.now()));
   }
 
   // ---------- The backup nobody has to remember to take ----------
@@ -17479,13 +17509,16 @@ ${(() => {
       // fail; the row still opens the screen that can explain itself.
     }
 
-    const row = (target, ico, title, meta) => `
+    // `dot` marks a row that wants attention. It is how a dismissed warning
+    // stays findable: the banner goes quiet, the way to fix it does not.
+    const row = (target, ico, title, meta, dot) => `
       <button class="more-row" data-more="${esc(target)}">
         <span class="more-row-ico">${icon(ico, { size: 20 })}</span>
         <span class="more-row-main">
           <span class="more-row-title">${esc(title)}</span>
           <span class="more-row-meta">${esc(meta)}</span>
         </span>
+        ${dot ? `<span class="more-row-dot" aria-label="Needs attention"></span>` : ""}
         ${icon("forward", { size: 16, cls: "more-row-go" })}
       </button>`;
 
@@ -17516,7 +17549,13 @@ ${(() => {
             return all ? `${tokens(all)} tokens today` : "Nothing used today";
           })()
         )}
-        ${row("settings", "settings", "Settings", "Keys, units, backup")}
+        ${row(
+          "settings",
+          "settings",
+          "Settings",
+          backupIsOverdue() ? "Not backed up — everything is on this phone" : "Keys, units, backup",
+          backupIsOverdue()
+        )}
       </div>
     `;
 
