@@ -10,6 +10,17 @@ uses it to answer `sunrise-sunset` opening times.
 | `opening_hours.js` | opening_hours | 3.14.0 | **LGPL-3.0-only** | The reference OSM `opening_hours` parser: seasons, public holidays, `sunrise-sunset`, and "is it open right now" |
 | `idb.js` | idb | 8.0.3 | ISC | Promises over IndexedDB, for the tile/photo/geocode caches |
 | `fuse.js` | fuse.js | 7.5.0 | Apache-2.0 | Fuzzy search over the places you have already saved |
+| `jsonrepair.js` | jsonrepair | 3.15.0 | ISC | Reads the JSON a model actually produces, rather than the JSON it was asked for |
+
+**`jsonrepair` earns its 7 KB on the paste path.** The hand-rolled repair it
+sits in front of only ever closed brackets on a truncated answer. Everything
+else a model or a person pasting from one produces — single quotes, trailing
+commas, unquoted keys, smart quotes from a phone keyboard, `None` instead of
+`null`, `//` comments, a raw newline inside a string — it could not read at
+all, and the screen said "that didn't contain a list this could read" about
+text that plainly did. All three parsers are still tried in turn: plain
+`JSON.parse`, then `jsonrepair`, then the original, which is better at
+throwing away a half-written trailing object.
 
 ## Two things worth knowing
 

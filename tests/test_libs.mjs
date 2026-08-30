@@ -62,6 +62,7 @@ const globalsOk = await page.evaluate(() => ({
   sun: typeof window.SunCalc === 'object',
   idb: typeof window.idb === 'object',
   fuse: typeof window.Fuse === 'function',
+  jsonrepair: !!(window.JSONRepair && typeof window.JSONRepair.jsonrepair === 'function'),
   // Fuse ships as an ES module. Turning it into a plain script by deleting its
   // `export` line published all forty of its minified top-level names as
   // globals - one of which overwrote Leaflet's L and took the maps down. It is
@@ -73,6 +74,12 @@ check('opening_hours is loaded', globalsOk.oh);
 check('SunCalc is loaded', globalsOk.sun);
 check('idb is loaded', globalsOk.idb);
 check('Fuse is loaded', globalsOk.fuse);
+check('jsonrepair is loaded', globalsOk.jsonrepair, JSON.stringify(globalsOk));
+// It ships as a proper UMD, so unlike Fuse it should publish exactly one name
+// and no minified single letters. Worth asserting rather than assuming.
+check('and publishes only its own name', await page.evaluate(() =>
+  !['jsonrepair', 'm', 'p', 'v', 'y'].some((k) => k in window && typeof window[k] === 'function' && k !== 'JSONRepair')),
+  await page.evaluate(() => ['jsonrepair', 'm', 'p', 'v', 'y'].filter((k) => k in window).join(',')));
 check('and Fuse leaks nothing into the global namespace',
   globalsOk.leaked.length === 0, JSON.stringify(globalsOk.leaked));
 

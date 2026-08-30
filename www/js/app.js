@@ -1064,17 +1064,34 @@
     const start = raw.search(/[[{]/);
     if (start < 0) return null;
     const end = Math.max(raw.lastIndexOf("]"), raw.lastIndexOf("}"));
-    // No closing bracket at all is the commonest truncation of the lot, and
-    // returning null here meant the repair below never got a look at it.
-    if (end <= start) return repairJson(raw.slice(start));
+    const body = end > start ? raw.slice(start, end + 1) : raw.slice(start);
+
     try {
-      return JSON.parse(raw.slice(start, end + 1));
+      return JSON.parse(body);
     } catch (e) {
-      // An answer cut off by the output limit is not a broken answer, it is a
-      // complete one with the end missing - and everything before the cut is
-      // perfectly good. Closing what is still open recovers all of it except
-      // the last item.
-      return repairJson(raw.slice(start));
+      // Not valid, which is the normal case rather than the exception.
+    }
+    // jsonrepair reads what a model actually produces rather than what it was
+    // asked for: single quotes, trailing commas, unquoted keys, the smart
+    // quotes a phone keyboard inserts, None instead of null, // comments, a
+    // raw newline inside a string. All of those used to come back as "that
+    // didn't contain a list this could read" about text that plainly did -
+    // which matters far more now the answer can arrive by being pasted in.
+    const repaired = viaJsonRepair(body);
+    if (repaired !== undefined) return repaired;
+    // And the hand-rolled one last, because it is better than jsonrepair at
+    // exactly one thing: an answer cut off mid-object, where it discards the
+    // half-written tail rather than completing it with nulls.
+    return repairJson(raw.slice(start));
+  }
+
+  function viaJsonRepair(body) {
+    const lib = window.JSONRepair && window.JSONRepair.jsonrepair;
+    if (!lib) return undefined;
+    try {
+      return JSON.parse(lib(body));
+    } catch (e) {
+      return undefined;
     }
   }
 
@@ -8820,7 +8837,9 @@ ${(() => {
             <span class="more-row-ico">${icon("events", { size: 20 })}</span>
             <span class="more-row-main">
               <span class="more-row-title">${esc(m.centre || "Nearby")} · ${esc(m.label || "")}</span>
-              <span class="more-row-meta">${r.count} still to come · ${esc(kinds)} · found ${esc(agoWords(r.at))}</span>
+              <span class="more-row-meta">${r.count} still to come · ${esc(kinds)} · ${
+                m.pasted ? "pasted in" : "found"
+              } ${esc(agoWords(r.at))}</span>
             </span>
             ${icon("forward", { size: 16, cls: "more-row-go" })}
           </button>`;
@@ -9817,6 +9836,32 @@ ${(() => {
     const added = eventSearch.results.length - before;
     eventSearch.status = eventSearch.results.length ? "done" : "idle";
     eventSearch.fromCache = 0;
+
+    // Kept exactly as a searched answer is. Without this, work done by hand -
+    // which is the more effortful way of getting it - was the only kind that
+    // did not survive closing the app, and never appeared under Earlier
+    // searches. Same store, same week, same pruning.
+    //
+    // Written under the same key a search of this question would use, so
+    // pasting into a list you already searched adds to that entry rather than
+    // leaving two half-answers side by side.
+    const cacheKey = eventCacheKey(centre, eventSearch.when, radius, eventSearch.kinds);
+    writeEventCache(cacheKey, eventSearch.results, eventsDropped, eventsHeldBack, {
+      centre: centre.name,
+      lat: centre.lat,
+      lon: centre.lon,
+      miles: centre.miles || DEFAULT_ANCHOR_MILES,
+      when: eventSearch.when,
+      label: window.label,
+      from: isoDate(window.from),
+      to: isoDate(window.to),
+      fromTime: window.fromTime || "",
+      kinds: eventSearch.kinds.slice(),
+      // So the row on Earlier searches can say where it came from - "pasted
+      // in" rather than implying nine requests went out for it.
+      pasted: true,
+    });
+
     renderEvents();
     return {
       ok: true,
@@ -17948,6 +17993,7 @@ ${(() => {
   // anything.
   window.__tripTest = {
     ASSISTANTS,
+    extractJson,
     eventsBusy,
     renderEvents,
     stopEventSearch,

@@ -272,6 +272,81 @@ check('with a way back', await page.evaluate(() =>
   !!document.querySelector('[data-toast-action]') ||
   /Undo/.test(document.body.textContent)));
 
+// ---------- Pasted entries survive, like searched ones ----------
+//
+// "I need the entries saved as cache please, similar to the other caches."
+//
+// Work done by hand was the only kind that did not survive closing the app -
+// which is backwards, since it is the more effortful way of getting it.
+
+const cached = await page.evaluate(() => JSON.parse(localStorage.getItem('event-cache-v1') || '{}'));
+const keys = Object.keys(cached);
+check('pasted entries are written to the same cache a search uses',
+  keys.length >= 1, JSON.stringify(keys));
+check('with the events in them', keys.some((k) => (cached[k].results || []).length > 0));
+// So the row can say where it came from rather than implying nine requests.
+check('and marked as having been pasted rather than found',
+  keys.some((k) => cached[k].meta && cached[k].meta.pasted === true),
+  JSON.stringify(keys.map((k) => cached[k].meta && cached[k].meta.pasted)));
+
+await page.reload({ waitUntil: 'load' });
+await page.waitForTimeout(500);
+await page.evaluate(() => document.querySelector('[data-view="events"]').click());
+await page.waitForTimeout(500);
+const recentRows = await page.evaluate(() =>
+  Array.from(document.querySelectorAll('[data-recent]')).map((b) => b.textContent.replace(/\s+/g, ' ').trim()));
+// The assertion this half exists for.
+check('after closing and reopening the app, the pasted list is still offered',
+  recentRows.length >= 1, JSON.stringify(recentRows));
+check('and says it was pasted in, not found',
+  /pasted in/.test(recentRows.join(' ')), JSON.stringify(recentRows));
+
+await page.evaluate(() => { const b = document.querySelector('[data-recent]'); if (b) b.click(); });
+await page.waitForTimeout(600);
+const restored = await rows();
+check('opening it puts the pasted events back', restored.length >= 1, JSON.stringify(restored));
+check('and asked the AI for nothing to do it', aiCalls === 0, `${aiCalls} calls`);
+
+// ---------- Reading the JSON a model actually produces ----------
+//
+// The hand-rolled repair only ever closed brackets on a truncated answer.
+// Everything else that comes out of a chat window it could not read at all,
+// and the screen said "that didn't contain a list this could read" about text
+// that plainly did.
+
+const messy = await page.evaluate(() => {
+  const e = window.__tripTest && window.__tripTest.extractJson;
+  if (!e) return { missing: true };
+  const ok = (v) => Array.isArray(v) && v.length > 0;
+  return {
+    trailingComma: ok(e('[{"name":"A","date":"2026-09-01"},]')),
+    singleQuotes: ok(e("[{'name':'A','date':'2026-09-01'}]")),
+    unquotedKeys: ok(e('[{name:"A",date:"2026-09-01"}]')),
+    smartQuotes: ok(e('[{\u201cname\u201d:\u201cA\u201d}]')),
+    pythonNone: ok(e('[{"name":"A","minAge":None}]')),
+    comments: ok(e('[{"name":"A"} /* from the newsletter */]')),
+    // The ones that already worked, which must keep working.
+    clean: ok(e('[{"name":"A","date":"2026-09-01"}]')),
+    fenced: ok(e('Here:\n```json\n[{"name":"A"}]\n```\nhope that helps')),
+    truncated: ok(e('[{"name":"A","date":"2026-09-01"},{"name":"B","da')),
+    // And the ones that must still be refused.
+    prose: e('I could not find anything, sorry.'),
+    empty: e(''),
+  };
+});
+check('a trailing comma is read', messy.trailingComma, JSON.stringify(messy));
+check('so are single quotes', messy.singleQuotes, JSON.stringify(messy));
+check('and unquoted keys', messy.unquotedKeys, JSON.stringify(messy));
+check('and the smart quotes a phone keyboard inserts', messy.smartQuotes, JSON.stringify(messy));
+check('and None where null was asked for', messy.pythonNone, JSON.stringify(messy));
+check('and a comment somebody left in', messy.comments, JSON.stringify(messy));
+check('clean JSON still works', messy.clean, JSON.stringify(messy));
+check('so does a fenced block inside prose', messy.fenced, JSON.stringify(messy));
+check('and one cut off mid-object', messy.truncated, JSON.stringify(messy));
+// Being more forgiving must not mean inventing a list out of a refusal.
+check('but prose with no list in it is still refused', messy.prose === null, JSON.stringify(messy.prose));
+check('and so is nothing at all', messy.empty === null, JSON.stringify(messy.empty));
+
 await browser.close();
 console.log(failures === 0 ? '\nALL TESTS PASSED' : `\n${failures} FAILED`);
 process.exit(failures ? 1 : 0);
