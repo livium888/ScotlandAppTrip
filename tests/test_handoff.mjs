@@ -106,7 +106,8 @@ check('and where to go looking for small things',
 check('and the same JSON contract the app itself asks for',
   /ONLY a JSON array/.test(prompt) && /childFocus/.test(prompt) && /bookingLevel|"booking"/.test(prompt));
 check('there is a way to copy it', await page.evaluate(() => !!document.getElementById('handoffCopy')));
-check('and a way to open an assistant', await page.evaluate(() => !!document.getElementById('handoffOpen')));
+check('and a way to open an assistant', await page.evaluate(() =>
+  document.querySelectorAll('[data-assistant]').length >= 1));
 // The whole point: this must not spend anything of yours.
 check('and none of that asked the AI for anything', aiCalls === 0, `${aiCalls} calls`);
 
@@ -190,6 +191,86 @@ const junk = await page.evaluate(() => document.getElementById('handoffResult').
 check('a reply with no list in it says so plainly, rather than failing silently',
   /didn't contain a list/.test(junk), junk);
 check('and tells you what would work', /whole reply/.test(junk), junk);
+
+// ---------- Two assistants, and the app rather than a web page ----------
+//
+// "ChatGPT returns a lot of results, so let's add a ChatGPT button as well.
+// Also if the user has one of these installed on the phone as an app, can we
+// open the app instead?"
+
+await openHandoff();
+const assistants = await page.evaluate(() =>
+  Array.from(document.querySelectorAll('[data-assistant]')).map((b) => b.getAttribute('data-assistant')));
+check('both assistants are offered', assistants.includes('chatgpt') && assistants.includes('gemini'),
+  JSON.stringify(assistants));
+check('and the sheet says the app opens when you have it',
+  /open the app if you have it installed/.test(await page.evaluate(() =>
+    document.getElementById('placeModal').textContent)));
+// A Custom Tab is Chrome, and Chrome never passes a link to another app - so
+// the hand-off has to navigate rather than use the in-app browser.
+check('they are plain https links, which is what the apps claim on Android',
+  await page.evaluate(() => window.__tripTest.ASSISTANTS.every((a) => /^https:\/\//.test(a.url))),
+  await page.evaluate(() => JSON.stringify(window.__tripTest.ASSISTANTS)));
+check('and none of them smuggles the prompt into the URL, which would truncate it',
+  await page.evaluate(() => window.__tripTest.ASSISTANTS.every((a) => !/[?&]q=/.test(a.url))));
+
+// ---------- A link on an imported card ----------
+//
+// "Why can't we have cards and links for these cards once imported?"
+
+const withLink = JSON.stringify([
+  { name: 'Linked Coffee Morning', date: soon, time: '09:30', venue: 'Village Hall', area: 'Bakewell',
+    what: 'With a page behind it.', price: 'free',
+    link: 'https://example.com/parish-news/august' },
+]);
+await fill('handoffAnswer', withLink);
+await clickIf('handoffAdd');
+await page.waitForTimeout(2500);
+await page.evaluate(() => { const b = document.querySelector('#placeModal .modal-close'); if (b) b.click(); });
+await page.waitForTimeout(400);
+
+const linked = await page.evaluate(() => {
+  const row = Array.from(document.querySelectorAll('.ev-row')).find((r) => /Linked Coffee/.test(r.textContent));
+  if (!row) return null;
+  return {
+    source: Array.from(row.querySelectorAll('[data-open-maps]'))
+      .map((b) => b.getAttribute('data-open-maps'))
+      .find((h) => /parish-news/.test(h)) || '',
+    saysNoLink: /no link/.test(row.textContent),
+  };
+});
+// An imported event was the one kind of row with nothing at all to click
+// through to; the contract now asks where it was listed.
+check('an imported event can carry the page it was listed on',
+  !!linked && /parish-news/.test(linked.source), JSON.stringify(linked));
+check('and stops being marked as having no link', !!linked && !linked.saysNoLink, JSON.stringify(linked));
+// The ones that genuinely have none must still say so.
+check('while one with no link still says it has none',
+  await page.evaluate(() => {
+    const row = Array.from(document.querySelectorAll('.ev-row')).find((r) => /Duck Race/.test(r.textContent));
+    return !!row && /no link/.test(row.textContent);
+  }));
+
+// ---------- Throwing out what you don't want ----------
+
+const before = (await rows()).length;
+const dropped = await page.evaluate(() => {
+  const row = Array.from(document.querySelectorAll('.ev-row')).find((r) => /Linked Coffee/.test(r.textContent));
+  const btn = row && row.querySelector('[data-drop-result]');
+  if (!btn) return null;
+  btn.click();
+  return true;
+});
+await page.waitForTimeout(400);
+check('a result can be thrown off the list', dropped === true);
+const after = await rows();
+check('and it goes', !after.some((n) => /Linked Coffee/.test(n)), JSON.stringify(after));
+check('taking only itself with it', after.length === before - 1, `${before} -> ${after.length}`);
+// A mis-tap on a small button beside a row you wanted would otherwise cost
+// you the whole search.
+check('with a way back', await page.evaluate(() =>
+  !!document.querySelector('[data-toast-action]') ||
+  /Undo/.test(document.body.textContent)));
 
 await browser.close();
 console.log(failures === 0 ? '\nALL TESTS PASSED' : `\n${failures} FAILED`);

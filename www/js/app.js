@@ -122,6 +122,31 @@
     }
   }
 
+  // Handing a link to whatever app owns it, rather than reading it here.
+  //
+  // openExternal below opens a Chrome Custom Tab, which is the right thing for
+  // a ticket page or a source: it keeps you inside the app and reuses the
+  // browser's sign-ins. But a Custom Tab IS Chrome, and Chrome never passes a
+  // link on to another app - so "open ChatGPT" would always land in a web
+  // page, even with the app installed.
+  //
+  // Navigating instead is what gets the app. Capacitor's web view hands any
+  // address outside the app to Android as an ACTION_VIEW, and Android routes
+  // that to whichever app has claimed the link - the real one if it is
+  // installed and verified, a browser if not. There is no allowNavigation
+  // entry for these hosts in capacitor.config.json, which is what makes the
+  // hand-off reliable rather than a page loading inside the app.
+  function openInOwningApp(url) {
+    const safe = safeUrl(url);
+    if (!safe) return;
+    const native = window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform();
+    if (native) {
+      window.location.href = safe;
+      return;
+    }
+    window.open(safe, "_blank", "noopener");
+  }
+
   async function openExternal(url) {
     const safe = safeUrl(url);
     if (!safe) return; // refuse anything that isn't an ordinary link
@@ -7608,6 +7633,11 @@ ${(() => {
       description: String(item.what || item.why || "").trim(),
       price: typeof item.price === "string" && /^(free|£{1,3})$/i.test(item.price.trim()) ? item.price.trim() : null,
       ticketUrl: /^https?:\/\//i.test(String(item.tickets || "")) ? String(item.tickets) : "",
+      // Where it was listed. The app's own search gets this free from
+      // grounding chunks; a pasted answer has none, so it has to be asked for
+      // - otherwise an imported event is the one kind of row with nothing at
+      // all to click through to and no way to check it.
+      listedAt: /^https?:\/\//i.test(String(item.link || "")) ? String(item.link) : "",
       recurring: item.recurring === true,
       // The four a parent actually decides on. Same rule as every field above:
       // anything that is not exactly what was asked for becomes an honest
@@ -7653,7 +7683,7 @@ ${(() => {
     // Google's own id for the venue, once one has been found. Without it here
     // the exact link would be dropped by the same list that already lost
     // endsAt and approximate once.
-    "googleUrl", "venueChecked",
+    "googleUrl", "venueChecked", "listedAt",
     // Kept on the saved copy too: an event that arrived by hand should still
     // say so once it is in your list, not only while it is a search result.
     "pastedIn",
@@ -7904,6 +7934,8 @@ ${(() => {
     `"what": one short sentence on what it actually is, ` +
     `"price": "free", "£", "££" or "£££", ` +
     `"tickets": the booking or information URL, or "", ` +
+    `"link": the page you saw it listed on - a parish newsletter, a hall's page, ` +
+    `a listings site - or "" if there isn't one, ` +
     `"recurring": true if this happens every week rather than being a one-off, ` +
     `"setting": "indoor", "outdoor", "both" if there is a sheltered part, or "" if the listing doesn't say, ` +
     `"minAge": the youngest age it is meant for as a number, or null, ` +
@@ -8596,6 +8628,10 @@ ${(() => {
     // actually forecast - a filter that is always there is a filter you
     // scroll past, and one that appears on a wet day is an answer.
     indoorOnly: false,
+    // Results you have thrown out. A list of forty is only useful if the ones
+    // you have looked at and rejected stop taking up room in it - and a pasted
+    // answer can arrive with things you can see at a glance are wrong.
+    dismissed: [],
   };
 
   function savedEvents() {
@@ -8676,6 +8712,20 @@ ${(() => {
 
     return `
       <div class="ev-row${saved ? " ev-saved" : ""}">
+        ${
+          // Saved ones are deleted properly, with an undo; a search result is
+          // only thrown off this list, because there is nothing of yours in it
+          // to lose.
+          saved
+            ? `<button class="ev-drop" data-drop-saved="${esc(e.id)}" aria-label="Remove ${esc(
+                e.name
+              )}">${icon("close", { size: 15 })}</button>`
+            : held != null
+              ? ""
+              : `<button class="ev-drop" data-drop-result="${esc(eventFingerprint(e))}" aria-label="Hide ${esc(
+                  e.name
+                )}">${icon("close", { size: 15 })}</button>`
+        }
         ${time}
         <div class="ev-main">
           <div class="ev-name">${esc(e.name)}${runs}</div>
@@ -8710,15 +8760,24 @@ ${(() => {
             }
             ${e.ticketUrl ? `<button class="ev-btn" data-open-maps="${esc(e.ticketUrl)}">Tickets & info</button>` : ""}
             ${
-              !saved && e.sources && e.sources.length
-                ? `<button class="ev-btn" data-open-maps="${esc(e.sources[0].uri)}">Where this came from</button>`
-                : ""
+              // Whatever there is to check it against: the pages the app's own
+              // search was grounded on, or - for one that arrived by hand -
+              // the page the answer said it was listed on.
+              (() => {
+                const url = (e.sources && e.sources.length && e.sources[0].uri) || e.listedAt || "";
+                return url
+                  ? `<button class="ev-btn" data-open-maps="${esc(url)}">Where this came from</button>`
+                  : "";
+              })()
             }
             ${
               // Not a button, because there is nowhere to go. An answer you
               // cannot click through to check should say so, which is the
               // same standard the "check it's on" badge already sets.
-              e.pastedIn ? `<span class="ev-tag soft">pasted in</span>` : ""
+              e.pastedIn && !e.listedAt ? `<span class="ev-tag soft">pasted in, no link</span>` : ""
+            }
+            ${
+              e.pastedIn && e.listedAt ? `<span class="ev-tag soft">pasted in</span>` : ""
             }
           </div>
         </div>
@@ -8774,6 +8833,15 @@ ${(() => {
     return html;
   }
 
+  // Two buttons, and the clipboard for everything else. Plain https addresses
+  // on purpose: these are the ones the apps themselves claim on Android, so
+  // the same link opens the app when it is installed and the site when it is
+  // not - no custom schemes, which are undocumented and break silently.
+  const ASSISTANTS = [
+    { key: "chatgpt", label: "Open ChatGPT", url: "https://chatgpt.com/" },
+    { key: "gemini", label: "Open Gemini", url: "https://gemini.google.com/app" },
+  ];
+
   async function openHandoffSheet() {
     const centre = eventSearch.centre || loadAnchor() || derivedAnchor();
     if (!centre || centre.lat == null) {
@@ -8808,8 +8876,16 @@ ${(() => {
             <textarea class="settings-input notes-box" id="handoffPrompt" rows="6" readonly>${esc(prompt)}</textarea>
             <div class="settings-btn-row" style="margin-top:10px;">
               <button class="modal-btn modal-btn-primary" id="handoffCopy">Copy the question</button>
-              <button class="modal-btn" id="handoffOpen">Open Gemini</button>
             </div>
+            <div class="settings-btn-row" style="margin-top:8px;">
+              ${ASSISTANTS.map(
+                (a) =>
+                  `<button class="modal-btn" data-assistant="${esc(a.key)}">${esc(a.label)}</button>`
+              ).join("")}
+            </div>
+            <p class="settings-hint">
+              These open the app if you have it installed, and the website if you don't.
+            </p>
 
             <label class="settings-label" style="margin-top:18px;">Paste the answer here</label>
             <textarea class="settings-input notes-box" id="handoffAnswer" rows="5"
@@ -8854,13 +8930,18 @@ ${(() => {
       }
     });
 
-    document.getElementById("handoffOpen").addEventListener("click", () => {
-      // Deliberately not a deep link with the prompt in the URL. Those are
-      // undocumented, change without notice, and silently truncate a prompt
-      // this long - which would look like the app sending a worse question.
-      // The clipboard is the reliable route, and works for any assistant.
-      openExternal("https://gemini.google.com/app");
-    });
+    placeModal.querySelectorAll("[data-assistant]").forEach((b) =>
+      b.addEventListener("click", () => {
+        const a = ASSISTANTS.find((x) => x.key === b.getAttribute("data-assistant"));
+        if (!a) return;
+        // Deliberately not a deep link with the prompt in the URL. Those are
+        // undocumented, change without notice, and silently truncate a prompt
+        // this long - which would look like the app sending a worse question
+        // than it wrote. The clipboard is the reliable route, and works for
+        // every assistant rather than the two with buttons.
+        openInOwningApp(a.url);
+      })
+    );
 
     document.getElementById("handoffAdd").addEventListener("click", async () => {
       const out = document.getElementById("handoffResult");
@@ -9023,6 +9104,10 @@ ${(() => {
     return e.setting !== "outdoor";
   }
 
+  function isDismissed(e) {
+    return eventSearch.dismissed.indexOf(eventFingerprint(e)) >= 0;
+  }
+
   // Six searches, named, each saying where it has got to. The old version was
   // one motionless sentence for the length of the slowest of them - which,
   // when one angle hangs, is ninety seconds of an app that looks broken.
@@ -9175,7 +9260,9 @@ ${(() => {
 
     if (eventSearch.results.length) {
       const savedIds = new Set(saved.map((p) => p.id));
-      const unsaved = eventSearch.results.filter((e) => !savedIds.has(pickId("custom", e.name)));
+      const unsaved = eventSearch.results.filter(
+        (e) => !savedIds.has(pickId("custom", e.name)) && !isDismissed(e)
+      );
       const fresh = unsaved.filter(passesIndoorFilter);
       const already = eventSearch.results.length - unsaved.length;
       const hiddenByFilter = unsaved.length - fresh.length;
@@ -9364,6 +9451,26 @@ ${(() => {
     const byHand = document.getElementById("evAddByHand");
     if (byHand) byHand.addEventListener("click", () => openSearchOverlay(""));
 
+    view.querySelectorAll("[data-drop-result]").forEach((b) =>
+      b.addEventListener("click", () => {
+        const id = b.getAttribute("data-drop-result");
+        if (eventSearch.dismissed.indexOf(id) < 0) eventSearch.dismissed.push(id);
+        renderEvents();
+        // Undoable, because a mis-tap on a small button beside a row you
+        // wanted is otherwise unrecoverable without searching again.
+        toastWithAction("Hidden", "Undo", () => {
+          eventSearch.dismissed = eventSearch.dismissed.filter((x) => x !== id);
+          renderEvents();
+        });
+      })
+    );
+
+    view.querySelectorAll("[data-drop-saved]").forEach((b) =>
+      b.addEventListener("click", () => {
+        removePickWithUndo(b.getAttribute("data-drop-saved"), () => renderEvents());
+      })
+    );
+
     const handoff = document.getElementById("evHandoff");
     if (handoff) handoff.addEventListener("click", () => openHandoffSheet());
 
@@ -9536,6 +9643,7 @@ ${(() => {
     eventSearch.editing = false;
     eventSearch.showHeld = false;
     eventSearch.indoorOnly = false;
+    eventSearch.dismissed = [];
     eventSearch.status = "done";
     renderEvents();
   }
@@ -9745,6 +9853,7 @@ ${(() => {
     eventSearch.editing = false;
     eventSearch.showHeld = false;
     eventSearch.indoorOnly = false;
+    eventSearch.dismissed = [];
     eventSearch.stopped = false;
     eventSearch.angles = {};
     eventsDropped = Object.assign({}, NO_DROPS);
@@ -17838,6 +17947,7 @@ ${(() => {
   // and there is no way to wait for forever. These read; none of them changes
   // anything.
   window.__tripTest = {
+    ASSISTANTS,
     eventsBusy,
     renderEvents,
     stopEventSearch,
