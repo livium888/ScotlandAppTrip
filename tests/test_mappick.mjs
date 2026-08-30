@@ -4,6 +4,7 @@
 // the map. What matters here: the pin follows the map, the spot gets a real
 // name rather than a coordinate, and cancelling changes nothing.
 import { chromium } from 'playwright';
+import { openExplore } from './lib/screens.mjs';
 import fs from 'node:fs';
 const SANDBOX_CHROMIUM = '/opt/pw-browsers/chromium';
 const LAUNCH_OPTS = fs.existsSync(SANDBOX_CHROMIUM) ? { executablePath: SANDBOX_CHROMIUM } : {};
@@ -43,8 +44,7 @@ await page.evaluate(() => {
 });
 await page.reload({ waitUntil: 'load' });
 await page.evaluate(() => document.querySelector('[data-view="picks"]').click());
-await page.waitForSelector('#exploreToggle');
-await page.click('#exploreToggle');
+await openExplore(page);
 await page.waitForSelector('#exploreMapBtn', { timeout: 3000 });
 
 // --- Explore offers it alongside the ways that need a name ---

@@ -2,6 +2,7 @@
 // The interesting cases are the guards: a model can name a real place in the
 // wrong city, and a quiet drop to thinner data should be visible.
 import { chromium } from 'playwright';
+import { openExplore } from './lib/screens.mjs';
 import fs from 'node:fs';
 const SANDBOX_CHROMIUM = '/opt/pw-browsers/chromium';
 const LAUNCH_OPTS = fs.existsSync(SANDBOX_CHROMIUM) ? { executablePath: SANDBOX_CHROMIUM } : {};
@@ -120,8 +121,7 @@ await page.evaluate(() => {
 await page.reload({ waitUntil: 'load' });
 
 await page.evaluate(() => document.querySelector('[data-view="picks"]').click());
-await page.waitForSelector('#exploreToggle');
-await page.click('#exploreToggle');
+await openExplore(page);
 await centreOn('Edinburgh Castle');
 await page.waitForTimeout(800);
 

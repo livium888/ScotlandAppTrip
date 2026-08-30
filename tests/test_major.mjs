@@ -10,6 +10,7 @@
 // can now be promoted to an area, which heads its own section and collects
 // what you save near it.
 import { chromium } from 'playwright';
+import {openExplore, openPickSearch } from './lib/screens.mjs';
 import fs from 'node:fs';
 const SANDBOX_CHROMIUM = '/opt/pw-browsers/chromium';
 const LAUNCH_OPTS = fs.existsSync(SANDBOX_CHROMIUM) ? { executablePath: SANDBOX_CHROMIUM } : {};
@@ -22,7 +23,7 @@ const check = (l, c, extra) => { if (c) console.log(`PASS: ${l}`); else { consol
 const centreOn = async (query) => {
   await page.evaluate(() => document.querySelector('[data-view="picks"]').click());
   await page.waitForTimeout(250);
-  await page.evaluate(() => document.getElementById('pickSearchTrigger').click());
+  await openPickSearch(page);
   await page.waitForSelector('#pickSearchInput');
   await page.fill('#pickSearchInput', query);
   await page.evaluate(() => document.getElementById('pickSearchForm').requestSubmit());
@@ -117,8 +118,7 @@ await page.evaluate(() => {
 await page.reload({ waitUntil: 'load' });
 
 await page.evaluate(() => document.querySelector('[data-view="picks"]').click());
-await page.waitForSelector('#exploreToggle');
-await page.click('#exploreToggle');
+await openExplore(page);
 await page.waitForTimeout(300);
 
 // ---------- Nothing runs until Search is pressed ----------
@@ -182,7 +182,7 @@ check('but they are still on screen', /Hettie’s Tearoom/.test(
 
 // ---------- A town is offered as an area, not filed as one ----------
 
-await page.evaluate(() => document.getElementById('pickSearchTrigger').click());
+await openPickSearch(page);
 await page.waitForSelector('#pickSearchInput');
 await page.fill('#pickSearchInput', 'Pitlochry');
 await page.evaluate(() => document.getElementById('pickSearchForm').requestSubmit());
@@ -216,7 +216,7 @@ check('the area offers what is nearby without searching for it', await page.eval
 
 // ---------- Places saved near an area are filed under it ----------
 
-await page.evaluate(() => document.getElementById('pickSearchTrigger').click());
+await openPickSearch(page);
 await page.waitForSelector('#pickSearchInput');
 await page.fill('#pickSearchInput', 'Blair Athol Distillery');
 await page.evaluate(() => document.getElementById('pickSearchForm').requestSubmit());

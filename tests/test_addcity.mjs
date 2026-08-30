@@ -10,6 +10,7 @@
 // These drive it with an AI key configured, because that is the case that was
 // broken - without a key the OSM fallback happened to return the town.
 import { chromium } from 'playwright';
+import { openExplore } from './lib/screens.mjs';
 import fs from 'node:fs';
 const SANDBOX_CHROMIUM = '/opt/pw-browsers/chromium';
 const LAUNCH_OPTS = fs.existsSync(SANDBOX_CHROMIUM) ? { executablePath: SANDBOX_CHROMIUM } : {};
@@ -153,8 +154,8 @@ check('and the town heads its own section', await page.evaluate(() =>
 
 // ---------- Exploring around it is not limited to the category list ----------
 
-await page.evaluate(() => document.getElementById('exploreToggle').click());
-await page.waitForTimeout(400);
+// "What's nearby" on an area heading lives on Saved and now navigates to the
+// Explore screen itself, so there is nothing to open first.
 await page.evaluate(() => document.querySelector('[data-explore-from]').click());
 await page.waitForTimeout(800);
 

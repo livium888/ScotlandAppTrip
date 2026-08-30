@@ -4,6 +4,7 @@
 // reachable in one gesture, that a category asks the question it claims to,
 // and that anything not on the list can still be described.
 import { chromium } from 'playwright';
+import { openExplore } from './lib/screens.mjs';
 import fs from 'node:fs';
 const SANDBOX_CHROMIUM = '/opt/pw-browsers/chromium';
 const LAUNCH_OPTS = fs.existsSync(SANDBOX_CHROMIUM) ? { executablePath: SANDBOX_CHROMIUM } : {};
@@ -79,8 +80,7 @@ await page.evaluate(() => {
 await page.reload({ waitUntil: 'load' });
 
 await page.evaluate(() => document.querySelector('[data-view="picks"]').click());
-await page.waitForSelector('#exploreToggle');
-await page.click('#exploreToggle');
+await openExplore(page);
 await centreOn('Edinburgh Castle');
 // Setting the centre now goes through the place search, which is an AI call in
 // its own right - so the "did choosing a category search?" check below has to

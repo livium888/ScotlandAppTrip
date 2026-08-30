@@ -4,6 +4,7 @@
 // guarding, walking legs turn into nonsense, and Google gets sent a walking
 // route between towns. All of that is checked here.
 import { chromium } from 'playwright';
+import { openExplore } from './lib/screens.mjs';
 import fs from 'node:fs';
 const SANDBOX_CHROMIUM = '/opt/pw-browsers/chromium';
 const LAUNCH_OPTS = fs.existsSync(SANDBOX_CHROMIUM) ? { executablePath: SANDBOX_CHROMIUM } : {};
@@ -145,8 +146,7 @@ await page.waitForTimeout(300);
 
 // --- The radius goes to 50 miles, and stays where you put it ---
 await page.evaluate(() => document.querySelector('[data-view="picks"]').click());
-await page.waitForSelector('#exploreToggle');
-await page.click('#exploreToggle');
+await openExplore(page);
 await centreOn('Edinburgh');
 await page.waitForSelector('#exploreRadius', { timeout: 5000 });
 
@@ -162,8 +162,7 @@ check('the choice is remembered, not reset', await page.evaluate(() =>
 
 await page.reload({ waitUntil: 'load' });
 await page.evaluate(() => document.querySelector('[data-view="picks"]').click());
-await page.waitForSelector('#exploreToggle');
-await page.click('#exploreToggle');
+await openExplore(page);
 await centreOn('Edinburgh');
 await page.waitForSelector('#exploreRadius', { timeout: 5000 });
 check('still 50 miles after restarting the app', await page.evaluate(() =>

@@ -8,6 +8,7 @@
 // is waiting - enrichment that happens seconds after a save - record that the
 // question was never settled instead of pretending it was.
 import { chromium } from 'playwright';
+import { openPickSearch } from './lib/screens.mjs';
 import fs from 'node:fs';
 const SANDBOX_CHROMIUM = '/opt/pw-browsers/chromium';
 const LAUNCH_OPTS = fs.existsSync(SANDBOX_CHROMIUM) ? { executablePath: SANDBOX_CHROMIUM } : {};
@@ -58,11 +59,10 @@ await page.evaluate(() => {
 });
 await page.reload({ waitUntil: 'load' });
 await page.evaluate(() => document.querySelector('[data-view="picks"]').click());
-await page.waitForSelector('#exploreToggle');
 
 // ---------- The lookup keeps the alternatives ----------
 
-await page.evaluate(() => document.getElementById('pickSearchTrigger').click());
+await openPickSearch(page);
 await page.waitForSelector('#pickSearchInput');
 geocodeUrls = [];
 await page.fill('#pickSearchInput', 'Newport');
@@ -97,7 +97,7 @@ check('and nothing was searched for on the way there', await page.evaluate(() =>
 
 // ---------- An unambiguous name is not turned into a question ----------
 
-await page.evaluate(() => document.getElementById('pickSearchTrigger').click());
+await openPickSearch(page);
 await page.waitForSelector('#pickSearchInput');
 await page.fill('#pickSearchInput', 'The Bay Tree');
 await page.evaluate(() => document.getElementById('pickSearchForm').requestSubmit());
@@ -122,7 +122,7 @@ check('it saves without a flag on it', !!bayTree && !bayTree.geoAlternatives, JS
 
 // ---------- A background lookup records the doubt instead of interrupting ----------
 
-await page.evaluate(() => document.getElementById('pickSearchTrigger').click());
+await openPickSearch(page);
 await page.waitForSelector('#pickSearchInput');
 await page.fill('#pickSearchInput', 'Newport');
 await page.evaluate(() => document.getElementById('pickSearchForm').requestSubmit());

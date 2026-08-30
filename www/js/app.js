@@ -7412,7 +7412,7 @@ ${(() => {
     explore.centre = { name: p.name, lat: p.lat, lon: p.lon };
     explore.error = "";
     markExploreStale();
-    renderPicks();
+    redrawExplore();
   }
 
   // Uses the Capacitor plugin on device, which asks for the runtime
@@ -7422,20 +7422,20 @@ ${(() => {
   async function setExploreCentreFromGps() {
     explore.status = "locating";
     explore.error = "";
-    renderPicks();
+    redrawExplore();
 
     const useCentre = (lat, lon, accuracy) => {
       const note = fixAccuracyNote(accuracy);
       explore.centre = { name: "Where I am", lat, lon, accuracy };
       explore.status = "idle";
       markExploreStale();
-      renderPicks();
+      redrawExplore();
       if (note) toast(`Found you ${note}`);
     };
     const fail = (msg) => {
       explore.status = "error";
       explore.error = msg;
-      renderPicks();
+      redrawExplore();
     };
 
     // This had its own copy of the geolocation call, asking for a coarse fix
@@ -9482,6 +9482,34 @@ ${(() => {
       `;
     }
 
+    // The other two ways of finding something you have not already saved.
+    // They used to live in other tabs entirely - Explore folded inside Saved,
+    // Suggest a trip as a button on Plan - so answering "what could we do?"
+    // meant knowing which kind of finding the app had filed where. Below the
+    // events, because dated things are the common case and should not have to
+    // be scrolled past.
+    html += `
+      <div class="section-label">Other ways to look</div>
+      <div class="card more-list">
+        <button class="more-row" data-find="explore">
+          <span class="more-row-ico">${icon("directions", { size: 20 })}</span>
+          <span class="more-row-main">
+            <span class="more-row-title">Places nearby</span>
+            <span class="more-row-meta">Cafés, playgrounds, museums around a point</span>
+          </span>
+          ${icon("forward", { size: 16, cls: "more-row-go" })}
+        </button>
+        <button class="more-row" data-find="idea">
+          <span class="more-row-ico">${icon("sparkle", { size: 20 })}</span>
+          <span class="more-row-main">
+            <span class="more-row-title">Plan a day out</span>
+            <span class="more-row-meta">Whole routes back, with the stops in order</span>
+          </span>
+          ${icon("forward", { size: 16, cls: "more-row-go" })}
+        </button>
+      </div>
+    `;
+
     view.innerHTML = html;
     view.scrollTop = screenId === eventsScreenId ? previousScroll : 0;
     eventsScreenId = screenId;
@@ -9495,6 +9523,14 @@ ${(() => {
   let eventsRedrawPending = false;
 
   function wireEvents() {
+    view.querySelectorAll("[data-find]").forEach((b) =>
+      b.addEventListener("click", () => {
+        const to = b.getAttribute("data-find");
+        if (to === "explore") showView("explore");
+        else openTripIdea();
+      })
+    );
+
     view.querySelectorAll("[data-ev-when]").forEach((b) =>
       b.addEventListener("click", () => {
         eventSearch.when = b.getAttribute("data-ev-when");
@@ -10217,7 +10253,7 @@ ${(() => {
     explore.error = "";
     explore.usedAi = false;
     explore.stale = false;
-    renderPicks();
+    redrawExplore();
 
     const key = loadTripSettings().geminiKey.trim();
     if (key) {
@@ -10225,7 +10261,7 @@ ${(() => {
         explore.results = await exploreWithGemini(explore.centre, explore.category, explore.radius, key);
         explore.usedAi = true;
         explore.status = "done";
-        renderPicks();
+        redrawExplore();
         return;
       } catch (e) {
         // Recorded rather than swallowed, so a quiet drop to thinner data is
@@ -10260,7 +10296,7 @@ ${(() => {
       explore.status = "error";
       explore.error = e && e.message ? e.message : String(e);
     }
-    renderPicks();
+    redrawExplore();
   }
 
   // A free-text search confined to a box around the centre. Cruder than the
@@ -10426,7 +10462,7 @@ ${(() => {
       saveTripSettings({ catPrompts: map });
       closePlaceModal();
       markExploreStale();
-      renderPicks();
+      redrawExplore();
     });
 
     document.getElementById("catPromptReset").addEventListener("click", () => {
@@ -10435,7 +10471,7 @@ ${(() => {
       saveTripSettings({ catPrompts: map });
       closePlaceModal();
       markExploreStale();
-      renderPicks();
+      redrawExplore();
     });
   }
 
@@ -10496,7 +10532,7 @@ ${(() => {
         explore.customQuery = "";
         closePlaceModal();
         markExploreStale();
-        renderPicks();
+        redrawExplore();
       });
     });
 
@@ -10510,12 +10546,51 @@ ${(() => {
         explore.customQuery = q;
         closePlaceModal();
         markExploreStale();
-        renderPicks();
+        redrawExplore();
       });
     }
   }
 
-  function renderExplore() {
+  // Explore has its own screen now, so "redraw after this changed" can no
+  // longer mean "redraw Saved". Six hard-coded renderPicks() calls became
+  // this: whichever screen is showing the explore panel is the one to
+  // repaint, and nothing happens if neither is.
+  function redrawExplore() {
+    const tab = view.dataset.activeTab;
+    if (tab === "explore") renderExploreScreen();
+    else if (tab === "picks") renderPicks();
+  }
+
+  // The screen itself. renderExplore builds the same panel it always did;
+  // this gives it a heading and keeps it open, since a screen you navigated
+  // to on purpose has no business being collapsed.
+  function renderExploreScreen() {
+    explore.open = true;
+    view.innerHTML = `
+      <div class="kids-head">
+        <h1 class="kids-title">Places nearby</h1>
+        <p class="kids-sub">Cafés, playgrounds, museums — anything around a point you choose</p>
+      </div>
+      ${renderExplore({ bare: true })}
+    `;
+    wireExplore();
+    restoreSubBack();
+  }
+
+  // showView adds the back bar after the screen renders, so any screen that
+  // repaints itself takes the way out with it. Explore repaints on every
+  // change of centre, category or radius, which is often - and a screen with
+  // no visible way back, reached from a tab that is lit but not showing, is
+  // as close to trapped as this app gets.
+  function restoreSubBack() {
+    const name = view.dataset.activeTab;
+    const own = VIEWS[name];
+    if (own && own.parent && !view.querySelector(".sub-back")) {
+      addParentBackBar(own.parent, name);
+    }
+  }
+
+  function renderExplore(opts) {
 
     const pickOptions = loadPicks()
       .filter((p) => p.lat != null)
@@ -10529,8 +10604,7 @@ ${(() => {
     // finds can become the centre here.
     let body = `
       <p class="settings-hint explore-lead">
-        Search at the top of the screen for a town or place, then use
-        <b>${icon('directions', { size: 15, cls: 'ico-inline' })} Around here</b> on the result. Or start from:
+        Pick a point to look around:
       </p>
       <div class="explore-centre-row">
         <button class="move-chip" id="exploreGpsBtn">${icon('pin', { size: 16, cls: 'ico-inline' })} Where I am</button>
@@ -10688,10 +10762,14 @@ ${(() => {
 
     return `
       <div class="card">
-        <div class="explore-head" id="exploreToggle">
+        ${
+          opts && opts.bare
+            ? ""
+            : `<div class="explore-head" id="exploreToggle">
           <b>${icon('directions', { size: 18, cls: 'ico-inline' })} Explore around a place</b>
           <span class="chevron">${explore.open ? icon("down", { size: 16 }) : icon("forward", { size: 16 })}</span>
-        </div>
+        </div>`
+        }
         ${explore.open ? body : ""}
       </div>
     `;
@@ -10702,7 +10780,7 @@ ${(() => {
     if (toggle) {
       toggle.addEventListener("click", () => {
         explore.open = !explore.open;
-        renderPicks();
+        redrawExplore();
       });
     }
     if (!explore.open) return;
@@ -10719,7 +10797,7 @@ ${(() => {
             explore.error = "";
             explore.open = true;
             markExploreStale();
-            renderPicks();
+            redrawExplore();
           },
           { title: "Search around here", centre: explore.centre }
         )
@@ -10738,7 +10816,7 @@ ${(() => {
         explore.radius = Number(radius.value);
         store(RADIUS_KEY, JSON.stringify(explore.radius));
         markExploreStale();
-        renderPicks();
+        redrawExplore();
       });
     }
     const describe = document.getElementById("exploreDescribeForm");
@@ -10750,7 +10828,7 @@ ${(() => {
         explore.category = "custom";
         explore.customQuery = q;
         markExploreStale();
-        renderPicks();
+        redrawExplore();
       });
     }
 
@@ -10767,7 +10845,7 @@ ${(() => {
     if (promptToggle) {
       promptToggle.addEventListener("click", () => {
         explore.showPrompt = !explore.showPrompt;
-        renderPicks();
+        redrawExplore();
       });
     }
 
@@ -11356,6 +11434,7 @@ ${(() => {
         const id = btn.getAttribute("data-explore-from");
         closePlaceModal();
         explore.open = true;
+        showView("explore");
         setExploreCentreFromPick(id);
       });
     });
@@ -14028,7 +14107,7 @@ ${(() => {
             explore.open = true;
             explore.centre = { name: spot.name, lat: spot.lat, lon: spot.lon };
             explore.error = "";
-            showView("picks");
+            showView("explore");
             // Straight into the category picker: having pointed at a place,
             // the only question left is what you're after there.
             openCategoryPicker();
@@ -14096,9 +14175,7 @@ ${(() => {
         explore.open = true;
         markExploreStale();
         dismissSearchOverlay();
-        showView("picks");
-        const panel = document.getElementById("exploreToggle");
-        if (panel) panel.scrollIntoView({ block: "start" });
+        showView("explore");
         toast(`Looking around ${c.name} — choose what you want and press Search`);
       });
     });
@@ -16015,7 +16092,6 @@ ${(() => {
                placeholder="Search for a place, town or area…" readonly
                aria-label="Search for a place to add" />
       </div>
-      ${renderExplore()}
       ${renderFindBar(all.length)}
     `;
 
@@ -16127,7 +16203,7 @@ ${(() => {
 
     destroyMiniMaps();
     view.innerHTML = html;
-    wireExplore();
+    // Explore lives on its own screen under Find; nothing to wire here now.
 
     const findInput = document.getElementById("pickFind");
     if (findInput) {
@@ -16196,9 +16272,8 @@ ${(() => {
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
         explore.open = true;
+        showView("explore");
         setExploreCentreFromPick(btn.getAttribute("data-explore-from"));
-        const panel = document.getElementById("exploreToggle");
-        if (panel) panel.scrollIntoView({ block: "start" });
       });
     });
 
@@ -17187,7 +17262,7 @@ ${(() => {
         // other route into Explore - a tap on a weather card is a reason to
         // look, not confirmation that you want to look right now.
         markExploreStale();
-        showView("picks");
+        showView("explore");
       });
     });
   }
@@ -17237,6 +17312,16 @@ ${(() => {
     eats: { render: () => renderPicksFiltered("eat"), sub: () => `${picksOfKind("eat").length} places to eat` },
     picks: { render: renderPicks, sub: () => "Everything you've saved" },
     events: { render: renderEvents, sub: () => "Things with a date on them" },
+    // Explore was a fold inside Saved, which meant "find me a cafe near here"
+    // lived under "things I have already saved" - two different questions on
+    // one screen. It is its own screen under Find now, with Find lit while
+    // you are on it, the same way Kids and Budget sit under More.
+    explore: {
+      render: renderExploreScreen,
+      sub: () => "Around a place you choose",
+      parent: "events",
+      label: "Places nearby",
+    },
     budget: { render: renderBudget, sub: () => "What this is costing", parent: "more", label: "Budget" },
     tips: { render: renderTips, sub: () => "Notes & packing", parent: "more", label: "Notes & packing" },
     usage: { render: renderUsage, sub: () => "What the AI is costing", parent: "more", label: "AI usage" },
@@ -17258,6 +17343,7 @@ ${(() => {
       // are now. Listed here so showView does not bounce them to a tab.
       kids: true,
       usage: true,
+      explore: true,
       // Reachable as views, but no longer tabs - there are no buttons for
       // these to hide or show.
       places: true,
@@ -17335,9 +17421,13 @@ ${(() => {
     const bar = document.createElement("button");
     bar.className = "sub-back";
     bar.type = "button";
-    bar.innerHTML = `${icon("back", { size: 16, cls: "ico-inline" })}<span>${esc(
-      parentName === "more" ? "More" : parentName
-    )}</span>`;
+    // The label comes off the tab itself rather than being spelled here, so
+    // it can never disagree with what the bar says. Hardcoding "More" was
+    // fine while More was the only parent; the moment Find became one too,
+    // the back link read "events" - a raw view key, on screen, to a user.
+    const tabLabel = document.querySelector(`[data-view="${parentName}"] .tab-label`);
+    const parentLabel = tabLabel ? tabLabel.textContent.trim() : parentName;
+    bar.innerHTML = `${icon("back", { size: 16, cls: "ico-inline" })}<span>${esc(parentLabel)}</span>`;
     bar.addEventListener("click", () => showView(parentName));
     view.insertBefore(bar, view.firstChild);
     // Re-titled so the topbar says which screen this is, not just what More
@@ -18112,6 +18202,15 @@ ${(() => {
   // anything.
   window.__tripTest = {
     ASSISTANTS,
+    // Setting an explore centre normally needs GPS, a map tap or a saved
+    // place. A suite needs to prove the redraw lands on the screen Explore
+    // is actually on, which is the thing six hard-coded renderPicks() calls
+    // used to get wrong.
+    setExploreCentre: (c) => {
+      explore.centre = c;
+      explore.error = "";
+      redrawExplore();
+    },
     extractJson,
     eventsBusy,
     renderEvents,

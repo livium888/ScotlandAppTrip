@@ -4,6 +4,7 @@
 // the JSON scaffolding must stay out of your hands so an edit can change the
 // answer without breaking the search.
 import { chromium } from 'playwright';
+import { openExplore } from './lib/screens.mjs';
 import fs from 'node:fs';
 const SANDBOX_CHROMIUM = '/opt/pw-browsers/chromium';
 const LAUNCH_OPTS = fs.existsSync(SANDBOX_CHROMIUM) ? { executablePath: SANDBOX_CHROMIUM } : {};
@@ -117,7 +118,7 @@ prompts = [];
 // Back out of the search screen before using Explore behind it.
 await page.evaluate(() => document.querySelector('[data-search-close]').click());
 await page.waitForTimeout(300);
-await page.click('#exploreToggle');
+await openExplore(page);
 await centreOn('Edinburgh Castle');
 await page.waitForTimeout(700);
 await page.click('#exploreCatBtn');

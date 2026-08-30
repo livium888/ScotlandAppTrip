@@ -2,6 +2,7 @@ import { chromium } from 'playwright';
 
 // Use the sandbox's prebuilt browser when present, otherwise let Playwright
 // resolve its own download (which is what CI has).
+import {openExplore, openPickSearch } from './lib/screens.mjs';
 import fs from 'node:fs';
 const SANDBOX_CHROMIUM = '/opt/pw-browsers/chromium';
 const LAUNCH_OPTS = fs.existsSync(SANDBOX_CHROMIUM) ? { executablePath: SANDBOX_CHROMIUM } : {};
@@ -135,14 +136,14 @@ const browser = await chromium.launch(LAUNCH_OPTS);
 
   await page.goto(BASE, { waitUntil: 'load' });
   await page.evaluate(() => document.querySelector('[data-view="picks"]').click());
-  await page.waitForSelector('#exploreToggle');
-  check('Explore section present in Picks', await page.evaluate(() =>
-    !!document.getElementById('exploreToggle')));
-
-  await page.click('#exploreToggle');
+  await openExplore(page);
+  // Explore is its own screen under Find now rather than a fold inside
+  // Saved, so what matters is that it is reachable and has its controls.
+  check('Explore is reachable and set up', await page.evaluate(() =>
+    !!document.getElementById('exploreGpsBtn')));
   // The panel's own search field is gone - one search, at the top, whose
   // results carry "around here".
-  await page.evaluate(() => document.getElementById('pickSearchTrigger').click());
+  await openPickSearch(page);
   await page.waitForSelector('#pickSearchInput');
   await page.fill('#pickSearchInput', 'Edinburgh Castle');
   await page.evaluate(() => document.getElementById('pickSearchForm').requestSubmit());

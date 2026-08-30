@@ -16,6 +16,7 @@
 // pressing the locate button on that map, so the position you had just
 // established elsewhere was the one thing missing from the map of everywhere.
 import { chromium } from 'playwright';
+import { openExplore } from './lib/screens.mjs';
 import fs from 'node:fs';
 const SANDBOX_CHROMIUM = '/opt/pw-browsers/chromium';
 const LAUNCH_OPTS = fs.existsSync(SANDBOX_CHROMIUM) ? { executablePath: SANDBOX_CHROMIUM } : {};
@@ -71,7 +72,7 @@ await page.waitForTimeout(400);
 
 // ---------- The fix it asks for ----------
 
-await page.evaluate(() => document.getElementById('exploreToggle').click());
+await openExplore(page);
 await page.waitForTimeout(300);
 await page.evaluate(() => document.getElementById('exploreGpsBtn').click());
 await page.waitForTimeout(2500);

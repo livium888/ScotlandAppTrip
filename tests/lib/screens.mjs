@@ -64,3 +64,37 @@ export const openSortRow = async (page, settle = 250) => {
   });
   await page.waitForTimeout(settle);
 };
+
+// Explore stopped being a fold inside Saved and became its own screen under
+// Find. Ten suites each opened it by clicking the fold's header, so all ten
+// broke together - the third time one fact in many copies has done that
+// here. This is the one way in: it navigates if it has to, and does nothing
+// if the screen is already up.
+export const openExplore = async (page, settle = 300) => {
+  await page.evaluate(() => {
+    if (document.getElementById('exploreGpsBtn')) return;
+    if (window.__tripTest && window.__tripTest.showView) return window.__tripTest.showView('explore');
+    const t = document.querySelector('[data-find="explore"]');
+    if (t) t.click();
+  });
+  await page.waitForTimeout(settle);
+};
+
+// The one search field lives on Saved. Suites reach it after an "around
+// here" flow, which now ends on the Explore screen rather than on Saved, so
+// getting to it means going back first. Doing that here keeps every suite
+// from having to know where the flow left them.
+export const openPickSearch = async (page, settle = 300) => {
+  await page.evaluate(() => {
+    if (!document.getElementById('pickSearchTrigger')) {
+      const t = document.querySelector('[data-view="picks"]');
+      if (t) t.click();
+    }
+  });
+  await page.waitForTimeout(settle);
+  await page.evaluate(() => {
+    const t = document.getElementById('pickSearchTrigger');
+    if (t) t.click();
+  });
+  await page.waitForTimeout(settle);
+};
