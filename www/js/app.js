@@ -4699,12 +4699,7 @@ ${(() => {
     );
     // The same control as Picks, and the same saved choice - so the two
     // screens agree about what order this list is in.
-    view.querySelectorAll("[data-sort]").forEach((btn) =>
-      btn.addEventListener("click", () => {
-        saveSort(btn.getAttribute("data-sort"));
-        renderKids();
-      })
-    );
+    wireSortRow(renderKids);
     view.querySelectorAll("[data-open-pick]").forEach((btn) =>
       btn.addEventListener("click", () => openPickDetail(btn.getAttribute("data-open-pick")))
     );
@@ -6128,7 +6123,12 @@ ${(() => {
       html += `<button class="hero-share" id="shareTrip" style="color:var(--navy);border-color:var(--line);background:var(--card);margin-bottom:14px;">${icon('share', { size: 17, cls: 'ico-inline' })} Share this plan</button>`;
     }
 
-    html += `
+    // Where the two builders go depends on whether there is anything to look
+    // at. With days on the board they are a tool you reach for occasionally,
+    // and putting them first pushed the plan itself - the entire subject of
+    // the screen - below the fold. With no days they are the only thing worth
+    // showing, so they lead. Same card either way; only its position moves.
+    const planBuilders = `
       <div class="card plan-ai-card">
         ${
           picks.length
@@ -6141,6 +6141,7 @@ ${(() => {
         <p class="settings-hint" style="text-align:center;">Say where you are and how far you'll go — you get whole routes back, with the stops already in order.</p>
       </div>
     `;
+    if (!plan.days.length) html += planBuilders;
 
     plan.days.forEach((day) => {
       const items = itemsInDayOrder(planItems(plan, day.id));
@@ -6263,6 +6264,12 @@ ${(() => {
         <button type="submit" aria-label="Add day">+</button>
       </form>
     `;
+
+    // Below the plan, under a heading that says what they are for. Above it
+    // they read as the first step even when the plan is finished.
+    if (plan.days.length) {
+      html += `<div class="section-label">Build it for me</div>` + planBuilders;
+    }
     return html;
   }
 
@@ -6378,6 +6385,8 @@ ${(() => {
     { key: "near", label: "Nearest", note: "One list, closest first" },
     { key: "recent", label: "Just added", note: "One list, newest first" },
   ];
+
+  let sortOpen = false;
 
   function loadSort() {
     const v = readJson(SORT_KEY, "area");
@@ -6592,8 +6601,42 @@ ${(() => {
   // The control that chooses it. One row, always visible, always saying which
   // one is on - it was a saved preference with no label, so the list order
   // changed between visits with nothing on screen to explain why.
+  // Folded to a single button that names the order it is in. The visibility
+  // that rule was written for is kept - you can still read the current order
+  // without tapping anything - it just no longer costs four chips and a
+  // caption on a screen that already carries a search field, an explore row
+  // and the kind filter above it.
+  // Both Picks and Kids carry this control and share the saved choice, so
+  // they share the wiring too. Picking an order folds the picker again: the
+  // button then names what you just chose, which is the whole point of it.
+  function wireSortRow(redraw) {
+    const toggle = document.getElementById("sortToggle");
+    if (toggle) {
+      toggle.addEventListener("click", () => {
+        sortOpen = true;
+        redraw();
+      });
+    }
+    view.querySelectorAll("[data-sort]").forEach((btn) =>
+      btn.addEventListener("click", () => {
+        saveSort(btn.getAttribute("data-sort"));
+        sortOpen = false;
+        redraw();
+      })
+    );
+  }
+
   function renderSortRow(mode) {
     const current = SORTS.find((s) => s.key === mode) || SORTS[0];
+    if (!sortOpen) {
+      return `
+        <div class="order-bar folded">
+          <button class="order-toggle" id="sortToggle">
+            ${icon("list", { size: 15, cls: "ico-inline" })} ${esc(current.label)}
+          </button>
+        </div>
+      `;
+    }
     return `
       <div class="order-bar">
         <div class="order-chips">
@@ -16091,12 +16134,7 @@ ${(() => {
       });
     });
 
-    view.querySelectorAll("[data-sort]").forEach((btn) =>
-      btn.addEventListener("click", () => {
-        saveSort(btn.getAttribute("data-sort"));
-        renderPicks();
-      })
-    );
+    wireSortRow(renderPicks);
 
     // Search has its own screen now - these are just the ways in.
     const searchTrigger = document.getElementById("pickSearchTrigger");

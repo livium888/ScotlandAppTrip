@@ -13,7 +13,7 @@
 // One control now, and the order chosen decides the sections as well as the
 // rows.
 import { chromium } from 'playwright';
-import { goTo } from './lib/screens.mjs';
+import { goTo, openSortRow } from './lib/screens.mjs';
 import fs from 'node:fs';
 const SANDBOX_CHROMIUM = '/opt/pw-browsers/chromium';
 const LAUNCH_OPTS = fs.existsSync(SANDBOX_CHROMIUM) ? { executablePath: SANDBOX_CHROMIUM } : {};
@@ -33,6 +33,7 @@ const tab = async (n) => {
   await page.waitForTimeout(350);
 };
 const order = async (key) => {
+  await openSortRow(page);
   await page.evaluate((k) => document.querySelector(`[data-sort="${k}"]`).click(), key);
   await page.waitForTimeout(350);
 };
@@ -88,7 +89,12 @@ await tab('picks');
 
 // ---------- The control says what it does ----------
 
-check('the order is a labelled control, not four bare chips', await page.evaluate(() =>
+check('the order is named on arrival, without four bare chips', await page.evaluate(() => {
+  const t = document.getElementById('sortToggle');
+  return !!t && /by area|by day|nearest|just added/i.test(t.textContent);
+}), await page.evaluate(() => (document.getElementById('sortToggle') || {}).textContent));
+await openSortRow(page);
+check('and opening it offers all four, explained', await page.evaluate(() =>
   !!document.querySelector('.order-note') && document.querySelectorAll('[data-sort]').length === 4));
 check('and it says which one is on', await page.evaluate(() =>
   document.querySelectorAll('.order-chip.on').length === 1));
@@ -151,6 +157,7 @@ await page.evaluate(() => {
 await tab('kids');
 await order('day');
 const kidsByDay = await layout();
+await openSortRow(page);
 check('Kids is ordered by the same control', await page.evaluate(() =>
   document.querySelectorAll('[data-sort]').length === 4));
 check('and obeys it, rather than always sorting by distance',
@@ -158,6 +165,7 @@ check('and obeys it, rather than always sorting by distance',
   JSON.stringify(kidsByDay.map((s) => s.head)));
 
 await tab('picks');
+await openSortRow(page);
 check('the two screens agree on the order without being told twice',
   await page.evaluate(() => !!document.querySelector('[data-sort="day"].on')));
 
@@ -165,6 +173,7 @@ check('the two screens agree on the order without being told twice',
 // it is - which is what made it confusing rather than merely sticky.
 await page.reload({ waitUntil: 'load' });
 await tab('picks');
+await openSortRow(page);
 check('it is still in that order when you come back', await page.evaluate(() =>
   !!document.querySelector('[data-sort="day"].on')));
 check('and the screen says so', /order you/.test(await page.evaluate(() =>

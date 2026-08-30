@@ -13,6 +13,7 @@
 // "the handler is attached" and "tapping it does something" turned out to be
 // different questions.
 import { chromium } from 'playwright';
+import { openSortRow } from './lib/screens.mjs';
 import fs from 'node:fs';
 const SANDBOX_CHROMIUM = '/opt/pw-browsers/chromium';
 const LAUNCH_OPTS = fs.existsSync(SANDBOX_CHROMIUM) ? { executablePath: SANDBOX_CHROMIUM } : {};
@@ -86,12 +87,14 @@ await page.evaluate(() => document.querySelector('#placeModal .modal-close').cli
 await page.waitForTimeout(300);
 
 // --- Sorting ---
+await openSortRow(page);
 const sorts = await page.evaluate(() => Array.from(document.querySelectorAll('[data-sort]')).map((b) => b.textContent.trim()));
 check('the list can be ordered', sorts.length >= 3, JSON.stringify(sorts));
 
 // A–Z stopped being a mode of its own when ordering and grouping became one
 // decision: it is how every grouped list is sorted inside its section, so the
 // question is now whether "By area" is alphabetical within a town.
+await openSortRow(page);
 await page.evaluate(() => document.querySelector('[data-sort="area"]').click());
 await page.waitForTimeout(300);
 const perSection = await page.evaluate(() => {
@@ -112,6 +115,7 @@ check('by area sorts alphabetically inside each area',
   perSection.every((s) => JSON.stringify(s) === JSON.stringify([...s].sort((a, b) => a.localeCompare(b, 'en-GB')))),
   JSON.stringify(perSection));
 
+await openSortRow(page);
 await page.evaluate(() => document.querySelector('[data-sort="near"]').click());
 await page.waitForTimeout(400);
 const near = await names();
@@ -120,6 +124,7 @@ check('and Stirling last', near[near.length - 1] === 'Wallace Monument', JSON.st
 check('distances are shown when sorting by them, in miles', /\d+(\.\d+)?\s*(mi|yd)/.test(
   await page.evaluate(() => document.getElementById('view').textContent)));
 
+await openSortRow(page);
 await page.evaluate(() => document.querySelector('[data-sort="day"]').click());
 await page.waitForTimeout(300);
 check('By day puts the scheduled place first', (await names())[0] === 'Edinburgh Castle', JSON.stringify(await names()));
@@ -127,6 +132,7 @@ check('By day puts the scheduled place first', (await names())[0] === 'Edinburgh
 // The choice sticks, rather than resetting every time you come back.
 await page.reload({ waitUntil: 'load' });
 await openPicks();
+await openSortRow(page);
 check('the chosen order is remembered', await page.evaluate(() =>
   !!document.querySelector('[data-sort="day"].on')));
 
@@ -138,6 +144,7 @@ check('the chosen order is remembered', await page.evaluate(() =>
 // Under "by day" the headings are days, because the order chosen decides the
 // sections as well as the rows - that is the point of the control. So this
 // asks the question in the order the question belongs to.
+await openSortRow(page);
 await page.evaluate(() => document.querySelector('[data-sort="area"]').click());
 await page.waitForTimeout(300);
 const sections = await page.evaluate(() =>

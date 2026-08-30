@@ -51,3 +51,16 @@ export const openAnglePencils = async (page, settle = 250) => {
   });
   await page.waitForTimeout(settle);
 };
+
+// The order control folds to a single button naming the current order, so a
+// suite that wants the four options has to open it. Idempotent, and it also
+// re-opens after a choice - picking one folds it again on purpose, since the
+// button then names what you just chose.
+export const openSortRow = async (page, settle = 250) => {
+  await page.evaluate(() => {
+    if (document.querySelector('[data-sort]')) return;
+    const t = document.getElementById('sortToggle');
+    if (t) t.click();
+  });
+  await page.waitForTimeout(settle);
+};

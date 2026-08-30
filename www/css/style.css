@@ -3844,3 +3844,25 @@ html, body {
   display: block;
   margin-top: var(--space-2);
 }
+
+
+/* The order control, folded. A button that names the order the list is in,
+   rather than four chips and a caption saying the same thing. */
+.order-bar.folded {
+  display: flex;
+  justify-content: flex-end;
+  margin: calc(var(--space-1) * -1) 0 var(--space-2);
+}
+.order-toggle {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: var(--type-sm);
+  font-weight: 600;
+  padding: var(--space-1) var(--space-2);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  cursor: pointer;
+}
+.order-toggle:active { opacity: 0.6; }
