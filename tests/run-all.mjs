@@ -78,6 +78,7 @@ const SUITES = [
   "test_usage.mjs",
   "test_cache.mjs",
   "test_eventmaps.mjs",
+  "test_handoff.mjs",
 ];
 
 const MIME = {

@@ -7654,6 +7654,9 @@ ${(() => {
     // the exact link would be dropped by the same list that already lost
     // endsAt and approximate once.
     "googleUrl", "venueChecked",
+    // Kept on the saved copy too: an event that arrived by hand should still
+    // say so once it is in your list, not only while it is a search result.
+    "pastedIn",
   ];
 
   function copyEventFields(from, to) {
@@ -7833,6 +7836,84 @@ ${(() => {
     `the people who live there, and that is the good stuff. Thirty real listings is a better ` +
     `answer than five.`;
 
+  // The shape of an answer, in one place. The search asks for it nine times
+  // and the hand-off asks for it once; two copies would drift, and a drifted
+  // contract means a pasted answer that normaliseEvent refuses field by field
+  // for reasons nobody can see. Deliberately only the EVENT contract - the
+  // place search has its own, with different fields, and merging them would
+  // break both.
+  // ---------- Asking somewhere else, and pasting the answer back ----------
+  // The app's own search needs a Gemini key and spends nine grounded requests.
+  // Not everybody has a key, some people have a subscription to an assistant
+  // that is better than the free tier, and a key that has run out of quota
+  // makes the whole screen useless.
+  //
+  // So: one prompt, covering all nine kinds at once rather than nine separate
+  // questions - because the point of doing it by hand is not doing it nine
+  // times - copied to the clipboard, and a box to paste the answer into. What
+  // comes back goes through exactly the same machinery as a searched result:
+  // extractJson repairs it, normaliseEvent refuses anything malformed, and it
+  // is placed, deduped and dated the same way. Nothing is trusted more for
+  // having been pasted.
+  function handoffPrompt(centre, windowKey, radiusMetres, towns) {
+    const miles = Math.max(1, Math.round(toMiles(radiusMetres / 1000)));
+    const w = eventWindow(windowKey);
+    const sameDay = isoDate(w.from) === isoDate(w.to);
+    const when = sameDay
+      ? `on ${humanDate(w.from)} ${w.from.getFullYear()}`
+      : `between ${humanDate(w.from)} and ${humanDate(w.to)} ${w.from.getFullYear()}`;
+    const where = towns && towns.length
+      ? `within about ${miles} miles of ${centre.name}. That area covers ${towns.join(", ")} - ` +
+        `go through them, not just the biggest one`
+      : `within about ${miles} miles of ${centre.name}`;
+
+    return (
+      `List events happening ${when}, ${where}.` +
+      (w.fromTime
+        ? ` On ${humanDate(w.from)} only things still going at ${w.fromTime} or later.`
+        : "") +
+      `\n\n` +
+      // All nine at once. The app asks these separately because it can afford
+      // to; by hand, one question that names every kind is the whole point.
+      `Cover all of these:\n` +
+      EVENT_ANGLES.map((a) => `- ${a.label}: ${anglePrompt(a.key)}`).join("\n") +
+      `${aiContextBlock()}\n\n` +
+      `${SMALL_EVENT_APPETITE}\n\n` +
+      `${SMALL_EVENT_SOURCES}\n\n` +
+      `Include something only if you have seen it listed with a date. Do not invent ` +
+      `plausible-sounding events, and do not pad the list with permanent attractions - ` +
+      `a castle that opens every day is not an event.\n\n` +
+      `For each one, say what the listing actually states, and leave the field empty ` +
+      `rather than guessing: whether it is indoors or outdoors, what ages it is for, ` +
+      `whether it is aimed at children, merely allows them or is adults-only, and whether ` +
+      `it has to be booked in advance.\n\n` +
+      EVENT_JSON_CONTRACT
+    );
+  }
+
+  const EVENT_JSON_CONTRACT =
+    `Reply with ONLY a JSON array, each item ` +
+    `{"name": what it is called, ` +
+    `"date": "YYYY-MM-DD" the day it is on, ` +
+    `"endDate": "YYYY-MM-DD" if it runs over several days, otherwise "", ` +
+    `"time": "HH:MM" 24-hour start time, or "" if there isn't one, ` +
+    `"endTime": "HH:MM" when it finishes, or "" if it isn't listed - ` +
+    `an all-day market that runs 09:00 to 16:00 should say so, ` +
+    `"venue": the building or place it is at, ` +
+    `"area": the town or village, ` +
+    `"what": one short sentence on what it actually is, ` +
+    `"price": "free", "£", "££" or "£££", ` +
+    `"tickets": the booking or information URL, or "", ` +
+    `"recurring": true if this happens every week rather than being a one-off, ` +
+    `"setting": "indoor", "outdoor", "both" if there is a sheltered part, or "" if the listing doesn't say, ` +
+    `"minAge": the youngest age it is meant for as a number, or null, ` +
+    `"maxAge": the oldest age it is meant for as a number, or null, ` +
+    `"childFocus": "aimed" if it is put on for children, "allowed" if children may come ` +
+    `but it is not aimed at them, "adults" if it is adults-only, or "" if the listing doesn't say, ` +
+    `"booking": "required" if you must book ahead, "advised" if it sells out, ` +
+    `"none" if you can turn up, or "" if the listing doesn't say}. ` +
+    `No other text.`;
+
   function eventPrompt(centre, window, radiusMetres, angle, towns) {
     const miles = Math.max(1, Math.round(toMiles(radiusMetres / 1000)));
     const who = aiContextBlock();
@@ -7880,27 +7961,7 @@ ${(() => {
       `rather than guessing: whether it is indoors or outdoors, what ages it is for, ` +
       `whether it is aimed at children, merely allows them or is adults-only, and whether it has to be ` +
       `booked in advance.\n\n` +
-      `Reply with ONLY a JSON array, each item ` +
-      `{"name": what it is called, ` +
-      `"date": "YYYY-MM-DD" the day it is on, ` +
-      `"endDate": "YYYY-MM-DD" if it runs over several days, otherwise "", ` +
-      `"time": "HH:MM" 24-hour start time, or "" if there isn't one, ` +
-      `"endTime": "HH:MM" when it finishes, or "" if it isn't listed - ` +
-      `an all-day market that runs 09:00 to 16:00 should say so, ` +
-      `"venue": the building or place it is at, ` +
-      `"area": the town or village, ` +
-      `"what": one short sentence on what it actually is, ` +
-      `"price": "free", "£", "££" or "£££", ` +
-      `"tickets": the booking or information URL, or "", ` +
-      `"recurring": true if this happens every week rather than being a one-off, ` +
-      `"setting": "indoor", "outdoor", "both" if there is a sheltered part, or "" if the listing doesn't say, ` +
-      `"minAge": the youngest age it is meant for as a number, or null, ` +
-      `"maxAge": the oldest age it is meant for as a number, or null, ` +
-      `"childFocus": "aimed" if it is put on for children, "allowed" if children may come ` +
-      `but it is not aimed at them, "adults" if it is adults-only, or "" if the listing doesn't say, ` +
-      `"booking": "required" if you must book ahead, "advised" if it sells out, ` +
-      `"none" if you can turn up, or "" if the listing doesn't say}. ` +
-      `No other text.`
+      EVENT_JSON_CONTRACT
     );
   }
 
@@ -8653,6 +8714,12 @@ ${(() => {
                 ? `<button class="ev-btn" data-open-maps="${esc(e.sources[0].uri)}">Where this came from</button>`
                 : ""
             }
+            ${
+              // Not a button, because there is nowhere to go. An answer you
+              // cannot click through to check should say so, which is the
+              // same standard the "check it's on" badge already sets.
+              e.pastedIn ? `<span class="ev-tag soft">pasted in</span>` : ""
+            }
           </div>
         </div>
       </div>
@@ -8707,6 +8774,115 @@ ${(() => {
     return html;
   }
 
+  async function openHandoffSheet() {
+    const centre = eventSearch.centre || loadAnchor() || derivedAnchor();
+    if (!centre || centre.lat == null) {
+      toast("Say where to look first");
+      return;
+    }
+    const radius = (centre.miles || DEFAULT_ANCHOR_MILES) * 1609;
+    let towns = [];
+    try {
+      towns = await townsAround(centre, radius);
+    } catch (e) {
+      // The prompt is still worth having without the village names.
+    }
+    const prompt = handoffPrompt(centre, eventSearch.when, radius, towns);
+
+    placeModal.innerHTML = `
+      <div class="modal-backdrop" data-close="1">
+        <div class="modal-sheet" role="dialog" aria-label="Ask somewhere else">
+          <div class="modal-handle"></div>
+          <button class="modal-close" data-close="1" aria-label="Close">${icon("close", { size: 17, cls: "ico-inline" })}</button>
+          <div class="modal-body">
+            <h2 class="modal-title">Ask somewhere else</h2>
+            <div class="modal-subtitle">One question covering all ${EVENT_ANGLES.length} kinds, for ${esc(
+              centre.name
+            )}</div>
+
+            <p class="settings-hint">
+              Copy this, paste it into whichever assistant you use, then bring the answer back
+              below. It uses no key and no requests of your own — and if you're paying for a
+              better model than the free tier, this is how to point it at your trip.
+            </p>
+            <textarea class="settings-input notes-box" id="handoffPrompt" rows="6" readonly>${esc(prompt)}</textarea>
+            <div class="settings-btn-row" style="margin-top:10px;">
+              <button class="modal-btn modal-btn-primary" id="handoffCopy">Copy the question</button>
+              <button class="modal-btn" id="handoffOpen">Open Gemini</button>
+            </div>
+
+            <label class="settings-label" style="margin-top:18px;">Paste the answer here</label>
+            <textarea class="settings-input notes-box" id="handoffAnswer" rows="5"
+              placeholder="Paste the whole reply — it will find the list inside it."></textarea>
+            <button class="modal-btn modal-btn-primary" id="handoffAdd" style="width:100%;margin-top:10px;">Add these events</button>
+            <pre class="settings-result" id="handoffResult" hidden></pre>
+            <p class="settings-hint">
+              Anything pasted is checked exactly as a searched result is — the dates, the area,
+              the duplicates. It just arrives with no page to click through to, so it says
+              “pasted in” rather than offering you a source.
+            </p>
+          </div>
+        </div>
+      </div>
+    `;
+    placeModal.classList.add("open");
+    makeSheetDraggable(placeModal, closePlaceModal);
+
+    placeModal.querySelectorAll("[data-close]").forEach((el) => {
+      el.addEventListener("click", (e) => {
+        if (e.target === el) closePlaceModal();
+      });
+    });
+
+    document.getElementById("handoffCopy").addEventListener("click", async () => {
+      const box = document.getElementById("handoffPrompt");
+      let copied = false;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        try {
+          await navigator.clipboard.writeText(prompt);
+          copied = true;
+        } catch (e) {
+          // Falls through to selecting it, which a long-press can copy.
+        }
+      }
+      if (copied) {
+        toast("Copied — paste it into the assistant");
+      } else {
+        box.focus();
+        box.select();
+        toast("Selected — long-press to copy");
+      }
+    });
+
+    document.getElementById("handoffOpen").addEventListener("click", () => {
+      // Deliberately not a deep link with the prompt in the URL. Those are
+      // undocumented, change without notice, and silently truncate a prompt
+      // this long - which would look like the app sending a worse question.
+      // The clipboard is the reliable route, and works for any assistant.
+      openExternal("https://gemini.google.com/app");
+    });
+
+    document.getElementById("handoffAdd").addEventListener("click", async () => {
+      const out = document.getElementById("handoffResult");
+      const text = document.getElementById("handoffAnswer").value;
+      out.hidden = false;
+      out.className = "settings-result";
+      out.textContent = "Reading it…";
+      const res = await absorbPastedEvents(text);
+      out.className = "settings-result " + (res.ok ? "ok" : "bad");
+      out.textContent = res.message;
+      if (res.ok) document.getElementById("handoffAnswer").value = "";
+    });
+  }
+
+  // Offered in both states of the search bar. It lived only inside the open
+  // form, so the moment a search returned anything the form folded and took
+  // the way to it with it - which is precisely when somebody who has run out
+  // of quota needs it.
+  function handoffLink() {
+    return `<button class="link-btn ev-handoff-link" id="evHandoff">Ask somewhere else and paste the answer</button>`;
+  }
+
   function renderEventsSearchBar() {
     const w = eventWindow(eventSearch.when);
     const centre = eventSearch.centre || loadAnchor() || derivedAnchor();
@@ -8727,6 +8903,7 @@ ${(() => {
           </span>
           <span class="ev-asked-change">${eventSearch.status === "loading" ? "Looking…" : "Change"}</span>
         </button>
+        ${eventSearch.status === "loading" ? "" : handoffLink()}
       `;
     }
 
@@ -8808,6 +8985,7 @@ ${(() => {
         <button class="modal-btn modal-btn-primary" id="evSearch" style="width:100%;margin-top:10px;">
           ${eventSearch.status === "loading" ? "Looking…" : `${icon("search", { size: 17, cls: "ico-inline" })} See what's on`}
         </button>
+        ${handoffLink()}
       </div>
     `;
   }
@@ -9186,6 +9364,9 @@ ${(() => {
     const byHand = document.getElementById("evAddByHand");
     if (byHand) byHand.addEventListener("click", () => openSearchOverlay(""));
 
+    const handoff = document.getElementById("evHandoff");
+    if (handoff) handoff.addEventListener("click", () => openHandoffSheet());
+
     const stopBtn = document.getElementById("evStop");
     if (stopBtn) stopBtn.addEventListener("click", () => stopEventSearch());
 
@@ -9465,6 +9646,78 @@ ${(() => {
       });
     });
     await eventQueue.whenIdle();
+  }
+
+  // Everything a pasted answer has to survive before it counts as an event:
+  // the same whitelist, the same window, the same placement, the same dedupe.
+  // Pasting is a different way in, not a lower standard.
+  async function absorbPastedEvents(text) {
+    const centre = eventSearch.centre || loadAnchor() || derivedAnchor();
+    if (!centre || centre.lat == null) return { ok: false, message: "Say where to look first." };
+    const list = extractJson(text);
+    if (!Array.isArray(list) || !list.length) {
+      return {
+        ok: false,
+        message:
+          "That didn't contain a list this could read. Paste the whole reply — " +
+          "including the square brackets — and it will find the JSON inside it.",
+      };
+    }
+
+    const radius = (centre.miles || DEFAULT_ANCHOR_MILES) * 1609;
+    const window = eventWindow(eventSearch.when);
+    let cutoff = null;
+    if (window.fromTime) {
+      const mins = timeToMinutes(window.fromTime);
+      if (mins != null) {
+        cutoff = new Date(window.from);
+        cutoff.setHours(0, mins, 0, 0);
+      }
+    }
+    const ctx = {
+      centre,
+      window,
+      cutoff,
+      // Anything already on screen counts, so pasting a second answer merges
+      // with the first rather than duplicating half of it.
+      seen: eventSearch.ctx && eventSearch.ctx.seen ? eventSearch.ctx.seen : new Map(),
+      anchor: { name: centre.name, lat: centre.lat, lon: centre.lon, miles: toMiles(radius / 1000) },
+    };
+    eventSearch.ctx = ctx;
+
+    const before = eventSearch.results.length;
+    eventsDropped = Object.assign({}, NO_DROPS);
+    const fresh = absorbAngle({ list, sources: [], angle: "pasted" }, ctx);
+
+    // Placed one at a time through the same polite queue the search uses.
+    const queue = makePlaceQueue(scheduleEventsRedraw);
+    fresh.forEach((entry) => {
+      queue.push(async () => {
+        const placed = await placeOne(entry, ctx);
+        if (!placed) return;
+        // Said on the row. A pasted event has no grounding chunks behind it,
+        // so there is no page to click through to - and the app's standard
+        // everywhere else is that an answer you cannot check says so.
+        placed.pastedIn = true;
+        placed.sources = [];
+        eventSearch.results.push(placed);
+        sortEventsByWhen(eventSearch.results);
+      });
+    });
+    await queue.whenIdle();
+
+    const added = eventSearch.results.length - before;
+    eventSearch.status = eventSearch.results.length ? "done" : "idle";
+    eventSearch.fromCache = 0;
+    renderEvents();
+    return {
+      ok: true,
+      message: added
+        ? `Added ${added} event${added === 1 ? "" : "s"}${
+            list.length - added > 0 ? `. ${list.length - added} didn't survive — ${describeEventDrops() || "already on the list"}.` : "."
+          }`
+        : `Nothing new — ${describeEventDrops() || "they were all already on the list"}.`,
+    };
   }
 
   async function runEventSearch(opts) {

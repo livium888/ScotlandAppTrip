@@ -3748,3 +3748,7 @@ html, body {
 }
 .ev-field-label .link-btn { font-size: 12px; text-transform: none; letter-spacing: 0; }
 .ev-field-note { font-size: 12px; font-weight: 400; text-transform: none; letter-spacing: 0; }
+
+/* Offered whether the search form is open or folded away - it is most wanted
+   exactly when there are already results and the form has collapsed. */
+.ev-handoff-link { display: block; margin: 10px auto 0; }
