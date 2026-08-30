@@ -22,6 +22,7 @@
 // groups and Instagram are not indexed by anything, and no prompt reaches them.
 import { chromium } from 'playwright';
 import { ANGLE_MARKERS, ANGLE_KEYS, angleFromPrompt } from './lib/angles.mjs';
+import { openEventForm, openAnglePencils } from './lib/screens.mjs';
 import fs from 'node:fs';
 const SANDBOX_CHROMIUM = '/opt/pw-browsers/chromium';
 const LAUNCH_OPTS = fs.existsSync(SANDBOX_CHROMIUM) ? { executablePath: SANDBOX_CHROMIUM } : {};
@@ -101,7 +102,7 @@ const search = async () => {
   prompts = []; callTimes = []; t0 = started();
   await page.evaluate(() => document.querySelector('[data-view="events"]').click());
   await page.waitForTimeout(250);
-  await page.evaluate(() => { const e = document.getElementById('evEdit'); if (e) e.click(); });
+  await openEventForm(page);
   await page.waitForTimeout(150);
   await page.evaluate(() => document.querySelector('[data-ev-when="week"]').click());
   await page.waitForTimeout(150);
@@ -190,12 +191,12 @@ check('and offers the thing to do about it', await page.evaluate(() =>
 
 // ---------- Tuning a search, the way a category already can be ----------
 
-await page.evaluate(() => { const e = document.getElementById('evEdit'); if (e) e.click(); });
-await page.waitForTimeout(250);
+await openAnglePencils(page);
 check('each search can be changed', await page.evaluate(() =>
   document.querySelectorAll('[data-ev-tune]').length === 9),
   await page.evaluate(() => document.querySelectorAll('[data-ev-tune]').length));
 
+await openAnglePencils(page);
 await page.evaluate(() => document.querySelector('[data-ev-tune="hall"]').click());
 await page.waitForSelector('#anglePromptBox');
 const shown = await page.evaluate(() => document.getElementById('anglePromptBox').value);
@@ -219,14 +220,13 @@ check('but the app still adds where to look',
 check('and the formatting rules survive the edit',
   prompts.every((p) => /ONLY a JSON array/.test(p)));
 check('and the villages do too', prompts.some((p) => /Ashford-in-the-Water/.test(p)));
-check('an edited search is marked in the list', await page.evaluate(() => {
-  const e = document.getElementById('evEdit');
-  if (e) e.click();
-  return !!document.querySelector('[data-ev-kind="hall"].tuned');
-}));
+await openEventForm(page);
+check('an edited search is marked in the list', await page.evaluate(() =>
+  !!document.querySelector('[data-ev-kind="hall"].tuned')));
 check('and an untouched one is not', await page.evaluate(() =>
   !document.querySelector('[data-ev-kind="clubs"].tuned')));
 
+await openAnglePencils(page);
 await page.evaluate(() => document.querySelector('[data-ev-tune="hall"]').click());
 await page.waitForSelector('#anglePromptReset');
 await page.evaluate(() => document.getElementById('anglePromptReset').click());

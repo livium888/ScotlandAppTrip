@@ -8627,9 +8627,17 @@ ${(() => {
     // default - they are worse answers - but never more than one tap away,
     // because the alternative is an app that quietly decides for you.
     showHeld: false,
-    // Whether the form is open. It closes itself once a search has answered,
-    // and any tap on it opens it again.
+    // Whether the form is open. It starts closed, closes itself once a search
+    // has answered, and any tap on the summary opens it again. It used to
+    // start open, which meant the screen you arrived on was a form: five when
+    // chips, nine kind chips, nine pencils and a button, with the button
+    // itself 880px down a 844px phone - under the fold, on the screen whose
+    // whole job is telling you what is on.
     editing: false,
+    // Whether the per-kind prompt editors are showing. Nine pencils inside an
+    // already-busy form is the same mistake one level down, and editing what
+    // the model is asked is a thing you do once, not every search.
+    tuning: false,
     // When these results were originally found, if they came from the cache
     // rather than from nine fresh requests. Zero means they are new.
     fromCache: 0,
@@ -8991,7 +8999,7 @@ ${(() => {
     // search finishes. Left open it is three rows of chips, a date line, six
     // more chips and a button - the whole screen - so results streaming in
     // arrive below the fold and you are back to looking at nothing.
-    if ((eventSearch.status === "done" || eventSearch.status === "loading") && !eventSearch.editing) {
+    if (!eventSearch.editing) {
       const kinds = eventSearch.kinds.length
         ? EVENT_ANGLES.filter((a) => eventSearch.kinds.includes(a.key)).map((a) => a.label).join(", ")
         : "everything";
@@ -9003,6 +9011,16 @@ ${(() => {
           </span>
           <span class="ev-asked-change">${eventSearch.status === "loading" ? "Looking…" : "Change"}</span>
         </button>
+        ${
+          // The button belongs with the summary while there is nothing to
+          // read yet. Once results are on screen it would only push them
+          // down, and "Change" on the bar above already leads back here.
+          eventSearch.status !== "loading" && !eventSearch.results.length
+            ? `<button class="modal-btn modal-btn-primary ev-go" id="evSearch">
+                 ${icon("search", { size: 17, cls: "ico-inline" })} See what's on
+               </button>`
+            : ""
+        }
         ${eventSearch.status === "loading" ? "" : handoffLink()}
       `;
     }
@@ -9011,8 +9029,9 @@ ${(() => {
       <div class="card ev-ask">
         <div class="ev-ask-head">
           <b>${centre ? `What's on near ${esc(centre.name)}` : "What's on"}</b>
-          <button class="link-btn" id="evCentre">${centre ? "Somewhere else" : "Choose where"}</button>
+          <button class="link-btn" id="evAskDone">Done</button>
         </div>
+        <button class="link-btn ev-ask-where" id="evCentre">${centre ? "Somewhere else" : "Choose where"}</button>
         <div class="ev-field-label">When</div>
         <div class="search-chips">
           ${EVENT_WINDOWS.map(
@@ -9067,12 +9086,19 @@ ${(() => {
               <button class="search-chip${eventSearch.kinds.includes(a.key) ? " on" : ""}${
                 tuned ? " tuned" : ""
               }" data-ev-kind="${esc(a.key)}">${esc(a.label)}</button>
-              <button class="ev-kind-tune" data-ev-tune="${esc(a.key)}" aria-label="Change what ${esc(
-                a.label
-              )} looks for">✎</button>
+              ${
+                eventSearch.tuning
+                  ? `<button class="ev-kind-tune" data-ev-tune="${esc(a.key)}" aria-label="Change what ${esc(
+                      a.label
+                    )} looks for">✎</button>`
+                  : ""
+              }
             </span>`;
           }).join("")}
         </div>
+        <button class="link-btn ev-tune-toggle" id="evTuneToggle">${
+          eventSearch.tuning ? "Done fine-tuning" : "Fine-tune what we ask"
+        }</button>
         <p class="settings-hint">
           ${
             eventSearch.kinds.length
@@ -9082,7 +9108,7 @@ ${(() => {
               : `All ${EVENT_ANGLES.length} at once, which is how it finds the coffee morning as well as the festival. Tap any to narrow it.`
           }
         </p>
-        <button class="modal-btn modal-btn-primary" id="evSearch" style="width:100%;margin-top:10px;">
+        <button class="modal-btn modal-btn-primary ev-go" id="evSearch">
           ${eventSearch.status === "loading" ? "Looking…" : `${icon("search", { size: 17, cls: "ico-inline" })} See what's on`}
         </button>
         ${handoffLink()}
@@ -9224,7 +9250,7 @@ ${(() => {
     // trip planner both already had, and fixed this way.
     beginRenderPass();
     const previousScroll = view.scrollTop;
-    const screenId = `${eventSearch.when}|${eventSearch.editing}|${eventSearch.indoorOnly}|${eventSearch.showHeld}`;
+    const screenId = `${eventSearch.when}|${eventSearch.editing}|${eventSearch.tuning}|${eventSearch.indoorOnly}|${eventSearch.showHeld}`;
     // A redraw destroys whatever is focused, so a date being typed into the
     // custom-window editor is lost mid-edit. The search overlay guards this
     // same way: while somebody is in a field, the screen waits.
@@ -9463,6 +9489,22 @@ ${(() => {
     if (edit) {
       edit.addEventListener("click", () => {
         eventSearch.editing = true;
+        renderEvents();
+      });
+    }
+
+    const askDone = document.getElementById("evAskDone");
+    if (askDone) {
+      askDone.addEventListener("click", () => {
+        eventSearch.editing = false;
+        renderEvents();
+      });
+    }
+
+    const tuneToggle = document.getElementById("evTuneToggle");
+    if (tuneToggle) {
+      tuneToggle.addEventListener("click", () => {
+        eventSearch.tuning = !eventSearch.tuning;
         renderEvents();
       });
     }

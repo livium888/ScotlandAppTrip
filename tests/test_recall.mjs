@@ -20,6 +20,7 @@
 // the ones already saved, so the number never matched the rows.
 import { chromium } from 'playwright';
 import { ANGLE_MARKERS, angleFromPrompt, ANGLE_KEYS } from './lib/angles.mjs';
+import { openEventForm, openAnglePencils } from './lib/screens.mjs';
 import fs from 'node:fs';
 const SANDBOX_CHROMIUM = '/opt/pw-browsers/chromium';
 const LAUNCH_OPTS = fs.existsSync(SANDBOX_CHROMIUM) ? { executablePath: SANDBOX_CHROMIUM } : {};
@@ -161,6 +162,7 @@ check('and neither is a thirteenth month', dates.impossibleMonth === null, JSON.
 
 await page.evaluate(() => document.querySelector('[data-view="events"]').click());
 await page.waitForTimeout(400);
+await openEventForm(page);
 await page.evaluate(() => document.querySelector('[data-ev-when="week"]').click());
 await page.waitForTimeout(200);
 await page.evaluate(() => localStorage.removeItem('event-cache-v1'));

@@ -3817,3 +3817,30 @@ html, body {
 .ev-drop:active { opacity: 1; background: var(--surface-2, rgba(0,0,0,0.05)); }
 /* The name must not run under it. */
 .ev-row .ev-main { padding-right: 30px; }
+
+
+/* ---- What's on: the quiet default ----
+   The form is no longer what the screen opens on, so the pieces that used to
+   live inside it need to hold their own outside it. */
+
+/* The primary action, sized to be found rather than hunted for. It used to
+   carry an inline width:100% because it only ever appeared in one place. */
+.ev-go {
+  width: 100%;
+  margin-top: var(--space-3);
+}
+
+/* "Somewhere else" moved out of the form's title row when Done took that
+   corner. On its own line it reads as the secondary choice it is. */
+.ev-ask-where {
+  display: block;
+  margin: calc(var(--space-1) * -1) 0 var(--space-3);
+}
+
+/* The disclosure for the nine prompt editors. Deliberately a link and not a
+   chip: it is a different kind of thing from the kinds above it, and looking
+   like one of them is how it got lost among them. */
+.ev-tune-toggle {
+  display: block;
+  margin-top: var(--space-2);
+}

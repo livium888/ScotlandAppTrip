@@ -16,6 +16,7 @@
 // about them — when — had nowhere to sit.
 import { chromium } from 'playwright';
 import { ANGLE_MARKERS, angleFromPrompt, ANGLE_KEYS } from './lib/angles.mjs';
+import { openEventForm, openAnglePencils } from './lib/screens.mjs';
 import fs from 'node:fs';
 const SANDBOX_CHROMIUM = '/opt/pw-browsers/chromium';
 const LAUNCH_OPTS = fs.existsSync(SANDBOX_CHROMIUM) ? { executablePath: SANDBOX_CHROMIUM } : {};
@@ -144,7 +145,10 @@ const screen = () => page.evaluate(() => document.getElementById('view').textCon
 check('the screen explains itself before you have searched anything',
   /Nothing saved yet/.test(await screen()), (await screen()).slice(0, 200));
 // The presets by name rather than by count, so adding one does not fail this.
-check('it offers the date window up front', await page.evaluate(() =>
+// The form is behind the summary bar now, so a suite that wants to read
+// the controls has to open it the way a person would.
+await openEventForm(page);
+check('it offers the date window once opened', await page.evaluate(() =>
   ['trip', 'weekend', 'week'].every((k) => !!document.querySelector(`[data-ev-when="${k}"]`))));
 check('and the kinds of thing to look for', await page.evaluate(
   (n) => document.querySelectorAll('[data-ev-kind]').length === n, ANGLE_KEYS.length),
@@ -357,6 +361,7 @@ await page.waitForTimeout(500);
 await page.evaluate(() => document.querySelector('[data-view="events"]').click());
 await page.waitForTimeout(400);
 
+await openEventForm(page);
 check('there is a way to pick your own dates', await page.evaluate(() =>
   !!document.querySelector('[data-ev-when="custom"]')));
 await page.evaluate(() => document.querySelector('[data-ev-when="custom"]').click());
@@ -397,6 +402,9 @@ check('and the model is told to skip what finishes before then',
   promptsSeen.length > 0 && promptsSeen.every((p) => /still going at 15:00 or later/.test(p)),
   (promptsSeen[0] || '').slice(0, 300));
 
+// Running the search folds the form, so getting back to the time control is
+// a deliberate step now rather than something already on screen.
+await openEventForm(page);
 check('there is a way back to any time', await page.evaluate(() =>
   !!document.getElementById('evClearTime')));
 
