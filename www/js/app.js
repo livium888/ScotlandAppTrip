@@ -1428,8 +1428,14 @@
   // Picks, folders and the plan all belong to the board that's open, so
   // switching boards swaps the whole working set without anything leaking
   // between them.
+  // readJson guards parsing, not shape: valid JSON of the wrong type comes
+  // straight back, and every .filter and .map on it throws. This is the
+  // app's most-read data and it was the least checked. loadPeople has done
+  // it properly all along; this is the same thing.
   function loadPicks() {
-    return readJson(boardKey(activeBoard().id, "picks"), []);
+    const list = readJson(boardKey(activeBoard().id, "picks"), []);
+    if (!Array.isArray(list)) return [];
+    return list.filter((p) => p && typeof p === "object" && p.id);
   }
 
   function savePicks(picks) {
@@ -3227,6 +3233,43 @@
     }
   }
 
+  // What each key has to look like for the app to be able to read it back.
+  // Values in a backup are JSON text, exactly as localStorage held them, so
+  // checking one means parsing it first. Returns a sentence naming the first
+  // real problem, or "" when the file is sound.
+  function backupShapeProblem(data) {
+    const isObj = (v) => v && typeof v === "object" && !Array.isArray(v);
+    const rules = [
+      { test: (k) => /^board:.*:picks$/.test(k) || /^scotland-trip-picks/.test(k),
+        ok: Array.isArray, says: "the list of saved places is not a list" },
+      { test: (k) => /^board:.*:folders$/.test(k) || /^scotland-trip-folders/.test(k),
+        ok: Array.isArray, says: "the list of folders is not a list" },
+      { test: (k) => /^board:.*:plan$/.test(k) || /^trip-plan-/.test(k),
+        ok: (v) => isObj(v) && Array.isArray(v.days), says: "the plan has no list of days" },
+      { test: (k) => k === BOARDS_KEY,
+        ok: (v) => isObj(v) && Array.isArray(v.boards), says: "the list of trips is not readable" },
+      { test: (k) => k === PEOPLE_KEY, ok: Array.isArray, says: "the list of travellers is not a list" },
+      { test: (k) => k === TRIP_KEY, ok: isObj, says: "the settings are not readable" },
+    ];
+    for (const key of Object.keys(data)) {
+      const raw = data[key];
+      if (typeof raw !== "string") return `one part of it (${key}) is not stored as text`;
+      let value;
+      try {
+        value = JSON.parse(raw);
+      } catch (e) {
+        // A key this build does not know about is not worth refusing a whole
+        // restore over, but one it will read back certainly is.
+        const known = rules.some((r) => r.test(key));
+        if (known) return `one part of it (${key}) is not valid JSON`;
+        continue;
+      }
+      const rule = rules.find((r) => r.test(key));
+      if (rule && !rule.ok(value)) return rule.says;
+    }
+    return "";
+  }
+
   function importBackup(text) {
     let parsed;
     try {
@@ -3249,6 +3292,26 @@
         message: `That backup was made by a newer version of the app (file ${version}, this build reads ${BACKUP_VERSION}). Update the app, then import it.`,
       };
     }
+    // The envelope was checked and the contents never were. A file truncated
+    // in transit, mangled by a mail client or edited by hand restored
+    // straight into localStorage, key by key, and the app was bricked on
+    // every screen that read the bad one. It even reported success: the
+    // count came back "NaN places" and the message said Restored.
+    //
+    // The version check above already argues the principle - "quietly
+    // restoring half of it is how somebody loses a trip" - and then applied
+    // it only to versions. Everything is checked before anything is written,
+    // so a bad file changes nothing at all. Restore is what people reach for
+    // when something has already gone wrong; it must not be able to make it
+    // worse.
+    const shapeProblem = backupShapeProblem(parsed.data);
+    if (shapeProblem) {
+      return {
+        ok: false,
+        message: `That backup is damaged and nothing was changed — ${shapeProblem}`,
+      };
+    }
+
     // Replaces rather than merges - merging two sets of picks silently
     // duplicates them, and a restore is almost always "put it back how it was".
     // Restore every key in the file rather than only the ones this device
@@ -4761,7 +4824,17 @@ ${(() => {
   function loadPlan() {
     const board = activeBoard();
     const stored = readJson(boardKey(board.id, "plan"), null);
-    if (stored && Array.isArray(stored.days)) return stored;
+    if (stored && Array.isArray(stored.days)) {
+      // days was checked and items never was, while twenty-nine places read
+      // plan.items[...] straight out. A plan with days and no items threw on
+      // the first of them and took Today and Plan down together. Normalising
+      // here fixes all twenty-nine at once, which is the right place for it:
+      // one loader knows the shape, the readers should not each have to.
+      const items = stored.items && typeof stored.items === "object" && !Array.isArray(stored.items)
+        ? stored.items
+        : {};
+      return { days: stored.days, items };
+    }
     return { days: [], items: {} };
   }
 
@@ -17539,13 +17612,38 @@ ${(() => {
       v.render();
     } catch (e) {
       console.error(`render failed for "${name}":`, e);
+      // "Your saved data is untouched" was true and useless. When the saved
+      // data is what crashed the screen, every tab that reads it crashes the
+      // same way, so "switch tabs and come back" is advice that cannot work -
+      // and the app was claiming the one thing it is in no position to know.
+      // What actually helps is a way to get the data off the phone before
+      // doing anything else.
       view.innerHTML = `
         <div class="card">
           <h2>Something went wrong on this screen</h2>
-          <p>The rest of the app still works — switch tabs and come back. Your saved data is untouched.</p>
-          <pre class="settings-result bad">${esc(String((e && e.stack) || e))}</pre>
+          <p>Other screens may still work. Before anything else, save a copy of your trip —
+             then you can reinstall or ask for help without losing it.</p>
+          <button class="modal-btn modal-btn-primary" id="crashBackup" style="width:100%;margin-top:10px;">
+            ${icon("download", { size: 17, cls: "ico-inline" })} Save a copy of my trip
+          </button>
+          <button class="link-btn" id="crashDetails" style="margin-top:10px;">Show the technical details</button>
+          <pre class="settings-result bad" id="crashStack" hidden>${esc(String((e && e.stack) || e))}</pre>
         </div>
       `;
+      const rescue = document.getElementById("crashBackup");
+      if (rescue) {
+        rescue.addEventListener("click", async () => {
+          const res = await exportBackup();
+          toast(res.message);
+        });
+      }
+      const details = document.getElementById("crashDetails");
+      if (details) {
+        details.addEventListener("click", () => {
+          const pre = document.getElementById("crashStack");
+          if (pre) pre.hidden = !pre.hidden;
+        });
+      }
     }
     topbarSub.textContent = typeof v.sub === "function" ? v.sub() : v.sub;
     // A screen opened from More lights More, not nothing. Landing on a screen
@@ -18354,6 +18452,21 @@ ${(() => {
   // anything.
   window.__tripTest = {
     ASSISTANTS,
+    // The error card is the one screen no seed can produce, because it only
+    // appears when a render throws. Without a way to cause that on purpose,
+    // the card can only be tested by shipping a bug.
+    forceRenderFailure: () => {
+      view.innerHTML = "";
+      const boom = { render: () => { throw new Error("forced for a test"); }, sub: () => "" };
+      const saved = VIEWS.__boom;
+      VIEWS.__boom = boom;
+      try {
+        showView("__boom");
+      } finally {
+        if (saved) VIEWS.__boom = saved;
+        else delete VIEWS.__boom;
+      }
+    },
     // Setting an explore centre normally needs GPS, a map tap or a saved
     // place. A suite needs to prove the redraw lands on the screen Explore
     // is actually on, which is the thing six hard-coded renderPicks() calls
