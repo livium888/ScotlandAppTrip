@@ -1,6 +1,17 @@
 (function () {
   "use strict";
 
+  // Read once per render rather than once per row. eventVerdict was parsing
+  // the people list, the nap window and the bedtime out of localStorage for
+  // every single event on screen - which cost nothing when the screen was
+  // drawn twice a search, and costs forty times that now results stream in.
+  //
+  // Declared up here rather than beside the functions that use it because
+  // store() reads it, and store() is defined near the top: a `let` further
+  // down would sit in the temporal dead zone for any write that happens
+  // while the file is still being evaluated.
+  let renderPass = null;
+
   const view = document.getElementById("view");
   const tabbar = document.getElementById("tabbar");
   const topbarTitle = document.getElementById("topbarTitle");
@@ -258,8 +269,10 @@
   const PEOPLE_KEY = "people-v1";
 
   function loadPeople() {
-    const list = readJson(PEOPLE_KEY, null);
-    return Array.isArray(list) ? list.filter((p) => p && typeof p === "object") : [];
+    return perPass("people", () => {
+      const list = readJson(PEOPLE_KEY, null);
+      return Array.isArray(list) ? list.filter((p) => p && typeof p === "object") : [];
+    });
   }
 
   function savePeople(list) {
@@ -1273,6 +1286,10 @@
   // ask. Most do not, and for those the point is that the app keeps working
   // and says out loud that this one did not save.
   function store(key, value) {
+    // A write invalidates anything a render pass has cached. Renders do not
+    // write, so this should never fire mid-pass; a cache that can serve a
+    // stale value is worse than no cache at all.
+    if (renderPass && renderPass.data) renderPass.data = {};
     try {
       localStorage.setItem(key, value);
       return true;
@@ -1329,9 +1346,11 @@
   ];
 
   function loadBoards() {
-    const state = readJson(BOARDS_KEY, null);
-    if (state && Array.isArray(state.boards) && state.boards.length) return state;
-    return migrateToBoards();
+    return perPass("boards", () => {
+      const state = readJson(BOARDS_KEY, null);
+      if (state && Array.isArray(state.boards) && state.boards.length) return state;
+      return migrateToBoards();
+    });
   }
 
   function saveBoards(state) {
@@ -1433,9 +1452,11 @@
   // app's most-read data and it was the least checked. loadPeople has done
   // it properly all along; this is the same thing.
   function loadPicks() {
-    const list = readJson(boardKey(activeBoard().id, "picks"), []);
-    if (!Array.isArray(list)) return [];
-    return list.filter((p) => p && typeof p === "object" && p.id);
+    return perPass("picks", () => {
+      const list = readJson(boardKey(activeBoard().id, "picks"), []);
+      if (!Array.isArray(list)) return [];
+      return list.filter((p) => p && typeof p === "object" && p.id);
+    });
   }
 
   function savePicks(picks) {
@@ -1449,9 +1470,11 @@
   const FOLDERS_KEY = "scotland-trip-folders-v1";
 
   function loadFolders() {
-    const f = readJson(boardKey(activeBoard().id, "folders"), null);
-    if (Array.isArray(f) && f.length) return f;
-    return ["Saved"];
+    return perPass("folders", () => {
+      const f = readJson(boardKey(activeBoard().id, "folders"), null);
+      if (Array.isArray(f) && f.length) return f;
+      return ["Saved"];
+    });
   }
 
   function saveFolders(folders) {
@@ -4822,6 +4845,10 @@ ${(() => {
 
 
   function loadPlan() {
+    return perPass("plan", loadPlanUncached);
+  }
+
+  function loadPlanUncached() {
     const board = activeBoard();
     const stored = readJson(boardKey(board.id, "plan"), null);
     if (stored && Array.isArray(stored.days)) {
@@ -8198,18 +8225,39 @@ ${(() => {
   // at 18:45 for a 19:00 thing with a 19:00 bedtime is not a plan.
   const BEDTIME_GRACE_MINS = 0;
 
-  // Read once per render rather than once per row. eventVerdict was parsing
-  // the people list, the nap window and the bedtime out of localStorage for
-  // every single event on screen - which cost nothing when the screen was
-  // drawn twice a search, and costs forty times that now results stream in.
-  let renderPass = null;
-
+  // A render pass is one synchronous repaint of one screen. Nothing inside it
+  // writes, so anything read from storage during it can be read once.
+  //
+  // It was not. Drawing Saved with 120 places made 258 localStorage reads and
+  // 258 JSON.parse calls, re-parsing 212KB - boards-v1 fetched and parsed 127
+  // times, board:plan 121 - because activeBoard() and loadPlan() sit inside
+  // per-row helpers, so every row paid for the whole file. Plan re-parsed
+  // 343KB the same way. This brings both to 14 reads and 40KB.
+  //
+  // Worth being straight about what that bought: on a desktop-class machine
+  // the render went from 39ms to 37ms. The parsing was about five percent of
+  // it; building three thousand DOM nodes is the rest. This is kept because
+  // doing a hundred times less work is right regardless, and because parse
+  // and storage cost proportionally more on a phone than they do here - but
+  // it is not the thing that would make Saved feel fast, and measuring said
+  // so after the fact rather than before.
+  //
+  // The mechanism already existed for kidAges() and the weather. It just had
+  // to be pointed at the loaders.
   function beginRenderPass() {
-    renderPass = { kids: null, weather: {} };
+    renderPass = { kids: null, weather: {}, data: {} };
   }
 
   function endRenderPass() {
     renderPass = null;
+  }
+
+  // Memoise a loader for the length of a pass. Outside one it is a straight
+  // call, so nothing that reads storage between renders can go stale.
+  function perPass(key, load) {
+    if (!renderPass || !renderPass.data) return load();
+    if (!(key in renderPass.data)) renderPass.data[key] = load();
+    return renderPass.data[key];
   }
 
   function kidAges() {
@@ -17608,8 +17656,16 @@ ${(() => {
     // A throw inside a render used to leave the screen blank with no way back
     // - a real risk mid-trip, where the app failing is worse than any single
     // feature failing. Catch it, say so, and keep the tab bar usable.
+    // Every screen gets a pass, not just the events one. A pass that leaks -
+    // because a render threw between begin and end - would serve stale data
+    // for the rest of the session, so the end is in a finally.
     try {
-      v.render();
+      beginRenderPass();
+      try {
+        v.render();
+      } finally {
+        endRenderPass();
+      }
     } catch (e) {
       console.error(`render failed for "${name}":`, e);
       // "Your saved data is untouched" was true and useless. When the saved
@@ -18452,6 +18508,7 @@ ${(() => {
   // anything.
   window.__tripTest = {
     ASSISTANTS,
+    loadPicks,
     // The error card is the one screen no seed can produce, because it only
     // appears when a render throws. Without a way to cause that on purpose,
     // the card can only be tested by shipping a bug.
