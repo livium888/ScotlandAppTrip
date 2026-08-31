@@ -460,6 +460,7 @@ body {
   background: var(--surface);
   border-radius: 10px;
   padding: 11px 14px;
+  min-height: 44px;
   font-size: var(--type-md);
   font-family: inherit;
   color: var(--ink);
@@ -1219,8 +1220,8 @@ body {
   background: none;
   color: var(--text-muted);
   font-size: var(--type-md);
-  min-width: 34px;
-  min-height: 34px;
+  min-width: 44px;
+  min-height: 44px;
   flex-shrink: 0;
 }
 .packing-add { margin-top: 12px; }
@@ -1535,7 +1536,12 @@ body {
   border: none;
   color: var(--ink-soft);
   font-size: var(--type-md);
-  padding: 4px 6px;
+  padding: 0;
+  min-width: 44px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex-shrink: 0;
 }
 .plan-items { display: flex; flex-direction: column; gap: 8px; }
@@ -1549,6 +1555,7 @@ body {
 }
 .plan-time {
   width: 60px;
+  min-height: 44px;
   flex-shrink: 0;
   padding: 6px 7px;
   border: 1px solid rgba(0, 0, 0, 0.12);
@@ -1571,8 +1578,17 @@ body {
   border: none;
   color: var(--ink-soft);
   font-size: var(--type-md);
-  padding: 4px 5px;
-  border-radius: 6px;
+  /* Was 4px 5px, which drew a 23x27 target - and the one immediately to its
+     right deletes the stop. A missed tap on a reorder arrow was not a near
+     miss, it removed the thing you were trying to move. The glyph is
+     unchanged; only the box that receives the tap grew. */
+  padding: 0;
+  min-width: 44px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
 }
 .plan-item-actions button:disabled { opacity: 0.25; }
 .plan-add-row { margin-top: 10px; }
@@ -1879,13 +1895,15 @@ button, select, input[type="text"], input[type="file"] { font-family: inherit; }
 .add-chip {
   font-size: var(--type-xs);
   font-weight: 600;
+  display: inline-flex;
+  align-items: center;
   padding: 8px 12px;
   border-radius: 999px;
   border: 1px dashed var(--line);
   background: transparent;
   color: var(--ink-soft);
   font-family: inherit;
-  min-height: 36px;
+  min-height: 44px;
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3876,9 +3894,14 @@ html, body {
   border: none;
   color: inherit;
   opacity: 0.55;
-  padding: var(--space-1);
+  /* 23x23 as first written, which is smaller than the thing it dismisses
+     deserves and smaller than a thumb can reliably find. */
+  padding: 0;
+  min-width: 44px;
+  min-height: 44px;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   cursor: pointer;
 }
 .app-banner-dismiss:active { opacity: 1; }
@@ -3905,3 +3928,51 @@ html, body {
 }
 .ev-where-now b { color: var(--text); }
 .ev-where-form { margin-bottom: var(--space-2); }
+
+
+/* ---- Reaching the rest ----
+   Everything below drew a box between 36px and 43px: close enough to look
+   fine and far enough under to be missed. Apple and Google both publish 44,
+   and the screens here are used one-handed in a car park. */
+.topbar-text { min-height: 44px; display: flex; flex-direction: column; justify-content: center; }
+.hero-share { min-height: 44px; }
+.plan-ai-btn { min-height: 44px; }
+#addDayForm input, #addDayForm button { min-height: 44px; }
+
+/* A checkbox renders at 13x13 whatever the stylesheet says, so the label
+   around it carries the target instead - which is also the bigger thing to
+   aim at, and the one people actually tap. */
+.packing-row, .settings-check { min-height: 44px; display: flex; align-items: center; gap: var(--space-2); }
+.packing-row input[type="checkbox"], .settings-check input[type="checkbox"] {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+}
+
+
+/* ---- The last of the small targets ----
+   These all drew between 24px and 40px. Two of them were added earlier today
+   (.order-toggle and the banner dismiss), which is the argument for having a
+   test rather than a habit. */
+
+/* The top bar's two buttons were 38px square by rule and 40px rendered. */
+.topbar-settings { width: 44px; height: 44px; }
+
+/* "Back up" in the banner, and the back link out of a sub-screen. */
+.app-banner-action { min-height: 44px; }
+.sub-back { min-height: 44px; display: inline-flex; align-items: center; }
+
+/* A link-styled button is still a button. */
+.link-btn { min-height: 44px; }
+
+/* The order control on Saved. */
+.order-toggle { min-height: 44px; }
+
+/* A section label is normally just a label - but on Saved it folds the group
+   below it, and a heading you can tap has to be tappable. Only the ones that
+   actually do something get the height. */
+.section-label[data-fold], button.section-label, .section-label.list-head {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+}
