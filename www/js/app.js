@@ -3630,7 +3630,7 @@
               a stop lands in the middle of a nap, and splits the budget properly.
             </p>
             <div id="peopleList">${peopleRows()}</div>
-            <button class="modal-btn" id="addPersonBtn" style="width:100%;margin-top:10px;">＋ Add someone</button>
+            <button class="modal-btn" id="addPersonBtn" style="width:100%;margin-top:10px;">${icon("plus", { size: 17, cls: "ico-inline" })} Add someone</button>
             ${
               loadPeople().length
                 ? `<p class="settings-hint" style="margin-top:10px;"><b>Prompts will say:</b> ${esc(whoDescription())}</p>`
@@ -3730,7 +3730,7 @@
             </p>
             <p class="settings-hint${backupIsOverdue() ? " backup-overdue" : ""}"><b>${esc(backupAgeLine())}</b></p>
             <div class="settings-btn-row">
-              <button class="modal-btn${backupIsOverdue() ? " modal-btn-primary" : ""}" id="exportBackupBtn">⬇ Export</button>
+              <button class="modal-btn${backupIsOverdue() ? " modal-btn-primary" : ""}" id="exportBackupBtn">${icon("download", { size: 17, cls: "ico-inline" })} Export</button>
               <button class="modal-btn" id="importBackupBtn">${icon('upload', { size: 17, cls: 'ico-inline' })} Import</button>
             </div>
 
@@ -8964,8 +8964,8 @@ ${(() => {
               saved
                 ? `<button class="ev-btn" data-open-pick="${esc(e.id)}">Details</button>`
                 : held != null
-                  ? `<button class="ev-btn" data-save-held="${held}">＋ Save anyway</button>`
-                  : `<button class="ev-btn ev-btn-primary" data-save-event="${index}">＋ Save</button>`
+                  ? `<button class="ev-btn" data-save-held="${held}">${icon("plus", { size: 15, cls: "ico-inline" })} Save anyway</button>`
+                  : `<button class="ev-btn ev-btn-primary" data-save-event="${index}">${icon("plus", { size: 15, cls: "ico-inline" })} Save</button>`
             }
             ${
               // Free: a URL, not a request. Every event that has been placed
@@ -12370,7 +12370,7 @@ ${(() => {
           <button class="search-around" data-idea-day="${esc(path)}"
                   aria-label="Put ${esc(stop.name)} on a day">📅</button>
           <button class="candidate-add${saved ? " saved" : ""}" data-idea-add="${esc(path)}"
-                  aria-label="${saved ? "Saved" : `Save ${esc(stop.name)}`}">${saved ? "✓ Saved" : "＋ Save"}</button>
+                  aria-label="${saved ? "Saved" : `Save ${esc(stop.name)}`}">${saved ? `${icon("check", { size: 15, cls: "ico-inline" })} Saved` : `${icon("plus", { size: 15, cls: "ico-inline" })} Save`}</button>
         </div>
       </div>
     `;
@@ -13057,7 +13057,7 @@ ${(() => {
               }
               <button class="modal-btn" data-open-maps="${esc(
                 mapsUrlFor(pickMapsQuery(option), option) || ""
-              )}">📍 Google Maps</button>
+              )}">${icon("pin", { size: 15, cls: "ico-inline" })} Google Maps</button>
             </div>
 
             <button class="modal-btn modal-btn-primary" data-choice-use="1" style="width:100%;margin-top:10px;"
@@ -13788,7 +13788,7 @@ ${(() => {
                 already ? "disabled" : ""
               } aria-label="${
                 already ? "Already saved" : (r.isArea ? "Save " + esc(r.name) + " as an area" : "Save " + esc(r.name))
-              }">${already ? "✓" : "＋"}</button>
+              }">${already ? icon("check", { size: 15 }) : icon("plus", { size: 15 })}</button>
               ${
                 // Anything with a position can be the middle of a search, not
                 // just a town: "what's near the hotel" is the same question as
@@ -14042,7 +14042,7 @@ ${(() => {
               // back: a village you only want to remember the name of is a
               // perfectly ordinary saved place.
               !already && !r.guideSource && looksLikeMajorPlace(r)
-                ? `<button class="modal-btn" id="previewAddMajor" style="width:100%;margin-top:8px;">🏘️ Save as a town or area</button>
+                ? `<button class="modal-btn" id="previewAddMajor" style="width:100%;margin-top:8px;">${icon("pin", { size: 17, cls: "ico-inline" })} Save as a town or area</button>
                    <p class="settings-hint" style="text-align:center;">An area heads its own section in Picks, and places you save nearby are filed under it.</p>`
                 : `<p class="settings-hint" style="text-align:center;">You can change the folder, add a note or a cost after saving.</p>`
             }
@@ -14161,10 +14161,10 @@ ${(() => {
             <p class="settings-hint" id="anchorStatus"></p>
 
             <div class="settings-btn-row" style="margin-top:12px;">
-              <button class="modal-btn" id="anchorHere">📍 Where I am now</button>
-              <button class="modal-btn" id="anchorMap">🗺 Point at it</button>
+              <button class="modal-btn" id="anchorHere">${icon("pin", { size: 17, cls: "ico-inline" })} Where I am now</button>
+              <button class="modal-btn" id="anchorMap">${icon("map", { size: 17, cls: "ico-inline" })} Point at it</button>
             </div>
-            <button class="modal-btn" id="anchorAnywhere" style="width:100%;margin-top:8px;">🌍 Anywhere</button>
+            <button class="modal-btn" id="anchorAnywhere" style="width:100%;margin-top:8px;">${icon("globe", { size: 17, cls: "ico-inline" })} Anywhere</button>
           </div>
         </div>
       </div>
@@ -17415,7 +17415,7 @@ ${(() => {
           <p class="pick-status">Nothing planned for today — this is the most recent day you had planned${
             current.date ? `, ${daysAgoLabel(current.date)}` : ""
           }.</p>
-          <button class="modal-btn modal-btn-primary" id="todayAddDay">＋ Add today to the plan</button>
+          <button class="modal-btn modal-btn-primary" id="todayAddDay">${icon("plus", { size: 17, cls: "ico-inline" })} Add today to the plan</button>
         </div>
       `;
     }
@@ -18508,6 +18508,8 @@ ${(() => {
   // anything.
   window.__tripTest = {
     ASSISTANTS,
+    openAnchorSheet,
+    openSettings,
     loadPicks,
     // The error card is the one screen no seed can produce, because it only
     // appears when a render throws. Without a way to cause that on purpose,

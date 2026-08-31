@@ -303,6 +303,40 @@ check('a screen cannot paint over the bar however its contents are stacked',
     return contained;
   }));
 
+// ---------- The sheets, which nothing had ever checked ----------
+// The sweep above scans '#view', and #placeModal is a SIBLING of #view in
+// index.html - so every dialog in the app has been exempt from the emoji
+// rule since the rule was written. They duly kept the emoji the rest of the
+// app dropped: a pin, a map and a globe on the "where to look" sheet alone.
+// The drawn set is the whole point; it should not stop at a modal boundary.
+const sheetOffenders = async (label, open) => {
+  await open();
+  await page.waitForTimeout(350);
+  const found = await page.evaluate(() => {
+    const out = [];
+    // Same exemption as above: illustration tiles are allowed emoji, user
+    // text is the user's business.
+    document.querySelectorAll('#placeModal button, #placeModal .modal-btn').forEach((b) => {
+      if (b.closest('.cat-grid, .kids-find, .search-chips')) return;
+      const t = b.textContent.trim();
+      if (t) out.push(t);
+    });
+    return out;
+  });
+  const bad = found.filter((t) => EMOJI.test(t));
+  check(`no emoji in the ${label} sheet`, bad.length === 0, JSON.stringify(bad));
+  await page.evaluate(() => {
+    const m = document.getElementById('placeModal');
+    if (m) { m.classList.remove('open'); m.innerHTML = ''; }
+  });
+};
+
+await sheetOffenders('where to look', () =>
+  page.evaluate(() => window.__tripTest.openAnchorSheet && window.__tripTest.openAnchorSheet()));
+await sheetOffenders('settings', () =>
+  page.evaluate(() => window.__tripTest.openSettings && window.__tripTest.openSettings()));
+
+
 await browser.close();
 console.log(failures === 0 ? '\nALL TESTS PASSED' : `\n${failures} FAILED`);
 process.exit(failures ? 1 : 0);
