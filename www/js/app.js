@@ -7373,9 +7373,17 @@ ${(() => {
     return "📍";
   }
 
+  // Which field the suggester is currently driving. It was welded to the
+  // place-search overlay - renderSuggestions looked up pickSuggestList and
+  // pickSearchInput by name - which is why every other location field in the
+  // app was a bare text box you had to spell correctly from memory. The
+  // machinery was always good enough to go round; it just had one address
+  // hard-coded into it.
+  let suggestTarget = { inputId: "pickSearchInput", listId: "pickSuggestList", onPick: null };
+
   function renderSuggestions(state, items, message) {
-    const list = document.getElementById("pickSuggestList");
-    const input = document.getElementById("pickSearchInput");
+    const list = document.getElementById(suggestTarget.listId);
+    const input = document.getElementById(suggestTarget.inputId);
     if (!list) return;
 
     if (state === "hidden") {
@@ -7431,11 +7439,18 @@ ${(() => {
     clearTimeout(suggestTimer);
     if (suggestAbort) suggestAbort.abort();
     const label = s.context ? `${s.name}, ${s.context}` : s.name;
+    const handler = suggestTarget.onPick;
     renderSuggestions("hidden");
-    const input = document.getElementById("pickSearchInput");
+    const input = document.getElementById(suggestTarget.inputId);
     if (input) {
-      input.value = label;
+      input.value = handler ? "" : label;
       input.blur(); // drop the keyboard so the results get the screen
+    }
+    // A field that is choosing somewhere to look around wants the place, not
+    // a search for it. The overlay keeps its original behaviour below.
+    if (handler) {
+      handler(s);
+      return;
     }
 
     // The suggestion already knows what it is and where it is - Photon told
@@ -7464,12 +7479,36 @@ ${(() => {
     runSearch(label, undefined, seed);
   }
 
+  // Point the suggester at a field. Any input with a list beside it can have
+  // suggestions now; onPick decides what choosing one means - the search
+  // overlay searches for it, a location field simply becomes it.
+  function attachPlaceSuggest(input, list, onPick) {
+    if (!input || !list) return;
+    input.addEventListener("focus", () => {
+      suggestTarget = { inputId: input.id, listId: list.id, onPick: onPick || null };
+    });
+    input.addEventListener("input", () => {
+      suggestTarget = { inputId: input.id, listId: list.id, onPick: onPick || null };
+      onSuggestInput(input.value);
+    });
+  }
+
   function onSuggestInput(value) {
     const q = value.trim();
     clearTimeout(suggestTimer);
     if (suggestAbort) suggestAbort.abort();
 
     if (q.length < SUGGEST_MIN_CHARS) {
+      renderSuggestions("hidden");
+      return;
+    }
+
+    // A pair of coordinates is already an answer. Asking a place-name service
+    // to suggest names for "56.7028, -3.7317" gets whatever it can match,
+    // which is how a precise location used to turn into a guess - the exact
+    // thing test_searchflow was written to stop, and which attaching
+    // suggestions to these fields quietly reintroduced.
+    if (parseLatLon(q)) {
       renderSuggestions("hidden");
       return;
     }
@@ -9220,6 +9259,7 @@ ${(() => {
         <input type="text" id="evWhereInput" placeholder="A town or postcode…" autocomplete="off" />
         <button type="submit" aria-label="Use this place">Set</button>
       </form>
+      <div class="suggest-list" id="evWhereSuggest" role="listbox" hidden></div>
       <div class="search-chips">
         <button class="search-chip" id="evWhereHere">${icon("pin", { size: 15, cls: "ico-inline" })} Where I am</button>
         <button class="search-chip" id="evWhereMap">${icon("map", { size: 15, cls: "ico-inline" })} Point at it</button>
@@ -9800,6 +9840,12 @@ ${(() => {
       const el = document.getElementById("evWhereStatus");
       if (el) el.textContent = t;
     };
+
+    attachPlaceSuggest(
+      document.getElementById("evWhereInput"),
+      document.getElementById("evWhereSuggest"),
+      (p) => setEventCentre({ name: p.name, lat: p.lat, lon: p.lon, miles: anchorMiles(evCentreNow()) })
+    );
 
     const whereForm = document.getElementById("evWhereForm");
     if (whereForm) {
@@ -14158,6 +14204,7 @@ ${(() => {
                      autocomplete="off" value="${esc(current && !current.fromPick ? current.name : "")}" />
               <button type="submit" aria-label="Use this">Set</button>
             </form>
+            <div class="suggest-list" id="anchorSuggest" role="listbox" hidden></div>
             <p class="settings-hint" id="anchorStatus"></p>
 
             <div class="settings-btn-row" style="margin-top:12px;">
@@ -14231,6 +14278,12 @@ ${(() => {
         const p = loadPicks().find((x) => x.id === btn.getAttribute("data-anchor-pick"));
         if (p) apply({ name: p.name, lat: p.lat, lon: p.lon, miles, fromPick: true });
       })
+    );
+
+    attachPlaceSuggest(
+      document.getElementById("anchorInput"),
+      document.getElementById("anchorSuggest"),
+      (p) => apply({ name: p.name, lat: p.lat, lon: p.lon, miles })
     );
 
     const form = document.getElementById("anchorForm");
