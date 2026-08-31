@@ -91,7 +91,21 @@ await page.fill('#pickSearchInput', 'Moulin Inn');
 await page.evaluate(() => document.getElementById('pickSearchForm').requestSubmit());
 await page.waitForSelector('[data-add-candidate]', { timeout: 8000 });
 await page.evaluate(() => document.querySelector('[data-add-candidate]').click());
-await page.waitForTimeout(1600);
+// Saving geocodes before it writes, so how long it takes depends on the
+// machine. 1600ms was generous on a quiet box and short on a runner with
+// three suites sharing two cores - the same blind-sleep flake that took
+// test_explore_ai down. Wait for the thing being asserted instead: the pick
+// in storage, and the toast that reports where it went.
+await page.waitForFunction(() => {
+  const id = JSON.parse(localStorage.getItem('boards-v1') || '{}').activeId;
+  if (!id) return false;
+  const picks = JSON.parse(localStorage.getItem('board:' + id + ':picks') || '[]');
+  return Array.isArray(picks) && picks.some((p) => /Moulin/.test(p.name || ''));
+}, { timeout: 20000 }).catch(() => {});
+await page.waitForFunction(
+  () => /Saved to/.test((document.getElementById('toast') || {}).textContent || ''),
+  { timeout: 20000 }
+).catch(() => {});
 
 check('a place plainly inside one area asks nothing', await page.evaluate(() =>
   document.querySelectorAll('#placeModal [data-label-folder]').length === 0));

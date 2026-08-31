@@ -8175,13 +8175,25 @@ ${(() => {
     `"none" if you can turn up, or "" if the listing doesn't say}. ` +
     `No other text.`;
 
-  function eventPrompt(centre, window, radiusMetres, angle, towns) {
+  function eventPrompt(centre, window, radiusMetres, angle, towns, route) {
     const miles = Math.max(1, Math.round(toMiles(radiusMetres / 1000)));
     const who = aiContextBlock();
     // Named places rather than a radius, when we know them. The radius stays
     // as well - it is what bounds the answer - but the names are what make it
     // answerable.
-    const where = towns && towns.length
+    //
+    // A journey is a different question and has to be asked as one. "Within
+    // 60 miles of a point between Edinburgh and Perth" would drag in half of
+    // Fife and most of Stirlingshire; "on the way from Edinburgh to Perth,
+    // passing through these places" is what somebody driving it means.
+    const where = route
+      ? `on the way from ${route.from.name} to ${route.to.name}, within about ` +
+        `${route.miles || DEFAULT_CORRIDOR_MILES} miles of that road` +
+        (towns && towns.length
+          ? `. The route passes ${towns.join(", ")} - go through them in that order, ` +
+            `not just the two ends`
+          : "")
+      : towns && towns.length
       ? `within about ${miles} miles of ${centre.name}. That area covers ${towns.join(", ")}` +
         `${towns.length >= SETTLEMENT_LIMIT ? " and other villages nearby" : ""} - ` +
         `go through them, not just the biggest one`
@@ -8230,7 +8242,7 @@ ${(() => {
   // says so whether or not anything survived, which is the whole point. A
   // count that only appears when the search fails completely is no use to
   // somebody looking at six results wondering where the other thirty went.
-  const NO_DROPS = { unplaced: 0, undated: 0, outside: 0, tooFar: 0, finished: 0, merged: 0 };
+  const NO_DROPS = { unplaced: 0, undated: 0, outside: 0, tooFar: 0, finished: 0, merged: 0, offRoute: 0 };
   let eventsDropped = Object.assign({}, NO_DROPS);
   // The ones that can be shown anyway, with the reason attached. Something we
   // could not place is still a real listing with a name, a date and a link.
@@ -8549,6 +8561,9 @@ ${(() => {
       d.finished ? `${d.finished} had already finished by then` : "",
       d.tooFar ? `${d.tooFar} looked like somewhere else` : "",
       d.unplaced ? `${d.unplaced} couldn't be placed on the map` : "",
+      d.offRoute
+        ? `${d.offRoute} turned out to be too far off the route`
+        : "",
       // Deliberately not counted here. A listing found by two angles and
       // merged into one row was not left out of anything - it is on the
       // screen. Saying "left out: 3 were the same thing found twice" reads
@@ -8572,8 +8587,8 @@ ${(() => {
     return townA === townB || townA.includes(townB) || townB.includes(townA);
   }
 
-  async function askOneAngle(key, centre, window, radiusMetres, angle, towns) {
-    const prompt = eventPrompt(centre, window, radiusMetres, angle, towns);
+  async function askOneAngle(key, centre, window, radiusMetres, angle, towns, route) {
+    const prompt = eventPrompt(centre, window, radiusMetres, angle, towns, route);
     // Grounded first, because grounding is what makes an event real rather
     // than plausible; JSON mode as the fallback, because a grounded reply
     // comes back as prose often enough to fail outright.
@@ -8659,8 +8674,23 @@ ${(() => {
     } catch (e) {
       anywhere = null;
     }
-    if (anywhere && !confirmedWithinAnchor(anchor, anywhere.lat, anywhere.lon, ANCHOR_GRACE)) {
-      return { tooFar: true };
+    if (anywhere) {
+      if (!confirmedWithinAnchor(anchor, anywhere.lat, anywhere.lon, ANCHOR_GRACE)) {
+        return { tooFar: true };
+      }
+      // A real coordinate, for the right town, confirmed to be in the area -
+      // and it was being thrown away in favour of the search centre. The
+      // unanchored lookup is the last thing tried, so this is a listing whose
+      // bounded lookups all came back empty; having then found it properly
+      // there is no reason to pretend we only know the middle of the map.
+      // It stays marked approximate because it is a town, not a doorway.
+      return {
+        lat: anywhere.lat,
+        lon: anywhere.lon,
+        address: anywhere.address || event.area,
+        website: anywhere.website || null,
+        approximate: true,
+      };
     }
     // Genuinely unmappable, and nothing says it is elsewhere. The search
     // centre is a fair position for a listing, clearly marked as one.
@@ -8670,6 +8700,7 @@ ${(() => {
       address: event.area,
       website: null,
       approximate: true,
+      unpinned: true,
     };
   }
 
@@ -8744,7 +8775,41 @@ ${(() => {
   // by the clock rather than by whichever angle happened to answer first.
   // Applied on every arrival now rather than once at the end, which is what
   // lets a 09:00 market landing after a 21:00 gig appear above it.
+  // A placed event, measured against the journey: how far off the road it is,
+  // and how far along you meet it. Returns null when it is outside the
+  // corridor, so the caller can count it as a drop rather than show it.
+  //
+  // The anchor used for placement is a circle big enough to contain the whole
+  // corridor, which necessarily also contains a lot of country either side of
+  // it - Glasgow sits comfortably inside a circle drawn around Edinburgh and
+  // Perth. This is the test that actually means "on the way".
+  function measureAgainstRoute(placed, route) {
+    if (!route || !route.from || !route.to || placed.lat == null) return { keep: true };
+    // An event nothing could place sits at the search centre - which for a
+    // journey is the middle of the road, so it would report a detour of zero
+    // and sort as the best stop on the route. It is the one listing we know
+    // least about, presented as the most convenient. It keeps its place in
+    // the list and says it is unpinned instead.
+    if (placed.unpinned) return { keep: true };
+    const { offKm, alongKm } = projectOntoRoute(placed, route.from, route.to);
+    const limitKm = (route.miles || DEFAULT_CORRIDOR_MILES) / MILES_PER_KM;
+    if (offKm > limitKm) return { keep: false, offKm };
+    return { keep: true, offKm, alongKm };
+  }
+
   function sortEventsByWhen(list) {
+    // Along a route, the order that matters is the order you drive past them.
+    // Sorting a day out by clock time is right when everything is in one
+    // town and useless when they are strung over eighty miles.
+    if (eventSearch.route && list.some((e) => e.alongKm != null)) {
+      // Anything with no position on the route goes last rather than being
+      // sorted into the middle of things it cannot be compared with.
+      return list.sort((a, b) => {
+        const av = a.alongKm == null ? Infinity : a.alongKm;
+        const bv = b.alongKm == null ? Infinity : b.alongKm;
+        return av - bv;
+      });
+    }
     return list.sort((a, b) => {
       const day = new Date(a.startsAt) - new Date(b.startsAt);
       if (day) return day;
@@ -8867,6 +8932,10 @@ ${(() => {
     // itself 880px down a 844px phone - under the fold, on the screen whose
     // whole job is telling you what is on.
     editing: false,
+    // A journey rather than a circle: { from, to, miles } where miles is how
+    // far off the road you are willing to go. Null means the ordinary
+    // search-around-a-point.
+    route: null,
     // Whether the per-kind prompt editors are showing. Nine pencils inside an
     // already-busy form is the same mistake one level down, and editing what
     // the model is asked is a thing you do once, not every search.
@@ -8916,6 +8985,15 @@ ${(() => {
         // folk session above the 09:00 market - which is not a diary, it is a
         // list in the order the answers happened to arrive.
         items: day.items.slice().sort((a, b) => {
+          // On a journey the useful order within a day is the order you drive
+          // past them, not opening time - a 09:00 market at the far end is
+          // not the first thing you meet. This sort is what was quietly
+          // undoing the route ordering done when the results arrived.
+          if (eventSearch.route && (a.alongKm != null || b.alongKm != null)) {
+            const av = a.alongKm == null ? Infinity : a.alongKm;
+            const bv = b.alongKm == null ? Infinity : b.alongKm;
+            if (av !== bv) return av - bv;
+          }
           const at = timeToMinutes(a.time);
           const bt = timeToMinutes(b.time);
           // Something with no time is an all-day thing, and belongs at the top
@@ -8988,6 +9066,18 @@ ${(() => {
         <div class="ev-main">
           <div class="ev-name">${esc(e.name)}${runs}</div>
           ${where ? `<div class="ev-where">${esc(where)}</div>` : ""}
+          ${
+            // Only on a journey. "2 miles off the route" is the number that
+            // decides whether a stop is worth making, and it is meaningless
+            // when the search was a circle round one town.
+            e.offRouteMi != null
+              ? `<div class="ev-detour">${
+                  e.offRouteMi < 0.6 ? "on the route" : `${formatDistance(e.offRouteMi / MILES_PER_KM)} off the route`
+                }</div>`
+              : eventSearch.route && e.unpinned
+              ? `<div class="ev-detour">couldn't place this one — it may not be on your way</div>`
+              : ""
+          }
           ${e.description ? `<div class="ev-what">${esc(e.description)}</div>` : ""}
           ${
             verdict
@@ -9233,11 +9323,123 @@ ${(() => {
   // It is four questions - where, how far, when, what - and they are one
   // question. They are on one panel now, nothing closes under your thumb,
   // and the answer is written down where you can see it.
+  // ---------- Along a route, rather than around a point ----------
+  // Every search was "within N miles of one point", which is the wrong shape
+  // for the question people ask on a long drive: we are going from here to
+  // there, what is worth stopping for on the way? A circle answers that
+  // badly - small enough to sit on the route and it misses most of it, big
+  // enough to cover the route and most of it is in the wrong direction.
+  //
+  // Deliberately no routing service. The app made this call once already -
+  // the walking-time note explains straight line plus a detour factor
+  // because it needs no key and works offline - and a corridor between two
+  // points finds the towns on the way perfectly well, since towns are where
+  // the roads are. What it cannot do is follow a road around a firth or a
+  // loch, so the screen says that rather than pretending otherwise.
+
+  const CORRIDOR_MILES = [5, 10, 15, 25];
+  const DEFAULT_CORRIDOR_MILES = 10;
+  // Far enough apart to keep the number of Overpass calls small, close enough
+  // that the circles they anchor overlap along the way.
+  const ROUTE_SAMPLE_KM = 20;
+  const ROUTE_SAMPLE_MAX = 12;
+  const ROUTE_TOWN_LIMIT = 40;
+
+  // Points strung along the line between two places. Linear interpolation is
+  // accurate enough over British distances that the error is far inside the
+  // corridor width it is used to fill.
+  function routeSamples(from, to) {
+    const spanKm = haversineKm(from.lat, from.lon, to.lat, to.lon);
+    const steps = Math.max(1, Math.min(ROUTE_SAMPLE_MAX, Math.round(spanKm / ROUTE_SAMPLE_KM)));
+    const out = [];
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps;
+      out.push({ lat: from.lat + (to.lat - from.lat) * t, lon: from.lon + (to.lon - from.lon) * t });
+    }
+    return out;
+  }
+
+  // How far a point lies from the line, and how far along it. Both in km, in
+  // a flat projection - over a hundred miles of Britain the distortion is
+  // smaller than the corridor is wide.
+  function projectOntoRoute(pt, from, to) {
+    const midLat = ((from.lat + to.lat) / 2) * (Math.PI / 180);
+    const kx = 111.32 * Math.cos(midLat);
+    const ky = 110.57;
+    const ax = from.lon * kx, ay = from.lat * ky;
+    const bx = to.lon * kx, by = to.lat * ky;
+    const px = pt.lon * kx, py = pt.lat * ky;
+    const dx = bx - ax, dy = by - ay;
+    const len2 = dx * dx + dy * dy;
+    // Both ends in the same place: everything is "at" it.
+    const t = len2 ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / len2)) : 0;
+    const cx = ax + dx * t, cy = ay + dy * t;
+    return {
+      offKm: Math.hypot(px - cx, py - cy),
+      alongKm: Math.hypot(cx - ax, cy - ay),
+    };
+  }
+
+  // Every settlement the corridor touches, in the order you would meet them.
+  // Reuses the Overpass lookup the village work already added, once per
+  // sample point rather than once per search, and never caches an empty
+  // answer for the reason townsAround documents.
+  async function routeTowns(from, to, corridorMetres) {
+    const samples = routeSamples(from, to);
+    const seen = new Map();
+    for (const point of samples) {
+      let names = [];
+      try {
+        names = await settlementsNear(point.lat, point.lon, corridorMetres);
+      } catch (e) {
+        names = [];
+      }
+      const { alongKm } = projectOntoRoute(point, from, to);
+      names.forEach((n) => {
+        const key = n.toLowerCase().trim();
+        if (!seen.has(key)) seen.set(key, { name: n, alongKm });
+      });
+      if (seen.size >= ROUTE_TOWN_LIMIT) break;
+    }
+    const ends = [String(from.name || "").toLowerCase().trim(), String(to.name || "").toLowerCase().trim()];
+    return [...seen.values()]
+      .filter((t) => ends.indexOf(t.name.toLowerCase().trim()) < 0)
+      .sort((a, b) => a.alongKm - b.alongKm)
+      .map((t) => t.name)
+      .slice(0, ROUTE_TOWN_LIMIT);
+  }
+
+  // The anchor placement uses. A circle big enough to hold the whole
+  // corridor, so nothing on the way is refused before the precise
+  // distance-to-the-line test below gets to see it.
+  function routeAnchor(route) {
+    const from = route.from, to = route.to;
+    const spanKm = haversineKm(from.lat, from.lon, to.lat, to.lon);
+    const corridorKm = (route.miles || DEFAULT_CORRIDOR_MILES) / MILES_PER_KM;
+    return {
+      name: `${from.name} to ${to.name}`,
+      lat: (from.lat + to.lat) / 2,
+      lon: (from.lon + to.lon) / 2,
+      miles: toMiles(spanKm / 2 + corridorKm) + 1,
+    };
+  }
+
   function renderEventWhere(centre) {
     const areas = loadPicks().filter((p) => p.major && p.lat != null);
     const miles = centre ? anchorMiles(centre) : DEFAULT_ANCHOR_MILES;
-    return `
+    const route = eventSearch.route;
+    const modeRow = `
       <div class="ev-field-label">Where</div>
+      <div class="search-chips">
+        <button class="search-chip${route ? "" : " on"}" data-ev-mode="point">Around a place</button>
+        <button class="search-chip${route ? " on" : ""}" data-ev-mode="route">On the way somewhere</button>
+      </div>
+    `;
+
+    if (route) return modeRow + renderEventRoute(route);
+
+    return `
+      ${modeRow}
       <p class="ev-where-now">${
         centre
           ? `Around <b>${esc(centre.name)}</b>, within ${miles} miles`
@@ -9278,6 +9480,53 @@ ${(() => {
     `;
   }
 
+  function setEventRouteEnd(which, place) {
+    if (!eventSearch.route) eventSearch.route = { from: null, to: null, miles: DEFAULT_CORRIDOR_MILES };
+    eventSearch.route[which] = place;
+    eventSearch.editing = true;
+    renderEvents();
+  }
+
+  function renderEventRoute(route) {
+    const miles = route.miles || DEFAULT_CORRIDOR_MILES;
+    const set = (p) => (p ? `<b>${esc(p.name)}</b>` : "not set");
+    return `
+      <p class="ev-where-now">${
+        route.from && route.to
+          ? `From ${set(route.from)} to ${set(route.to)}, up to ${miles} miles off the road`
+          : "Say where you are setting off from and where you are heading"
+      }</p>
+      <label class="ev-route-label" for="evRouteFrom">From</label>
+      <form class="search-bar ev-where-form" id="evRouteFromForm">
+        <input type="text" id="evRouteFrom" placeholder="Setting off from…" autocomplete="off"
+               value="${esc(route.from ? route.from.name : "")}" />
+        <button type="submit" aria-label="Use this starting point">Set</button>
+      </form>
+      <div class="suggest-list" id="evRouteFromSuggest" role="listbox" hidden></div>
+
+      <label class="ev-route-label" for="evRouteTo">To</label>
+      <form class="search-bar ev-where-form" id="evRouteToForm">
+        <input type="text" id="evRouteTo" placeholder="Heading for…" autocomplete="off"
+               value="${esc(route.to ? route.to.name : "")}" />
+        <button type="submit" aria-label="Use this destination">Set</button>
+      </form>
+      <div class="suggest-list" id="evRouteToSuggest" role="listbox" hidden></div>
+
+      <div class="ev-field-label">How far off the road</div>
+      <div class="search-chips">
+        ${CORRIDOR_MILES.map(
+          (m) =>
+            `<button class="search-chip${m === miles ? " on" : ""}" data-ev-corridor="${m}">${m} miles</button>`
+        ).join("")}
+      </div>
+      <p class="settings-hint">
+        This is a corridor between the two places, not the road itself — so a route that
+        loops a long way round a firth or a loch may have stops this misses. Widening it
+        is the fix.
+      </p>
+    `;
+  }
+
   // One way to change the centre, from any of the five things that can. The
   // form stays open: changing where you are looking is a step in setting up
   // a search, not the end of one.
@@ -9307,8 +9556,21 @@ ${(() => {
       return `
         <button class="card ev-asked" id="evEdit">
           <span class="ev-asked-main">
-            <b>${centre ? esc(centre.name) : "Nearby"}</b>
-            <span class="ev-asked-meta">${esc(w.label)}${w.fromTime ? `, from ${esc(w.fromTime)}` : ""} · ${esc(kinds)}</span>
+            <b>${
+              // A journey is described by both ends. The bar said only the
+              // centre, which for a route is the trip's anchor - so a search
+              // from Edinburgh to Perth summarised itself as "Edinburgh",
+              // and the one thing you would check before searching again was
+              // the one thing it did not say.
+              eventSearch.route && eventSearch.route.from && eventSearch.route.to
+                ? `${esc(eventSearch.route.from.name)} → ${esc(eventSearch.route.to.name)}`
+                : centre
+                ? esc(centre.name)
+                : "Nearby"
+            }</b>
+            <span class="ev-asked-meta">${esc(w.label)}${w.fromTime ? `, from ${esc(w.fromTime)}` : ""} · ${esc(kinds)}${
+              eventSearch.route ? ` · within ${eventSearch.route.miles || DEFAULT_CORRIDOR_MILES} miles of the road` : ""
+            }</span>
           </span>
           <span class="ev-asked-change">${eventSearch.status === "loading" ? "Looking…" : "Change"}</span>
         </button>
@@ -9847,6 +10109,54 @@ ${(() => {
       (p) => setEventCentre({ name: p.name, lat: p.lat, lon: p.lon, miles: anchorMiles(evCentreNow()) })
     );
 
+    view.querySelectorAll("[data-ev-mode]").forEach((btn) =>
+      btn.addEventListener("click", () => {
+        const mode = btn.getAttribute("data-ev-mode");
+        if (mode === "route") {
+          // Starting from where you already are is very nearly always right:
+          // the trip's own centre is where the drive begins.
+          const now = evCentreNow();
+          eventSearch.route = eventSearch.route || {
+            from: now && now.lat != null ? { name: now.name, lat: now.lat, lon: now.lon } : null,
+            to: null,
+            miles: DEFAULT_CORRIDOR_MILES,
+          };
+        } else {
+          eventSearch.route = null;
+        }
+        eventSearch.editing = true;
+        renderEvents();
+      })
+    );
+
+    view.querySelectorAll("[data-ev-corridor]").forEach((btn) =>
+      btn.addEventListener("click", () => {
+        if (!eventSearch.route) return;
+        eventSearch.route.miles = Number(btn.getAttribute("data-ev-corridor"));
+        eventSearch.editing = true;
+        renderEvents();
+      })
+    );
+
+    const routeEnd = (which, inputId, suggestId, formId) => {
+      const input = document.getElementById(inputId);
+      attachPlaceSuggest(input, document.getElementById(suggestId), (p) =>
+        setEventRouteEnd(which, { name: p.name, lat: p.lat, lon: p.lon })
+      );
+      const form = document.getElementById(formId);
+      if (form) {
+        form.addEventListener("submit", async (e) => {
+          e.preventDefault();
+          const text = input && input.value.trim();
+          if (!text) return;
+          const found = await anchorFromText(text, DEFAULT_CORRIDOR_MILES);
+          if (found) setEventRouteEnd(which, { name: found.name, lat: found.lat, lon: found.lon });
+        });
+      }
+    };
+    routeEnd("from", "evRouteFrom", "evRouteFromSuggest", "evRouteFromForm");
+    routeEnd("to", "evRouteTo", "evRouteToSuggest", "evRouteToForm");
+
     const whereForm = document.getElementById("evWhereForm");
     if (whereForm) {
       whereForm.addEventListener("submit", async (e) => {
@@ -10208,7 +10518,7 @@ ${(() => {
   async function runOneAngle(angle, ctx, generation) {
     eventSearch.angles[angle.key] = "running";
     scheduleEventsRedraw();
-    const answer = await askOneAngle(ctx.key, ctx.centre, ctx.window, ctx.radius, angle, ctx.towns);
+    const answer = await askOneAngle(ctx.key, ctx.centre, ctx.window, ctx.radius, angle, ctx.towns, ctx.route);
     if (generation !== eventGeneration) return;
 
     // An angle that answered nothing at all is the one case worth calling a
@@ -10223,6 +10533,15 @@ ${(() => {
       eventQueue.push(async () => {
         const placed = await placeOne(entry, ctx);
         if (generation !== eventGeneration || !placed) return;
+        const onRoute = measureAgainstRoute(placed, ctx.route);
+        if (!onRoute.keep) {
+          eventsDropped.offRoute = (eventsDropped.offRoute || 0) + 1;
+          return;
+        }
+        if (onRoute.offKm != null) {
+          placed.offRouteMi = toMiles(onRoute.offKm);
+          placed.alongKm = onRoute.alongKm;
+        }
         eventSearch.results.push(placed);
         sortEventsByWhen(eventSearch.results);
       });
@@ -10339,7 +10658,21 @@ ${(() => {
       renderEvents();
       return;
     }
-    const centre = eventSearch.centre || loadAnchor() || derivedAnchor();
+    // A journey is described by its two ends; a search around a place by one
+    // centre. Everything downstream wants a centre and a radius, so a route
+    // is turned into the circle that contains its corridor - wide enough that
+    // nothing on the way is refused before the precise distance-to-the-line
+    // test gets to see it.
+    const route = eventSearch.route;
+    if (route && (!route.from || !route.to)) {
+      eventSearch.status = "error";
+      eventSearch.error = route.from
+        ? "Say where you are heading, and this will look along the way."
+        : "Say where you are setting off from and where you are heading.";
+      renderEvents();
+      return;
+    }
+    const centre = route ? routeAnchor(route) : eventSearch.centre || loadAnchor() || derivedAnchor();
     if (!centre || centre.lat == null) {
       eventSearch.status = "error";
       eventSearch.error = "Say where to look first — tap “Choose where” above.";
@@ -10398,6 +10731,7 @@ ${(() => {
 
     const ctx = {
       key,
+      route,
       centre,
       window,
       radius,
@@ -10413,7 +10747,9 @@ ${(() => {
     // Bakewell" into a question about places that actually have parish halls.
     // Cached per area, so a second search of the same place pays nothing.
     try {
-      ctx.towns = await townsAround(centre, radius);
+      ctx.towns = route
+        ? await routeTowns(route.from, route.to, (route.miles || DEFAULT_CORRIDOR_MILES) * 1609)
+        : await townsAround(centre, radius);
     } catch (e) {
       // The prompt falls back to the radius wording. Never fatal.
     }
@@ -18561,6 +18897,15 @@ ${(() => {
   // anything.
   window.__tripTest = {
     ASSISTANTS,
+    get eventResults() { return eventSearch.results; },
+    get eventCtx() { return eventSearch.ctx; },
+    // Setting both ends normally means two lookups against a live geocoder.
+    setEventRoute: (from, to) => {
+      eventSearch.route = { from, to, miles: DEFAULT_CORRIDOR_MILES };
+      eventSearch.editing = true;
+      renderEvents();
+    },
+    projectOntoRoute,
     openAnchorSheet,
     openSettings,
     loadPicks,
