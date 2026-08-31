@@ -9064,6 +9064,73 @@ ${(() => {
     return `<button class="link-btn ev-handoff-link" id="evHandoff">Ask somewhere else and paste the answer</button>`;
   }
 
+  // Where and how far used to live in a modal reached from this form, and
+  // that modal closed itself on every single tap - so choosing a place shut
+  // it, and setting the distance meant opening it again, choosing again, and
+  // watching it shut again. It never said what you had chosen either, so the
+  // only record of your own choice was remembering you had made it.
+  //
+  // It is four questions - where, how far, when, what - and they are one
+  // question. They are on one panel now, nothing closes under your thumb,
+  // and the answer is written down where you can see it.
+  function renderEventWhere(centre) {
+    const areas = loadPicks().filter((p) => p.major && p.lat != null);
+    const miles = centre ? anchorMiles(centre) : DEFAULT_ANCHOR_MILES;
+    return `
+      <div class="ev-field-label">Where</div>
+      <p class="ev-where-now">${
+        centre
+          ? `Around <b>${esc(centre.name)}</b>, within ${miles} miles`
+          : "Nowhere chosen yet — pick a place to look around"
+      }</p>
+      ${
+        areas.length
+          ? `<div class="search-chips">${areas
+              .map(
+                (p) =>
+                  `<button class="search-chip${
+                    centre && centre.name === p.name ? " on" : ""
+                  }" data-ev-where="${esc(p.id)}">${esc(p.name)}</button>`
+              )
+              .join("")}</div>`
+          : ""
+      }
+      <form class="search-bar ev-where-form" id="evWhereForm">
+        <input type="text" id="evWhereInput" placeholder="A town or postcode…" autocomplete="off" />
+        <button type="submit" aria-label="Use this place">Set</button>
+      </form>
+      <div class="search-chips">
+        <button class="search-chip" id="evWhereHere">${icon("pin", { size: 15, cls: "ico-inline" })} Where I am</button>
+        <button class="search-chip" id="evWhereMap">${icon("map", { size: 15, cls: "ico-inline" })} Point at it</button>
+      </div>
+      <p class="settings-hint" id="evWhereStatus"></p>
+
+      <div class="ev-field-label">How far</div>
+      <div class="search-chips">
+        ${ANCHOR_MILES.map(
+          (m) =>
+            `<button class="search-chip${
+              centre && m === miles ? " on" : ""
+            }" data-ev-miles="${m}">${m} miles</button>`
+        ).join("")}
+      </div>
+    `;
+  }
+
+  // One way to change the centre, from any of the five things that can. The
+  // form stays open: changing where you are looking is a step in setting up
+  // a search, not the end of one.
+  function setEventCentre(next) {
+    if (!next || next.lat == null) return;
+    const chosen = Object.assign({}, next);
+    delete chosen.derived;
+    delete chosen.spread;
+    eventSearch.centre = chosen;
+    saveAnchor(chosen);
+    eventSearch.editing = true;
+    renderEvents();
+  }
+
   function renderEventsSearchBar() {
     const w = eventWindow(eventSearch.when);
     const centre = eventSearch.centre || loadAnchor() || derivedAnchor();
@@ -9104,7 +9171,7 @@ ${(() => {
           <b>${centre ? `What's on near ${esc(centre.name)}` : "What's on"}</b>
           <button class="link-btn" id="evAskDone">Done</button>
         </div>
-        <button class="link-btn ev-ask-where" id="evCentre">${centre ? "Somewhere else" : "Choose where"}</button>
+        ${renderEventWhere(centre)}
         <div class="ev-field-label">When</div>
         <div class="search-chips">
           ${EVENT_WINDOWS.map(
@@ -9581,13 +9648,83 @@ ${(() => {
       });
     }
 
-    const centreBtn = document.getElementById("evCentre");
-    if (centreBtn) {
-      centreBtn.addEventListener("click", () => {
-        openAnchorSheet(() => {
-          eventSearch.centre = loadAnchor();
-          renderEvents();
-        });
+    // Where and how far, all of it in place. Every one of these keeps the
+    // panel open - you are still describing the search.
+    const evCentreNow = () => eventSearch.centre || loadAnchor() || derivedAnchor();
+
+    view.querySelectorAll("[data-ev-where]").forEach((btn) =>
+      btn.addEventListener("click", () => {
+        const p = loadPicks().find((x) => x.id === btn.getAttribute("data-ev-where"));
+        if (!p) return;
+        // Keeping the distance already chosen: picking a different town is
+        // not a statement about how far you will travel from it.
+        const now = evCentreNow();
+        setEventCentre({ name: p.name, lat: p.lat, lon: p.lon, miles: anchorMiles(now), fromPick: true });
+      })
+    );
+
+    view.querySelectorAll("[data-ev-miles]").forEach((btn) =>
+      btn.addEventListener("click", () => {
+        const now = evCentreNow();
+        if (!now || now.lat == null) {
+          const el = document.getElementById("evWhereStatus");
+          if (el) el.textContent = "Pick somewhere to look around first.";
+          return;
+        }
+        setEventCentre(Object.assign({}, now, { miles: Number(btn.getAttribute("data-ev-miles")) }));
+      })
+    );
+
+    const whereSay = (t) => {
+      const el = document.getElementById("evWhereStatus");
+      if (el) el.textContent = t;
+    };
+
+    const whereForm = document.getElementById("evWhereForm");
+    if (whereForm) {
+      whereForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const text = document.getElementById("evWhereInput").value.trim();
+        if (!text) return;
+        whereSay("Looking that up…");
+        const found = await anchorFromText(text, anchorMiles(evCentreNow()));
+        if (!found) return whereSay(`Couldn't find "${text}". Try a town, or a postcode like PH16.`);
+        setEventCentre(found);
+      });
+    }
+
+    const whereHere = document.getElementById("evWhereHere");
+    if (whereHere) {
+      whereHere.addEventListener("click", async () => {
+        whereSay("Finding you…");
+        try {
+          const pos = await currentPosition();
+          const place = await reverseGeocode(pos.lat, pos.lon).catch(() => null);
+          setEventCentre({
+            name: place || "where you are",
+            lat: pos.lat,
+            lon: pos.lon,
+            miles: anchorMiles(evCentreNow()),
+          });
+        } catch (err) {
+          whereSay("Couldn't get your location.");
+        }
+      });
+    }
+
+    const whereMap = document.getElementById("evWhereMap");
+    if (whereMap) {
+      whereMap.addEventListener("click", () => {
+        openMapPicker(
+          (spot) =>
+            setEventCentre({
+              name: spot.name,
+              lat: spot.lat,
+              lon: spot.lon,
+              miles: anchorMiles(evCentreNow()),
+            }),
+          { title: "Where should I look?" }
+        );
       });
     }
 
@@ -13950,7 +14087,22 @@ ${(() => {
         // board can offer rather than doing nothing visible.
         const base = current || derivedAnchor();
         if (!base) return say("Pick somewhere to search around first.");
-        apply(Object.assign({}, base, { miles: next }));
+        const chosen = Object.assign({}, base, { miles: next });
+        delete chosen.derived;
+        delete chosen.spread;
+        useAnchorForThisSearch(chosen);
+        saveAnchor(chosen);
+        // The sheet used to close here, the same way it closed on every
+        // other tap - so setting a place and then a distance meant opening
+        // it twice, and it never showed which distance was on. Choosing how
+        // far is a step in describing a search, not the end of one, so it
+        // stays open and re-renders on the new state. The list underneath
+        // still refreshes; you just see it when you are done here.
+        if (!onDone) {
+          renderSearchOverlay();
+          if (pickSearch.query && pickSearch.status !== "idle") runSearch(pickSearch.query);
+        }
+        openAnchorSheet(onDone);
       })
     );
     placeModal.querySelectorAll("[data-anchor-pick]").forEach((btn) =>

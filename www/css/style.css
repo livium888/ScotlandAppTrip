@@ -3893,3 +3893,15 @@ html, body {
   background: var(--warn);
   margin-right: var(--space-2);
 }
+
+
+/* The line that says what the search is currently set to. It exists because
+   the old modal said nothing at all: it closed on every tap, so the only
+   record of the choice you had just made was remembering you had made it. */
+.ev-where-now {
+  margin: 0 0 var(--space-2);
+  font-size: var(--type-sm);
+  color: var(--text-muted);
+}
+.ev-where-now b { color: var(--text); }
+.ev-where-form { margin-bottom: var(--space-2); }

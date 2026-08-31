@@ -17,6 +17,7 @@ const wwwDir = join(here, "..", "www");
 const PORT = 8946;
 
 const SUITES = [
+  "test_onepanel.mjs",
   "test_find.mjs",
   "test_nag.mjs",
   "test_first.mjs",
