@@ -872,15 +872,6 @@
         "is turned off rather than answered from memory. Ticking it wrongly is not dangerous: " +
         "results that come back with nothing to link to are marked as unchecked either way.",
     },
-    ondevice: {
-      label: "On this phone",
-      canGround: false,
-      needsKey: false,
-      needsBaseUrl: false,
-      note:
-        "A model downloaded onto the phone itself. No key, no cost, no signal needed, and " +
-        "nothing leaves the device - but it cannot search the web, so it cannot find events.",
-    },
     ollama: {
       label: "Ollama on this network",
       canGround: false,
@@ -930,106 +921,9 @@
   function aiReady() {
     const p = aiProvider();
     const s = loadTripSettings();
-    // A model on the phone is ready when the phone has one. There is no key
-    // to check and no address to reach.
-    if (aiProviderKey() === "ondevice") return localModelReady();
     if (p.needsKey && !(aiProviderKey() === "gemini" ? s.geminiKey : s.aiKey).trim()) return false;
     if (p.needsBaseUrl && !aiBaseUrl()) return false;
     return true;
-  }
-
-  // ---------- A model living on the phone ----------
-  // The plugin is native and cannot be reached from a browser at all, so
-  // everything here copes with it simply not being there: on a desktop, or
-  // on a phone where nothing has been downloaded yet, the provider reports
-  // itself unready and the existing send-them-to-Settings path handles it.
-  const LOCAL_MODELS = [
-    {
-      id: "qwen2.5-1.5b",
-      label: "Qwen2.5 1.5B",
-      bytes: 986 * 1024 * 1024,
-      name: "qwen2.5-1.5b-instruct-q4_k_m.gguf",
-      url: "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf",
-      note: "The one that will actually run on a mid-range phone.",
-    },
-    {
-      id: "qwen2.5-3b",
-      label: "Qwen2.5 3B",
-      bytes: 1930 * 1024 * 1024,
-      name: "qwen2.5-3b-instruct-q4_k_m.gguf",
-      url: "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf",
-      note: "Better answers, and about twice the size. Worth it on a recent phone.",
-    },
-  ];
-
-  // What the phone last said it had. Cached because Settings and every
-  // readiness check would otherwise cross the bridge on each render.
-  let localModelState = { checked: false, present: false, name: "", bytes: 0 };
-
-  function bytesLabel(n) {
-    const b = Number(n) || 0;
-    if (b >= 1024 * 1024 * 1024) return `${(b / (1024 * 1024 * 1024)).toFixed(1)} GB`;
-    return `${Math.round(b / (1024 * 1024))} MB`;
-  }
-
-  function localModelPlugin() {
-    return (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.LocalModel) || null;
-  }
-
-  async function refreshLocalModel() {
-    const plugin = localModelPlugin();
-    if (!plugin || !plugin.status) {
-      localModelState = { checked: true, present: false, name: "", bytes: 0 };
-      return localModelState;
-    }
-    try {
-      const st = (await plugin.status()) || {};
-      localModelState = {
-        checked: true,
-        present: !!st.present,
-        name: st.name || "",
-        bytes: Number(st.bytes) || 0,
-      };
-    } catch (e) {
-      localModelState = { checked: true, present: false, name: "", bytes: 0 };
-    }
-    return localModelState;
-  }
-
-  function localModelReady() {
-    return !!localModelPlugin() && localModelState.present;
-  }
-
-  async function callLocalModel(prompt, { json = false, maxTokens = 0 } = {}) {
-    lastAiPrompt = prompt;
-    const plugin = localModelPlugin();
-    if (!plugin || !plugin.generate) {
-      throw new Error("There is no model on this phone yet — Settings can download one.");
-    }
-    let out;
-    try {
-      out = await plugin.generate({ prompt, json: !!json, maxTokens: maxTokens || 0 });
-    } catch (e) {
-      throw new Error(
-        `The model on this phone couldn't answer: ${(e && e.message) || e}. A large model on a small ` +
-          `phone can also simply run out of memory, in which case the smaller one is the answer.`,
-        { cause: e }
-      );
-    }
-    const text = (out && out.text) || "";
-    // Counted like any other, so the usage screen does not quietly stop being
-    // true the moment somebody switches to this. It is free, and the screen
-    // says that separately - what it costs and what it did are two questions.
-    recordAiUsage(
-      {
-        promptTokenCount: (out && out.inTokens) || 0,
-        candidatesTokenCount: (out && out.outTokens) || 0,
-      },
-      { grounded: false, model: `ondevice/${localModelState.name || "local"}` }
-    );
-    // Nothing was looked up, so there is nothing to cite - and the unsourced
-    // check downstream will mark whatever this produces accordingly.
-    return { text, sources: [] };
   }
 
   function aiBaseUrl() {
@@ -1045,7 +939,6 @@
     const which = aiProviderKey();
     const s = loadTripSettings();
     if (which === "gemini") return callGemini(s.geminiKey.trim(), prompt, options);
-    if (which === "ondevice") return callLocalModel(prompt, options);
     return callOpenAICompatible(prompt, options);
   }
 
@@ -3212,12 +3105,6 @@
     appBanner.innerHTML = "";
   }
 
-  // Ask the phone what it has, once, at startup. Everything that checks
-  // readiness reads the cached answer rather than crossing the bridge.
-  if (loadTripSettings().aiProvider === "ondevice") {
-    refreshLocalModel().catch(() => {});
-  }
-
   window.addEventListener("online", () => {
     refreshBanner();
     // Signal coming back is the one moment worth asking again about
@@ -3980,32 +3867,6 @@
                 : ""
             }
             ${
-              aiProviderKey() === "ondevice"
-                ? !localModelPlugin()
-                  ? `<p class="settings-hint warn-hint">
-                       This needs the app on a phone. In a browser there is nowhere to put a model.
-                     </p>`
-                  : localModelState.present
-                  ? `<p class="settings-hint"><b>${esc(localModelState.name)}</b> is on this phone,
-                       using ${esc(bytesLabel(localModelState.bytes))}.</p>
-                     <button class="modal-btn" id="removeModelBtn" style="width:100%;">
-                       ${icon("trash", { size: 17, cls: "ico-inline" })} Delete the model
-                     </button>`
-                  : `<p class="settings-hint">
-                       Nothing downloaded yet. These are large files — do it on Wi-Fi, and you can
-                       delete one again at any time.
-                     </p>
-                     ${LOCAL_MODELS.map(
-                       (m) => `<button class="modal-btn" data-get-model="${esc(m.id)}" style="width:100%;margin-top:8px;">
-                         ${icon("download", { size: 17, cls: "ico-inline" })}
-                         ${esc(m.label)} · ${esc(bytesLabel(m.bytes))}
-                       </button>
-                       <p class="settings-hint">${esc(m.note)}</p>`
-                     ).join("")}
-                     <p class="settings-hint" id="modelProgress"></p>`
-                : ""
-            }
-            ${
               aiProvider().groundIsAChoice
                 ? `<label class="settings-check">
                      <input type="checkbox" id="setAiGrounded"${s.aiGrounded ? " checked" : ""} />
@@ -4252,43 +4113,6 @@ ${(() => {
         : "No map area stored yet — maps will need signal.";
     };
     showTileCount();
-
-    placeModal.querySelectorAll("[data-get-model]").forEach((btn) =>
-      btn.addEventListener("click", async () => {
-        const model = LOCAL_MODELS.find((m) => m.id === btn.getAttribute("data-get-model"));
-        const plugin = localModelPlugin();
-        if (!model || !plugin || !plugin.download) return;
-        const say = (t) => {
-          const el = document.getElementById("modelProgress");
-          if (el) el.textContent = t;
-        };
-        say(`Downloading ${model.label}… this is ${bytesLabel(model.bytes)}, so it will take a while.`);
-        try {
-          await plugin.download({ url: model.url, name: model.name });
-          await refreshLocalModel();
-          openSettings();
-          toast(`${model.label} is on this phone now`);
-        } catch (e) {
-          say(`That didn't download: ${(e && e.message) || e}`);
-        }
-      })
-    );
-
-    const removeModel = document.getElementById("removeModelBtn");
-    if (removeModel) {
-      removeModel.addEventListener("click", async () => {
-        const plugin = localModelPlugin();
-        if (!plugin || !plugin.remove) return;
-        try {
-          await plugin.remove();
-        } catch (e) {
-          // Nothing to do about it beyond telling the truth below.
-        }
-        await refreshLocalModel();
-        openSettings();
-        toast(localModelState.present ? "Couldn't delete it" : "Deleted");
-      });
-    }
 
     const groundBox = document.getElementById("setAiGrounded");
     if (groundBox) {
@@ -19745,7 +19569,6 @@ ${(() => {
   // anything.
   window.__tripTest = {
     ASSISTANTS,
-    refreshLocalModel,
     AI_PROVIDERS,
     get eventResults() { return eventSearch.results; },
     callModel,
