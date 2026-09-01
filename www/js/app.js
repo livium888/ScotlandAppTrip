@@ -8180,6 +8180,7 @@ ${(() => {
     // Kept on the saved copy too: an event that arrived by hand should still
     // say so once it is in your list, not only while it is a search result.
     "pastedIn",
+    "unsourced",
   ];
 
   function copyEventFields(from, to) {
@@ -9166,6 +9167,19 @@ ${(() => {
       // but to hand over the page it came from.
       aiSuggested: true,
       unverified: true,
+      // A stronger claim than "unverified", and a different one. Every AI
+      // event is unverified - a model suggested it, go and check. This says
+      // nothing was looked up at all, so there is not even a page to check
+      // against.
+      //
+      // It matters because askOneAngle asks grounded first and then retries
+      // as plain JSON when the grounded reply will not parse. That retry is a
+      // real fix for a real problem - grounded answers come back as prose
+      // with citations and sometimes are not valid JSON - but it is
+      // ungrounded, so whenever the first attempt fails the app was quietly
+      // accepting an answer nothing had looked up and showing it exactly like
+      // one that had. The sources array already knew; nothing was reading it.
+      unsourced: !sources.length,
       sources,
     });
   }
@@ -9388,6 +9402,14 @@ ${(() => {
               // Not a button, because there is nowhere to go. An answer you
               // cannot click through to check should say so, which is the
               // same standard the "check it's on" badge already sets.
+              //
+              // Its own block on purpose: two of these separated by a comma
+              // inside one ${} is the comma operator, which evaluates both
+              // and keeps the last. The first badge was being built and
+              // thrown away, silently, with nothing to show it had happened.
+              e.unsourced && !e.pastedIn ? `<span class="ev-tag doubt">not checked — no source</span>` : ""
+            }
+            ${
               e.pastedIn && !e.listedAt ? `<span class="ev-tag soft">pasted in, no link</span>` : ""
             }
             ${
@@ -10502,6 +10524,19 @@ ${(() => {
           <button class="link-btn" id="evFresh">Look again</button></p>`;
       }
       html += renderEventsLeftOutNote();
+
+      // Said once, above everything, because a badge per row is easy to skim
+      // past and the number is the part that tells you how much to trust the
+      // screen. A search where every answer is unsourced is a different
+      // thing from one where a couple are.
+      const unsourced = fresh.filter((e) => e.unsourced && !e.pastedIn).length;
+      if (unsourced) {
+        html += `<p class="settings-hint ev-note ev-unsourced-note">${
+          unsourced === fresh.length
+            ? `Nothing here was looked up. The model answered without searching, so these are what it believes rather than what it found — worth checking every one before going.`
+            : `${unsourced} of these came back with no source, so nothing was looked up for them. They are marked.`
+        }</p>`;
+      }
 
       // Narrowing what is already on screen. Choosing kinds before a search
       // is a real decision with a real price - each one is a separate request
@@ -19436,10 +19471,10 @@ ${(() => {
   window.__tripTest = {
     ASSISTANTS,
     AI_PROVIDERS,
+    get eventResults() { return eventSearch.results; },
     callModel,
     aiCanGround,
     aiReady,
-    get eventResults() { return eventSearch.results; },
     get eventCtx() { return eventSearch.ctx; },
     // Setting both ends normally means two lookups against a live geocoder.
     setEventRoute: (from, to) => {

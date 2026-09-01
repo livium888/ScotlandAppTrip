@@ -4043,3 +4043,7 @@ html, body {
 
 /* A capability the chosen model does not have is worth more than a hint. */
 .warn-hint { color: var(--warn); }
+
+/* An answer nothing looked up. Warmer than an error, louder than a hint. */
+.ev-tag.doubt { background: var(--warn-bg); color: var(--warn); }
+.ev-unsourced-note { color: var(--warn); }
