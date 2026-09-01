@@ -964,7 +964,7 @@
 
   // What the phone last said it had. Cached because Settings and every
   // readiness check would otherwise cross the bridge on each render.
-  let localModelState = { checked: false, present: false, name: "", bytes: 0 };
+  let localModelState = { checked: false, present: false, engine: false, file: false, name: "", bytes: 0 };
 
   function bytesLabel(n) {
     const b = Number(n) || 0;
@@ -979,19 +979,25 @@
   async function refreshLocalModel() {
     const plugin = localModelPlugin();
     if (!plugin || !plugin.status) {
-      localModelState = { checked: true, present: false, name: "", bytes: 0 };
+      localModelState = { checked: true, present: false, engine: false, file: false, name: "", bytes: 0 };
       return localModelState;
     }
     try {
       const st = (await plugin.status()) || {};
+      // Three states, not two. "There is a file but this build cannot run
+      // it" is a different problem from "there is no file", and telling
+      // somebody to download a gigabyte that will not run would be worse
+      // than useless.
       localModelState = {
         checked: true,
         present: !!st.present,
+        engine: st.engine !== false,
+        file: !!st.file,
         name: st.name || "",
         bytes: Number(st.bytes) || 0,
       };
     } catch (e) {
-      localModelState = { checked: true, present: false, name: "", bytes: 0 };
+      localModelState = { checked: true, present: false, engine: false, file: false, name: "", bytes: 0 };
     }
     return localModelState;
   }
@@ -3985,6 +3991,20 @@
                   ? `<p class="settings-hint warn-hint">
                        This needs the app on a phone. In a browser there is nowhere to put a model.
                      </p>`
+                  : !localModelState.engine
+                  ? `<p class="settings-hint warn-hint">
+                       This build of the app has no inference engine, so it cannot run a model even
+                       with one downloaded. Nothing to fix here — it needs a build that includes it.
+                     </p>
+                     ${
+                       localModelState.file
+                         ? `<p class="settings-hint">There is a model file here
+                              (${esc(bytesLabel(localModelState.bytes))}) doing nothing.</p>
+                            <button class="modal-btn" id="removeModelBtn" style="width:100%;">
+                              ${icon("trash", { size: 17, cls: "ico-inline" })} Delete it
+                            </button>`
+                         : ""
+                     }`
                   : localModelState.present
                   ? `<p class="settings-hint"><b>${esc(localModelState.name)}</b> is on this phone,
                        using ${esc(bytesLabel(localModelState.bytes))}.</p>
