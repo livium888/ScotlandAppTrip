@@ -8968,6 +8968,9 @@ ${(() => {
     // far off the road you are willing to go. Null means the ordinary
     // search-around-a-point.
     route: null,
+    // Which kind the results are narrowed to on screen, or null for all of
+    // them. Costs nothing and asks nothing - the answers are already here.
+    showKind: null,
     // Whether the per-kind prompt editors are showing. Nine pencils inside an
     // already-busy form is the same mistake one level down, and editing what
     // the model is asked is a thing you do once, not every search.
@@ -10170,7 +10173,7 @@ ${(() => {
     // trip planner both already had, and fixed this way.
     beginRenderPass();
     const previousScroll = view.scrollTop;
-    const screenId = `${eventSearch.when}|${eventSearch.editing}|${eventSearch.tuning}|${eventSearch.indoorOnly}|${eventSearch.showHeld}`;
+    const screenId = `${eventSearch.when}|${eventSearch.editing}|${eventSearch.tuning}|${eventSearch.indoorOnly}|${eventSearch.showHeld}|${eventSearch.showKind}`;
     // A redraw destroys whatever is focused, so a date being typed into the
     // custom-window editor is lost mid-edit. The search overlay guards this
     // same way: while somebody is in a field, the screen waits.
@@ -10268,12 +10271,48 @@ ${(() => {
           <button class="link-btn" id="evFresh">Look again</button></p>`;
       }
       html += renderEventsLeftOutNote();
+
+      // Narrowing what is already on screen. Choosing kinds before a search
+      // is a real decision with a real price - each one is a separate request
+      // - so that stays where it is. This is the free half, and the first
+      // moment you can narrow from knowledge rather than guesswork: you can
+      // see there are six markets before deciding you only want markets.
+      //
+      // Counted before filtering, so the numbers do not shift under you as
+      // soon as you use them. Only kinds actually found get a chip; chips for
+      // the searches that came back empty would be ways to reach an empty
+      // list.
+      const foundCounts = {};
+      fresh.forEach((e) => {
+        (e.kinds || []).forEach((k) => {
+          foundCounts[k] = (foundCounts[k] || 0) + 1;
+        });
+      });
+      const foundKinds = EVENT_ANGLES.filter((a) => foundCounts[a.key]);
+      if (foundKinds.length > 1) {
+        html += `
+          <div class="search-chips ev-found-chips">
+            <button class="search-chip${eventSearch.showKind ? "" : " on"}" data-ev-found="all">All ${fresh.length}</button>
+            ${foundKinds
+              .map(
+                (a) =>
+                  `<button class="search-chip${
+                    eventSearch.showKind === a.key ? " on" : ""
+                  }" data-ev-found="${esc(a.key)}">${esc(a.label)} ${foundCounts[a.key]}</button>`
+              )
+              .join("")}
+          </div>`;
+      }
+      const shown = eventSearch.showKind
+        ? fresh.filter((e) => (e.kinds || []).indexOf(eventSearch.showKind) >= 0)
+        : fresh;
+
       if (!fresh.length) {
         html += `<div class="card"><p class="pick-status">${
           unsaved.length ? "Nothing left once the outdoor ones are hidden." : "Everything found is already saved."
         }</p></div>`;
       }
-      groupEventsByDay(fresh).forEach((day) => {
+      groupEventsByDay(shown).forEach((day) => {
         html += `<div class="ev-day">${esc(eventDayHeading(day.when))} <span class="ev-day-date">${esc(
           humanDate(day.when)
         )}</span></div>`;
@@ -10439,6 +10478,14 @@ ${(() => {
         renderEvents();
       });
     }
+
+    view.querySelectorAll("[data-ev-found]").forEach((b) =>
+      b.addEventListener("click", () => {
+        const k = b.getAttribute("data-ev-found");
+        eventSearch.showKind = k === "all" ? null : k;
+        renderEvents();
+      })
+    );
 
     view.querySelectorAll("[data-ev-ask]").forEach((row) =>
       row.addEventListener("click", () => {
@@ -10659,6 +10706,7 @@ ${(() => {
     eventSearch.stopped = false;
     eventSearch.editing = false;
     eventSearch.showHeld = false;
+    eventSearch.showKind = null;
     eventSearch.indoorOnly = false;
     eventSearch.dismissed = [];
     eventSearch.status = "done";
@@ -10918,6 +10966,7 @@ ${(() => {
     eventSearch.results = [];
     eventSearch.editing = false;
     eventSearch.showHeld = false;
+    eventSearch.showKind = null;
     eventSearch.indoorOnly = false;
     eventSearch.dismissed = [];
     eventSearch.stopped = false;
