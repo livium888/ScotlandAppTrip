@@ -98,14 +98,26 @@ const caps = await page.evaluate(() => {
   return Object.keys(p).map((k) => ({ k, ground: !!p[k].canGround, key: !!p[k].needsKey }));
 });
 check('Gemini is marked as able to search', caps.some((c) => c.k === 'gemini' && c.ground), JSON.stringify(caps));
-check('and the open ones are honestly marked as not',
-  caps.filter((c) => c.k !== 'gemini').every((c) => !c.ground), JSON.stringify(caps));
+// This assertion used to say the open providers cannot search, which was
+// wrong and was my error rather than the field's: an open-weight model is
+// only weights and cannot search, but grounding belongs to the serving
+// stack. OpenRouter's :online, Groq's compound models and Perplexity's Sonar
+// all run open models with a search tool attached. So the OpenAI-compatible
+// provider can be grounded - when the person who configured it says the
+// endpoint searches - and Ollama on your own machine genuinely cannot.
+check('an OpenAI-compatible endpoint may be grounded, because some of them are',
+  caps.some((c) => c.k === 'openai' && c.ground), JSON.stringify(caps));
+check('but a model on your own machine still cannot search',
+  caps.some((c) => /ollama|local/i.test(c.k) && !c.ground), JSON.stringify(caps));
 check('and the local one needs no key',
   caps.some((c) => /ollama|local/i.test(c.k) && !c.key), JSON.stringify(caps));
 
 // ---------- A reasoning call goes wherever you pointed it ----------
 geminiCalls = []; openaiCalls = [];
-await seed({ aiProvider: 'openai', aiBaseUrl: 'https://llm.example.test/v1', aiModel: 'llama-3.3-70b', aiKey: 'x' });
+// Deliberately not ticked: this scenario is about a model that cannot look
+// things up, which is now something you say about the endpoint rather than
+// something true of every open host.
+await seed({ aiProvider: 'openai', aiBaseUrl: 'https://llm.example.test/v1', aiModel: 'llama-3.3-70b', aiKey: 'x', aiGrounded: false });
 await page.evaluate(async () => {
   await window.__tripTest.callModel('say ok', { json: true }).catch(() => {});
 });

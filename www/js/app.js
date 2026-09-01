@@ -233,6 +233,10 @@
       aiBaseUrl: stored.aiBaseUrl || "",
       aiModel: stored.aiModel || "",
       aiKey: stored.aiKey || "",
+      // Whether the endpoint named above searches the web. Off by default:
+      // assuming it does and being wrong is how invented events reach the
+      // screen, and the citation check is a safety net rather than a licence.
+      aiGrounded: !!stored.aiGrounded,
       // Discovered model name, cached so a working key isn't re-probed on
       // every call. Cleared automatically if the model stops resolving.
       geminiModel: stored.geminiModel || "",
@@ -847,13 +851,26 @@
     },
     openai: {
       label: "OpenAI-compatible",
-      canGround: false,
+      canGround: true,
       needsKey: true,
       needsBaseUrl: true,
-      defaultBaseUrl: "https://api.groq.com/openai/v1",
+      defaultBaseUrl: "https://openrouter.ai/api/v1",
       note:
-        "Groq, OpenRouter, Together, LM Studio and most open-model hosts speak this. " +
-        "Good for planning and budgets; it cannot search, so it cannot find events.",
+        "OpenRouter, Groq, Together, Perplexity, LM Studio and most open-model hosts speak this. " +
+        "Some of them can search the web; tick the box below if yours does.",
+      // Marking the whole of this canGround:false was wrong, and the mistake
+      // is worth naming: an open-weight model is only weights and cannot
+      // search, but grounding is a property of the serving stack rather than
+      // the weights. OpenRouter's :online suffix, Groq's compound systems and
+      // Perplexity's Sonar all run open models with a search tool attached.
+      // So whether this endpoint searches is a question about the endpoint,
+      // which only the person who configured it can answer.
+      groundIsAChoice: true,
+      groundHint:
+        "Tick this if the model you named searches the web - an OpenRouter model with :online " +
+        "on the end, a Groq compound model, or a Perplexity Sonar model. Without it, What's on " +
+        "is turned off rather than answered from memory. Ticking it wrongly is not dangerous: " +
+        "results that come back with nothing to link to are marked as unchecked either way.",
     },
     ollama: {
       label: "Ollama on this network",
@@ -867,6 +884,17 @@
     },
   };
 
+  // Some presets, so nobody has to remember that the magic word is ":online".
+  const GROUNDED_PRESETS = [
+    {
+      label: "OpenRouter · Llama 3.3 70B, searching",
+      baseUrl: "https://openrouter.ai/api/v1",
+      model: "meta-llama/llama-3.3-70b-instruct:online",
+    },
+    { label: "Groq · compound", baseUrl: "https://api.groq.com/openai/v1", model: "groq/compound" },
+    { label: "Perplexity · Sonar", baseUrl: "https://api.perplexity.ai", model: "sonar" },
+  ];
+
   function aiProviderKey() {
     const want = loadTripSettings().aiProvider;
     return AI_PROVIDERS[want] ? want : "gemini";
@@ -877,8 +905,16 @@
   }
 
   // Whether the app can currently answer a question that needs the live web.
+  // For Gemini that is a fact; for an OpenAI-compatible endpoint it depends
+  // entirely on which model was named, which only the person who typed it
+  // knows. Getting this wrong is survivable in one direction only, and that
+  // is the direction it errs: an endpoint wrongly ticked returns answers with
+  // nothing to link to, and those get marked unsourced like any other.
   function aiCanGround() {
-    return !!aiProvider().canGround;
+    const p = aiProvider();
+    if (!p.canGround) return false;
+    if (!p.groundIsAChoice) return true;
+    return !!loadTripSettings().aiGrounded;
   }
 
   // What the chosen provider needs before it can be asked anything.
@@ -909,7 +945,7 @@
   // Groq, OpenRouter, Together, LM Studio, Ollama's compatibility endpoint -
   // they all speak this, which is why it is one implementation rather than
   // one per host.
-  async function callOpenAICompatible(prompt, { json = false, maxTokens = 0 } = {}) {
+  async function callOpenAICompatible(prompt, { json = false, maxTokens = 0, grounded = false } = {}) {
     lastAiPrompt = prompt;
     const s = loadTripSettings();
     const base = aiBaseUrl();
@@ -926,7 +962,10 @@
     // The same intent as Gemini's responseMimeType, in the shape these
     // servers expect. Hosts that do not support it ignore it rather than
     // failing, and extractJson is tolerant enough to cope either way.
-    if (json) body.response_format = { type: "json_object" };
+    // Same bargain Gemini makes: JSON mode and search do not go together,
+    // because a searching model answers in prose with citations attached.
+    // extractJson is tolerant enough to find the array inside either.
+    if (json && !grounded) body.response_format = { type: "json_object" };
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), AI_TIMEOUT_MS);
@@ -983,12 +1022,41 @@
         promptTokenCount: u.prompt_tokens || u.promptTokens || 0,
         candidatesTokenCount: u.completion_tokens || u.completionTokens || 0,
       },
-      { grounded: false, model: `${aiProviderKey()}/${model}` }
+      { grounded, model: `${aiProviderKey()}/${model}` }
     );
 
-    // No sources, and that is the point rather than an omission: nothing was
-    // searched, so there is nothing to cite.
-    return { text, sources: [] };
+    return { text, sources: openAiCitations(data, choice) };
+  }
+
+  // Where the citations are, for hosts that produce them. They do not agree:
+  // OpenRouter hangs annotations off the message, Perplexity returns a flat
+  // citations array at the top level and, on newer replies, search_results
+  // with titles. None of these could be tried against the real thing from
+  // where this was written, so it reads all three and shrugs at anything it
+  // does not recognise - and the unsourced check downstream is what makes
+  // being wrong here safe rather than dangerous.
+  function openAiCitations(data, choice) {
+    const out = [];
+    const push = (uri, title) => {
+      if (!uri || typeof uri !== "string") return;
+      if (out.some((s) => s.uri === uri)) return;
+      out.push({ title: title || uri, uri });
+    };
+
+    const anns = (choice && choice.message && choice.message.annotations) || [];
+    if (Array.isArray(anns)) {
+      anns.forEach((a) => {
+        const c = (a && a.url_citation) || {};
+        push(c.url || (a && a.url), c.title || (a && a.title));
+      });
+    }
+    if (Array.isArray(data && data.citations)) {
+      data.citations.forEach((c) => (typeof c === "string" ? push(c) : push(c && c.url, c && c.title)));
+    }
+    if (Array.isArray(data && data.search_results)) {
+      data.search_results.forEach((r) => push(r && r.url, r && r.title));
+    }
+    return out;
   }
 
   async function callGemini(key, prompt, { grounded = false, json = false, maxTokens = 0 } = {}) {
@@ -3798,6 +3866,18 @@
                           placeholder="Paste key" autocomplete="off" />`
                 : ""
             }
+            ${
+              aiProvider().groundIsAChoice
+                ? `<label class="settings-check">
+                     <input type="checkbox" id="setAiGrounded"${s.aiGrounded ? " checked" : ""} />
+                     <span>This model searches the web</span>
+                   </label>
+                   <p class="settings-hint">${esc(aiProvider().groundHint)}</p>
+                   <p class="settings-hint">Known to work:
+                     ${GROUNDED_PRESETS.map((g) => `<b>${esc(g.model)}</b>`).join(", ")}.
+                   </p>`
+                : ""
+            }
 
             <label class="settings-label" for="setGeminiKey">Gemini API key</label>
             <input class="settings-input" type="text" id="setGeminiKey" value="${esc(s.geminiKey)}"
@@ -4033,6 +4113,19 @@ ${(() => {
         : "No map area stored yet — maps will need signal.";
     };
     showTileCount();
+
+    const groundBox = document.getElementById("setAiGrounded");
+    if (groundBox) {
+      groundBox.addEventListener("change", () => {
+        saveTripSettings({
+          aiGrounded: groundBox.checked,
+          aiBaseUrl: ((document.getElementById("setAiBaseUrl") || {}).value || "").trim(),
+          aiModel: ((document.getElementById("setAiModel") || {}).value || "").trim(),
+          aiKey: ((document.getElementById("setAiKey") || {}).value || "").trim(),
+        });
+        openSettings();
+      });
+    }
 
     const provSel = document.getElementById("setAiProvider");
     if (provSel) {
@@ -4360,6 +4453,7 @@ ${(() => {
         aiBaseUrl: ((document.getElementById("setAiBaseUrl") || {}).value || "").trim(),
         aiModel: ((document.getElementById("setAiModel") || {}).value || "").trim(),
         aiKey: ((document.getElementById("setAiKey") || {}).value || "").trim(),
+        aiGrounded: !!(document.getElementById("setAiGrounded") || {}).checked,
         // Only a real model name, never the "tap the button" placeholder the
         // disabled picker shows before it's been populated.
         geminiModel: selectedGeminiModel() || loadTripSettings().geminiModel,
@@ -11213,15 +11307,20 @@ ${(() => {
       renderEvents();
       return;
     }
-    const key = loadTripSettings().geminiKey.trim();
-    if (!key) {
+    // aiCanGround above has already settled whether the chosen model can look
+    // things up. What is left is whether it is set up at all - which is not a
+    // question about Gemini any more, now that an OpenRouter or Perplexity
+    // model can answer this too.
+    if (!aiReady()) {
       eventSearch.status = "error";
       eventSearch.error =
-        "Finding what's on needs an AI key — there is no free map database of events, the way there is for places. " +
-        "Settings has a Gemini key field; the free tier is enough for this.";
+        "Finding what's on needs a model that can search — there is no free map database of events, " +
+        "the way there is for places. Settings is where you choose one; Gemini's free tier covers it, " +
+        "and so does an OpenRouter or Perplexity model that searches.";
       renderEvents();
       return;
     }
+    const key = loadTripSettings().geminiKey.trim();
     // A journey is described by its two ends; a search around a place by one
     // centre. Everything downstream wants a centre and a radius, so a route
     // is turned into the circle that contains its corridor - wide enough that

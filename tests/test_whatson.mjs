@@ -263,8 +263,10 @@ await page.waitForTimeout(400);
 await page.evaluate(() => localStorage.removeItem('event-cache-v1'));
 await page.evaluate(() => document.getElementById('evSearch').click());
 await page.waitForTimeout(700);
-check('with no AI key it says why rather than showing nothing',
-  /needs an AI key/.test(await screen()), (await screen()).slice(0, 300));
+// The wording widened when Gemini stopped being the only model that can do
+// this: it is "a model that can search" now, not "an AI key".
+check('with nothing set up it says why rather than showing nothing',
+  /needs a model that can search|needs an AI key/.test(await screen()), (await screen()).slice(0, 300));
 check('and the events already saved are still there',
   /Saved/.test(await screen()), (await screen()).slice(0, 300));
 
