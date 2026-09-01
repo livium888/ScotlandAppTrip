@@ -227,6 +227,12 @@
       destination: stored.destination !== undefined ? stored.destination : DEFAULT_DESTINATION,
       googleKey: stored.googleKey || "",
       geminiKey: stored.geminiKey || "",
+      // Which model answers. Empty means Gemini, so every install that
+      // predates this keeps working without being asked anything.
+      aiProvider: stored.aiProvider || "gemini",
+      aiBaseUrl: stored.aiBaseUrl || "",
+      aiModel: stored.aiModel || "",
+      aiKey: stored.aiKey || "",
       // Discovered model name, cached so a working key isn't re-probed on
       // every call. Cleared automatically if the model stops resolving.
       geminiModel: stored.geminiModel || "",
@@ -814,6 +820,177 @@
   // A search you can't see the question behind is one you can't correct.
   let lastAiPrompt = "";
 
+  // ---------- Which model answers, and what it can honestly do ----------
+  // Every AI call went to one vendor with one key. That is fine for one
+  // person and impossible for anything shipped: whoever runs the inference
+  // pays, and sending each user off to get a Google API key is a wall most
+  // of them will not climb.
+  //
+  // The distinction that shapes all of this, and the reason it is not a
+  // straight swap: five of the app's calls send tools:[{google_search:{}}].
+  // They are not asking what the model knows, they are asking it to read the
+  // live web and cite what it read - which is why every event carries its
+  // sources. A model with no search does not return fewer events. It invents
+  // them, fluently, with a plausible venue and a real-looking date, and
+  // somebody drives forty minutes to an empty car park.
+  //
+  // So a provider says whether it can search, and everything that depends on
+  // searching refuses rather than guessing. Anything that is pure reasoning -
+  // the budget, the day planner, trip ideas - runs anywhere.
+  const AI_PROVIDERS = {
+    gemini: {
+      label: "Google Gemini",
+      canGround: true,
+      needsKey: true,
+      needsBaseUrl: false,
+      note: "The only one here that can search the web, so it is the only one that can find what's on.",
+    },
+    openai: {
+      label: "OpenAI-compatible",
+      canGround: false,
+      needsKey: true,
+      needsBaseUrl: true,
+      defaultBaseUrl: "https://api.groq.com/openai/v1",
+      note:
+        "Groq, OpenRouter, Together, LM Studio and most open-model hosts speak this. " +
+        "Good for planning and budgets; it cannot search, so it cannot find events.",
+    },
+    ollama: {
+      label: "Ollama on this network",
+      canGround: false,
+      needsKey: false,
+      needsBaseUrl: true,
+      defaultBaseUrl: "http://localhost:11434/v1",
+      note:
+        "A model running on your own machine. No key, no cost, nothing leaves your network - " +
+        "and no web search, so it cannot find events either.",
+    },
+  };
+
+  function aiProviderKey() {
+    const want = loadTripSettings().aiProvider;
+    return AI_PROVIDERS[want] ? want : "gemini";
+  }
+
+  function aiProvider() {
+    return AI_PROVIDERS[aiProviderKey()];
+  }
+
+  // Whether the app can currently answer a question that needs the live web.
+  function aiCanGround() {
+    return !!aiProvider().canGround;
+  }
+
+  // What the chosen provider needs before it can be asked anything.
+  function aiReady() {
+    const p = aiProvider();
+    const s = loadTripSettings();
+    if (p.needsKey && !(aiProviderKey() === "gemini" ? s.geminiKey : s.aiKey).trim()) return false;
+    if (p.needsBaseUrl && !aiBaseUrl()) return false;
+    return true;
+  }
+
+  function aiBaseUrl() {
+    const s = loadTripSettings();
+    return (s.aiBaseUrl || aiProvider().defaultBaseUrl || "").replace(/\/+$/, "");
+  }
+
+  // One entry point for every AI call in the app. It keeps callGemini's
+  // contract exactly - { text, sources } - so nothing downstream has to know
+  // which provider answered.
+  async function callModel(prompt, opts) {
+    const options = opts || {};
+    const which = aiProviderKey();
+    const s = loadTripSettings();
+    if (which === "gemini") return callGemini(s.geminiKey.trim(), prompt, options);
+    return callOpenAICompatible(prompt, options);
+  }
+
+  // Groq, OpenRouter, Together, LM Studio, Ollama's compatibility endpoint -
+  // they all speak this, which is why it is one implementation rather than
+  // one per host.
+  async function callOpenAICompatible(prompt, { json = false, maxTokens = 0 } = {}) {
+    lastAiPrompt = prompt;
+    const s = loadTripSettings();
+    const base = aiBaseUrl();
+    const model = s.aiModel || "";
+    if (!base) throw new Error("No address set for the model — Settings has a field for it.");
+    if (!model) throw new Error("No model name set — Settings has a field for it.");
+
+    const body = {
+      model,
+      messages: [{ role: "user", content: prompt }],
+      temperature: 0.2,
+    };
+    if (maxTokens) body.max_tokens = maxTokens;
+    // The same intent as Gemini's responseMimeType, in the shape these
+    // servers expect. Hosts that do not support it ignore it rather than
+    // failing, and extractJson is tolerant enough to cope either way.
+    if (json) body.response_format = { type: "json_object" };
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), AI_TIMEOUT_MS);
+    const headers = { "Content-Type": "application/json" };
+    const key = (s.aiKey || "").trim();
+    if (key) headers.Authorization = `Bearer ${key}`;
+    let res;
+    try {
+      res = await fetch(`${base}/chat/completions`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+    } catch (e) {
+      if (e && e.name === "AbortError") {
+        throw new Error(
+          `The model didn't answer within ${Math.round(AI_TIMEOUT_MS / 1000)} seconds. ` +
+            `If it is running on your own machine, a large model on a small box can simply be slower than this.`,
+          { cause: e }
+        );
+      }
+      // A local server that is not running is the common case here, and the
+      // browser reports it as an indistinguishable network failure.
+      throw new Error(
+        `Couldn't reach the model at ${base}. If it is Ollama, check it is running and started with OLLAMA_ORIGINS set so a page may call it.`,
+        { cause: e }
+      );
+    } finally {
+      clearTimeout(timer);
+    }
+
+    const raw = await res.text();
+    let data = null;
+    try {
+      data = JSON.parse(raw);
+    } catch (e) {
+      data = null;
+    }
+    if (!res.ok) {
+      const detail = (data && data.error && (data.error.message || data.error)) || raw.slice(0, 200);
+      const err = new Error(`The model refused that (${res.status}): ${detail}`);
+      err.status = res.status;
+      throw err;
+    }
+    const choice = data && data.choices && data.choices[0];
+    const text = (choice && choice.message && choice.message.content) || "";
+
+    // Same meter, different envelope. Counting only Gemini's tokens would
+    // have made the usage screen quietly wrong the moment anybody switched.
+    const u = (data && data.usage) || {};
+    recordAiUsage(
+      {
+        promptTokenCount: u.prompt_tokens || u.promptTokens || 0,
+        candidatesTokenCount: u.completion_tokens || u.completionTokens || 0,
+      },
+      { grounded: false, model: `${aiProviderKey()}/${model}` }
+    );
+
+    // No sources, and that is the point rather than an omission: nothing was
+    // searched, so there is nothing to cite.
+    return { text, sources: [] };
+  }
+
   async function callGemini(key, prompt, { grounded = false, json = false, maxTokens = 0 } = {}) {
     lastAiPrompt = prompt;
     const model = await resolveGeminiModel(key);
@@ -1197,7 +1374,7 @@
       `"postcode": its postcode if you know it, otherwise "", ` +
       `"why": one short sentence on why it fits}. No other text.`;
 
-    const { text, sources } = await callGemini(key, prompt, { grounded: true });
+    const { text, sources } = await callModel(prompt, { grounded: true });
     const parsed = extractJson(text);
     if (!Array.isArray(parsed) || !parsed.length) throw new Error("gemini returned no usable places");
 
@@ -1636,9 +1813,8 @@
   let budgetEditing = null;
 
   async function estimateBudget() {
-    const key = loadTripSettings().geminiKey.trim();
-    if (!key) {
-      toast("Add your AI key in Settings first");
+    if (!aiReady()) {
+      toast("Set up a model in Settings first");
       return;
     }
     const picks = loadPicks().filter((p) => !p.major);
@@ -1647,7 +1823,7 @@
     budgetWorking = true;
     renderBudget();
     try {
-      const { text } = await callGemini(key, budgetPrompt(picks.map((p) => p.name), days, miles), {
+      const { text } = await callModel(budgetPrompt(picks.map((p) => p.name), days, miles), {
         json: true,
         maxTokens: 4096,
       });
@@ -3581,6 +3757,48 @@
               Stored only on this device.
             </p>
 
+            <label class="settings-label" for="setAiProvider">Which model answers</label>
+            <select class="settings-input" id="setAiProvider">
+              ${Object.keys(AI_PROVIDERS)
+                .map(
+                  (k) =>
+                    `<option value="${esc(k)}"${aiProviderKey() === k ? " selected" : ""}>${esc(
+                      AI_PROVIDERS[k].label
+                    )}</option>`
+                )
+                .join("")}
+            </select>
+            <p class="settings-hint">${esc(aiProvider().note)}</p>
+            ${
+              aiCanGround()
+                ? ""
+                : `<p class="settings-hint warn-hint">
+                     <b>What's on will not work on this one.</b> Finding events means reading
+                     listings published this week, and a model with no web search does not find
+                     fewer events — it invents them. The app refuses rather than guessing.
+                     Everything else works: the day planner, budgets, trip ideas, and place
+                     search all fall back to OpenStreetMap where they need to.
+                   </p>`
+            }
+            ${
+              aiProvider().needsBaseUrl
+                ? `<label class="settings-label" for="setAiBaseUrl">Address</label>
+                   <input class="settings-input" type="text" id="setAiBaseUrl"
+                          value="${esc(s.aiBaseUrl || aiProvider().defaultBaseUrl || "")}"
+                          placeholder="${esc(aiProvider().defaultBaseUrl || "")}" autocomplete="off" />
+                   <label class="settings-label" for="setAiModel">Model name</label>
+                   <input class="settings-input" type="text" id="setAiModel" value="${esc(s.aiModel)}"
+                          placeholder="llama-3.3-70b-versatile" autocomplete="off" />`
+                : ""
+            }
+            ${
+              aiProvider().needsKey && aiProviderKey() !== "gemini"
+                ? `<label class="settings-label" for="setAiKey">Key for that service</label>
+                   <input class="settings-input" type="text" id="setAiKey" value="${esc(s.aiKey)}"
+                          placeholder="Paste key" autocomplete="off" />`
+                : ""
+            }
+
             <label class="settings-label" for="setGeminiKey">Gemini API key</label>
             <input class="settings-input" type="text" id="setGeminiKey" value="${esc(s.geminiKey)}"
                    placeholder="Paste key for AI search & day planning" autocomplete="off" />
@@ -3815,6 +4033,17 @@ ${(() => {
         : "No map area stored yet — maps will need signal.";
     };
     showTileCount();
+
+    const provSel = document.getElementById("setAiProvider");
+    if (provSel) {
+      provSel.addEventListener("change", () => {
+        // Save what is on screen first, or switching provider throws away a
+        // key someone just pasted - and the fields differ per provider, so
+        // the sheet has to be redrawn on the new shape.
+        saveTripSettings({ aiProvider: provSel.value });
+        openSettings();
+      });
+    }
 
     // The nine prompt editors live here now rather than on the search form.
     // They change what each search asks the model, which is a preference you
@@ -4127,6 +4356,10 @@ ${(() => {
         destination: document.getElementById("setDestination").value,
         googleKey: document.getElementById("setGoogleKey").value.trim(),
         geminiKey: document.getElementById("setGeminiKey").value.trim(),
+        aiProvider: (document.getElementById("setAiProvider") || {}).value || "gemini",
+        aiBaseUrl: ((document.getElementById("setAiBaseUrl") || {}).value || "").trim(),
+        aiModel: ((document.getElementById("setAiModel") || {}).value || "").trim(),
+        aiKey: ((document.getElementById("setAiKey") || {}).value || "").trim(),
         // Only a real model name, never the "tap the button" placeholder the
         // disabled picker shows before it's been populated.
         geminiModel: selectedGeminiModel() || loadTripSettings().geminiModel,
@@ -5326,9 +5559,9 @@ ${(() => {
   }
 
   function openPlanner() {
-    if (!loadTripSettings().geminiKey.trim()) {
+    if (!aiReady()) {
       openSettings();
-      toast("Add a Gemini key and this can plan your days");
+      toast("Set up a model in Settings and this can plan your days");
       return;
     }
     planner = blankPlanner();
@@ -5819,8 +6052,7 @@ ${(() => {
   }
 
   async function runPlanner() {
-    const key = loadTripSettings().geminiKey.trim();
-    if (!key) return openSettings();
+    if (!aiReady()) return openSettings();
     const picks = selectedPicks();
     const days = loadPlan().days;
     if (!picks.length) return;
@@ -5835,7 +6067,7 @@ ${(() => {
     try {
       // No grounding: this is arranging places we already know about, so
       // search would only slow it down and risk a prose answer.
-      const { text } = await callGemini(key, plannerPrompt(picks, days), { json: true, maxTokens: 8192 });
+      const { text } = await callModel(plannerPrompt(picks, days), { json: true, maxTokens: 8192 });
       if (!planner) return;
       planner.raw = text;
       const result = normalisePlannerResult(extractJson(text), picks, days);
@@ -7669,7 +7901,7 @@ ${(() => {
       `"booking": true only if booking ahead is normally needed, otherwise false}. ` +
       `Do not invent a rating. No other text.`;
 
-    const { text, sources } = await callGemini(key, prompt, { grounded: true });
+    const { text, sources } = await callModel(prompt, { grounded: true });
     const parsed = extractJson(text);
     if (!Array.isArray(parsed) || !parsed.length) throw new Error("Gemini returned no usable places");
 
@@ -8472,9 +8704,8 @@ ${(() => {
   }
 
   async function backfillEvents(onProgress) {
-    const key = loadTripSettings().geminiKey.trim();
-    if (!key) {
-      return { ok: false, message: "This needs an AI key — Settings has a Gemini key field." };
+    if (!aiReady()) {
+      return { ok: false, message: "This needs a model — Settings is where you choose one." };
     }
     const todo = eventsNeedingBackfill();
     if (!todo.length) return { ok: true, message: "Nothing to fill in — every saved event already has these." };
@@ -8499,7 +8730,7 @@ ${(() => {
     let answer = null;
     for (const attempt of [{ grounded: true, maxTokens: 8192 }, { json: true, maxTokens: 8192 }]) {
       try {
-        const res = await callGemini(key, prompt, attempt);
+        const res = await callModel(prompt, attempt);
         const list = extractJson(res.text);
         if (Array.isArray(list) && list.length) {
           answer = list;
@@ -8626,7 +8857,7 @@ ${(() => {
     // comes back as prose often enough to fail outright.
     for (const attempt of [{ grounded: true, maxTokens: 8192 }, { json: true, maxTokens: 8192 }]) {
       try {
-        const answer = await callGemini(key, prompt, attempt);
+        const answer = await callModel(prompt, attempt);
         const list = extractJson(answer.text);
         if (Array.isArray(list) && list.length) {
           return { list, sources: answer.sources || [], angle: angle.key };
@@ -10930,6 +11161,23 @@ ${(() => {
 
   async function runEventSearch(opts) {
     const fresh = !!(opts && opts.fresh);
+    // The one place in the app where an ungrounded model must not be allowed
+    // to answer. Everything else degrades: Explore falls back to
+    // OpenStreetMap, a described place search falls back to a name lookup.
+    // Events cannot, because there is no free database of them to fall back
+    // to - and a model asked what is on this weekend with no way to look will
+    // not say "I don't know". It will produce a village fete, a hall, and a
+    // date, all invented and all plausible. Refusing is the honest answer.
+    if (!aiCanGround()) {
+      eventSearch.status = "error";
+      eventSearch.error =
+        `${aiProvider().label} can't search the web, and finding what's on means reading listings that were ` +
+        `published this week. Asked anyway, a model with no search doesn't find fewer events — it invents them, ` +
+        `with a plausible venue and a real-looking date. Everything else in the app still works on it; ` +
+        `this one part needs Gemini, whose free tier covers it.`;
+      renderEvents();
+      return;
+    }
     const key = loadTripSettings().geminiKey.trim();
     if (!key) {
       eventSearch.status = "error";
@@ -11177,7 +11425,10 @@ ${(() => {
     explore.stale = false;
     redrawExplore();
 
-    const key = loadTripSettings().geminiKey.trim();
+    // Only worth asking a model that can actually look. One that cannot would
+    // be answering from memory about which cafes exist in a village, which is
+    // exactly the invention OpenStreetMap is here to avoid.
+    const key = aiCanGround() ? loadTripSettings().geminiKey.trim() : "";
     if (key) {
       try {
         explore.results = await exploreWithGemini(explore.centre, explore.category, explore.radius, key);
@@ -11592,7 +11843,7 @@ ${(() => {
 
     if (explore.status === "locating") body += `<p class="pick-status">Finding that location…</p>`;
     if (explore.status === "loading") {
-      const usingAi = !!loadTripSettings().geminiKey.trim();
+      const usingAi = aiCanGround() && !!loadTripSettings().geminiKey.trim();
       body += `<p class="pick-status">Looking for ${esc(catLabel(explore.category))}${
         usingAi ? " with AI search — this takes a few seconds" : ""
       }…</p>`;
@@ -13432,8 +13683,7 @@ ${(() => {
   }
 
   async function runTripIdea() {
-    const key = loadTripSettings().geminiKey.trim();
-    if (!key) {
+    if (!aiReady()) {
       closeIdea();
       openSettings();
       toast("Add a Gemini key and this can plan trips");
@@ -13470,7 +13720,7 @@ ${(() => {
       let options = [];
       let raw = "";
       for (const attempt of [{ grounded: true, maxTokens: 8192 }, { json: true, maxTokens: 8192 }]) {
-        const { text } = await callGemini(key, ideaPrompt(), attempt);
+        const { text } = await callModel(ideaPrompt(), attempt);
         if (generation !== ideaGeneration) return;
         raw = text;
         options = normaliseIdeaOptions(extractJson(text));
@@ -19185,6 +19435,10 @@ ${(() => {
   // anything.
   window.__tripTest = {
     ASSISTANTS,
+    AI_PROVIDERS,
+    callModel,
+    aiCanGround,
+    aiReady,
     get eventResults() { return eventSearch.results; },
     get eventCtx() { return eventSearch.ctx; },
     // Setting both ends normally means two lookups against a live geocoder.

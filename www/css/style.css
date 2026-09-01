@@ -4040,3 +4040,6 @@ html, body {
 /* The head is a label and a way out, on one line - it was stacking. */
 .ev-ask-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
 .ev-ask-head .link-btn { width: auto; margin: 0; }
+
+/* A capability the chosen model does not have is worth more than a hint. */
+.warn-hint { color: var(--warn); }
