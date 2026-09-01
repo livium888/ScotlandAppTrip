@@ -16,7 +16,7 @@
 // about them — when — had nowhere to sit.
 import { chromium } from 'playwright';
 import { ANGLE_MARKERS, angleFromPrompt, ANGLE_KEYS } from './lib/angles.mjs';
-import { openEventForm, openAnglePencils } from './lib/screens.mjs';
+import { chooseKind, chooseWhen, closeAskSheet, openAnglePencils, openEventForm, openWhatSheet, openWhenSheet } from './lib/screens.mjs';
 import fs from 'node:fs';
 const SANDBOX_CHROMIUM = '/opt/pw-browsers/chromium';
 const LAUNCH_OPTS = fs.existsSync(SANDBOX_CHROMIUM) ? { executablePath: SANDBOX_CHROMIUM } : {};
@@ -147,12 +147,15 @@ check('the screen explains itself before you have searched anything',
 // The presets by name rather than by count, so adding one does not fail this.
 // The form is behind the summary bar now, so a suite that wants to read
 // the controls has to open it the way a person would.
-await openEventForm(page);
+await openWhenSheet(page);
 check('it offers the date window once opened', await page.evaluate(() =>
   ['trip', 'weekend', 'week'].every((k) => !!document.querySelector(`[data-ev-when="${k}"]`))));
+await closeAskSheet(page);
+await openWhatSheet(page);
 check('and the kinds of thing to look for', await page.evaluate(
   (n) => document.querySelectorAll('[data-ev-kind]').length === n, ANGLE_KEYS.length),
   await page.evaluate(() => document.querySelectorAll('[data-ev-kind]').length));
+await closeAskSheet(page);
 
 // ---------- Recall: six questions, not one ----------
 
@@ -239,7 +242,7 @@ check('the form folded away once it had answered', await page.evaluate(() =>
   !!document.getElementById('evEdit')));
 await page.evaluate(() => document.getElementById('evEdit').click());
 await page.waitForTimeout(300);
-await page.evaluate(() => document.querySelector('[data-ev-kind="market"]').click());
+await chooseKind(page, 'market');
 await page.waitForTimeout(300);
 await page.evaluate(() => localStorage.removeItem('event-cache-v1'));
 await page.evaluate(() => document.getElementById('evSearch').click());
@@ -361,17 +364,22 @@ await page.waitForTimeout(500);
 await page.evaluate(() => document.querySelector('[data-view="events"]').click());
 await page.waitForTimeout(400);
 
-await openEventForm(page);
+await openWhenSheet(page);
 check('there is a way to pick your own dates', await page.evaluate(() =>
   !!document.querySelector('[data-ev-when="custom"]')));
-await page.evaluate(() => document.querySelector('[data-ev-when="custom"]').click());
-await page.waitForTimeout(300);
+// Staying in the sheet: the calendar and its explanation are what is being
+// read, and chooseWhen closes up behind itself.
+await page.evaluate(() => {
+  const b = document.querySelector('#placeModal [data-ev-when="custom"]');
+  if (b) b.click();
+});
+await page.waitForTimeout(400);
 check('which offers a calendar for both ends', await page.evaluate(() =>
   !!document.getElementById('evFrom') && !!document.getElementById('evTo')));
 check('and a time to search onwards from', await page.evaluate(() =>
   !!document.getElementById('evFromTime')));
 check('and says the time is a starting point rather than a start time',
-  await page.evaluate(() => /starting point, not a start time/.test(document.getElementById('view').textContent)));
+  await page.evaluate(() => /starting point, not a start time/.test(document.getElementById('placeModal').textContent)));
 
 const day1 = '2026-09-12';
 await page.evaluate((d) => {

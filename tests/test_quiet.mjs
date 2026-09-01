@@ -11,7 +11,7 @@
 // a genuine power feature - and they sat at exactly the same visual weight
 // as "Today". Nine of them, always.
 import { chromium } from 'playwright';
-import { goTo } from './lib/screens.mjs';
+import { chooseKind, closeAskSheet, goTo, openAnglePencils, openWhatSheet, openWhenSheet } from './lib/screens.mjs';
 import fs from 'node:fs';
 const SANDBOX_CHROMIUM = '/opt/pw-browsers/chromium';
 const LAUNCH_OPTS = fs.existsSync(SANDBOX_CHROMIUM) ? { executablePath: SANDBOX_CHROMIUM } : {};
@@ -89,26 +89,36 @@ check('nor the nine prompt pencils', await countOf('[data-ev-tune]') === 0);
 // --- Opening the panel ---
 check('the summary bar is what you tap to change it', await tap('#evEdit'));
 
-check('tapping the summary opens the full form', await countOf('[data-ev-when]') >= 5);
-check('and every kind is there once open', await countOf('[data-ev-kind]') >= 9);
+// The form asks three questions now, each on a sheet of its own - it had
+// grown to 34 controls, which is this same suite's complaint one level along.
+check('tapping the summary opens the form', await countOf('[data-ev-ask]') === 3);
+await openWhenSheet(page);
+check('and every window is one tap in', await countOf('#placeModal [data-ev-when]') >= 5);
+await closeAskSheet(page);
+await openWhatSheet(page);
+check('and every kind is too', await countOf('#placeModal [data-ev-kind]') >= 9);
+await closeAskSheet(page);
 
-// Nine pencils inside an already-busy form is the same mistake one level
-// down, so they get their own disclosure.
-check('the pencils stay folded even inside the open form', await countOf('[data-ev-tune]') === 0);
-check('but there is a way to reach them', await has('#evTuneToggle'));
-
-await tap('#evTuneToggle');
-check('opening it reveals one pencil per kind', await countOf('[data-ev-tune]') >= 9);
+// The nine prompt editors are off the search path entirely now - they set
+// what each search asks the model, which is a preference, not a per-search
+// decision. Settings is where they live.
+check('no prompt editors anywhere on the search path', await countOf('[data-ev-tune]') === 0);
+await openAnglePencils(page);
+check('they are in Settings instead', await countOf('[data-ev-tune]') >= 9);
+await page.evaluate(() => { const b = document.querySelector('#placeModal .modal-close'); if (b) b.click(); });
+await page.waitForTimeout(300);
 
 // --- It still does the job ---
-await tap('[data-ev-kind="music"]');
-check('choosing a kind still registers', await page.evaluate(() =>
-  !!document.querySelector('[data-ev-kind="music"].on')));
+await chooseKind(page, 'music');
+check('choosing a kind still registers', await page.evaluate(() => {
+  const r = document.querySelector('[data-ev-ask="what"]');
+  return !!r && /music/i.test(r.textContent);
+}));
 
 // The panel folds again once you have asked, which is what it always did.
 check('the form can be closed again without searching', await has('#evAskDone'));
 await tap('#evAskDone');
-check('and folding it returns you to the summary', await countOf('[data-ev-when]') === 0);
+check('and folding it returns you to the summary', await countOf('[data-ev-ask]') === 0);
 check('with the choice you just made shown on it', /music/i.test(await txt()));
 
 await browser.close();

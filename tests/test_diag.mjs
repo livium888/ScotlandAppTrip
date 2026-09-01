@@ -2,7 +2,7 @@ import { chromium } from 'playwright';
 
 // Use the sandbox's prebuilt browser when present, otherwise let Playwright
 // resolve its own download (which is what CI has).
-import {openExplore, openPickSearch } from './lib/screens.mjs';
+import { openExplore, openPickSearch } from './lib/screens.mjs';
 import fs from 'node:fs';
 const SANDBOX_CHROMIUM = '/opt/pw-browsers/chromium';
 const LAUNCH_OPTS = fs.existsSync(SANDBOX_CHROMIUM) ? { executablePath: SANDBOX_CHROMIUM } : {};

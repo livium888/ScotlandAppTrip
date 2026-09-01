@@ -10,7 +10,7 @@
 // can now be promoted to an area, which heads its own section and collects
 // what you save near it.
 import { chromium } from 'playwright';
-import {openExplore, openPickSearch } from './lib/screens.mjs';
+import { openExplore, openPickSearch } from './lib/screens.mjs';
 import fs from 'node:fs';
 const SANDBOX_CHROMIUM = '/opt/pw-browsers/chromium';
 const LAUNCH_OPTS = fs.existsSync(SANDBOX_CHROMIUM) ? { executablePath: SANDBOX_CHROMIUM } : {};

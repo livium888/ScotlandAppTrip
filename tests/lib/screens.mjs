@@ -39,18 +39,7 @@ export const openEventForm = async (page, settle = 250) => {
   await page.waitForTimeout(settle);
 };
 
-// The nine per-kind prompt editors sit behind their own disclosure inside
-// the form, because nine pencils in an already-busy panel is the same
-// mistake one level down. Opens the form first if it is not already open.
-export const openAnglePencils = async (page, settle = 250) => {
-  await openEventForm(page, settle);
-  await page.evaluate(() => {
-    if (document.querySelector('[data-ev-tune]')) return;
-    const t = document.getElementById('evTuneToggle');
-    if (t) t.click();
-  });
-  await page.waitForTimeout(settle);
-};
+
 
 // The order control folds to a single button naming the current order, so a
 // suite that wants the four options has to open it. Idempotent, and it also
@@ -95,6 +84,84 @@ export const openPickSearch = async (page, settle = 300) => {
   await page.evaluate(() => {
     const t = document.getElementById('pickSearchTrigger');
     if (t) t.click();
+  });
+  await page.waitForTimeout(settle);
+};
+
+// The search form asks three questions, each on a sheet of its own. Six
+// suites used to reach these controls by knowing they were all on one panel;
+// they reach them through here now. Fourth time one fact in many copies has
+// broken a row of suites at once - tab selectors, angle markers, the explore
+// fold, and this.
+const openAskSheet = async (page, which, settle = 350) => {
+  // Self-sufficient on purpose: a suite asking for the When sheet should not
+  // also have to know it must be on the Find screen with the form open, or
+  // that some other sheet is over the top of it. closePlaceModal only drops
+  // the open class, so stale markup stays queryable - a suite that skipped
+  // this would find controls that are on screen only in the DOM's opinion.
+  await page.evaluate(() => {
+    const m = document.getElementById('placeModal');
+    if (m && m.classList.contains('open')) {
+      const b = m.querySelector('.modal-close');
+      if (b) b.click();
+    }
+    if (m) m.innerHTML = '';
+  });
+  await page.waitForTimeout(settle);
+  await goTo(page, 'events', settle);
+  await openEventForm(page, settle);
+  await page.evaluate((w) => {
+    const row = document.querySelector(`[data-ev-ask="${w}"]`);
+    if (row) row.click();
+  }, which);
+  await page.waitForTimeout(settle);
+};
+
+export const openWhereSheet = (page, settle) => openAskSheet(page, 'where', settle);
+export const openWhenSheet = (page, settle) => openAskSheet(page, 'when', settle);
+export const openWhatSheet = (page, settle) => openAskSheet(page, 'what', settle);
+
+// Closing whichever ask-sheet is open, so a suite can get back to the form.
+export const closeAskSheet = async (page, settle = 300) => {
+  await page.evaluate(() => {
+    const b = document.querySelector('#placeModal .modal-close');
+    if (b) b.click();
+  });
+  await page.waitForTimeout(settle);
+};
+
+// Intent, not layout. Four times now a row of suites has broken together
+// because each one knew where a control was drawn - tab selectors, angle
+// markers, the explore fold, and the search form splitting into sheets. A
+// suite should say what it is choosing and never where the chip lives.
+const chooseIn = async (open, page, selector, settle = 300) => {
+  await open(page, settle);
+  const hit = await page.evaluate((sel) => {
+    const el = document.querySelector('#placeModal ' + sel) || document.querySelector(sel);
+    if (!el) return false;
+    el.click();
+    return true;
+  }, selector);
+  await page.waitForTimeout(settle);
+  await closeAskSheet(page, settle);
+  return hit;
+};
+
+export const chooseWhen = (page, key, settle) =>
+  chooseIn(openWhenSheet, page, `[data-ev-when="${key}"]`, settle);
+export const chooseKind = (page, key, settle) =>
+  chooseIn(openWhatSheet, page, `[data-ev-kind="${key}"]`, settle);
+export const chooseMiles = (page, miles, settle) =>
+  chooseIn(openWhereSheet, page, `[data-ev-miles="${miles}"]`, settle);
+export const chooseWhereSaved = (page, pickId, settle) =>
+  chooseIn(openWhereSheet, page, `[data-ev-where="${pickId}"]`, settle);
+
+// The nine prompt editors moved off the search form into Settings, where a
+// wording you set once belongs. This is the way to them now.
+export const openAnglePencils = async (page, settle = 350) => {
+  await page.evaluate(() => {
+    if (document.querySelector('[data-ev-tune]')) return;
+    if (window.__tripTest && window.__tripTest.openSettings) window.__tripTest.openSettings();
   });
   await page.waitForTimeout(settle);
 };

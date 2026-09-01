@@ -15,6 +15,7 @@
 // pass by accident, and it could not pass at all before this change.
 import { chromium } from 'playwright';
 import { ANGLE_MARKERS, angleFromPrompt, ANGLE_KEYS } from './lib/angles.mjs';
+import { chooseWhen } from './lib/screens.mjs';
 import fs from 'node:fs';
 const SANDBOX_CHROMIUM = '/opt/pw-browsers/chromium';
 const LAUNCH_OPTS = fs.existsSync(SANDBOX_CHROMIUM) ? { executablePath: SANDBOX_CHROMIUM } : {};
@@ -135,7 +136,7 @@ const startSearch = async () => {
     if (edit) edit.click();
   });
   await page.waitForTimeout(150);
-  await page.evaluate(() => document.querySelector('[data-ev-when="week"]').click());
+  await chooseWhen(page, 'week');
   await page.waitForTimeout(150);
   await page.evaluate(() => localStorage.removeItem('event-cache-v1'));
   await page.evaluate(() => document.getElementById('evSearch').click());

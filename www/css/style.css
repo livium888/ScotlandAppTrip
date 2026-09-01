@@ -3993,3 +3993,50 @@ html, body {
 }
 
 .ev-detour { font-size: var(--type-xs); color: var(--text-muted); margin-top: 2px; }
+
+
+/* ---- The three questions ----
+   One row each, saying its own answer, so the form reads as a sentence you
+   can check before spending quota on it. It replaced a 34-control slab that
+   asked five things at one visual weight. */
+.ask-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  min-height: 56px;
+  padding: var(--space-2) 0;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: none;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.ask-row:last-of-type { border-bottom: none; }
+.ask-row:active { opacity: 0.6; }
+.ask-row-label {
+  flex-shrink: 0;
+  width: 62px;
+  font-size: var(--type-2xs);
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-muted);
+}
+.ask-row-answer {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--type-md);
+  font-weight: 600;
+  color: var(--text);
+}
+.ask-row-go { flex-shrink: 0; color: var(--text-muted); }
+
+/* The prompt editors, in Settings where they belong. */
+.angle-tune-list { border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.angle-tune-list .more-row { border-radius: 0; }
+
+/* The head is a label and a way out, on one line - it was stacking. */
+.ev-ask-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+.ev-ask-head .link-btn { width: auto; margin: 0; }

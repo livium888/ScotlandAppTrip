@@ -22,7 +22,7 @@
 // groups and Instagram are not indexed by anything, and no prompt reaches them.
 import { chromium } from 'playwright';
 import { ANGLE_MARKERS, ANGLE_KEYS, angleFromPrompt } from './lib/angles.mjs';
-import { openEventForm, openAnglePencils } from './lib/screens.mjs';
+import { chooseWhen, closeAskSheet, openAnglePencils, openEventForm, openWhatSheet } from './lib/screens.mjs';
 import fs from 'node:fs';
 const SANDBOX_CHROMIUM = '/opt/pw-browsers/chromium';
 const LAUNCH_OPTS = fs.existsSync(SANDBOX_CHROMIUM) ? { executablePath: SANDBOX_CHROMIUM } : {};
@@ -104,7 +104,7 @@ const search = async () => {
   await page.waitForTimeout(250);
   await openEventForm(page);
   await page.waitForTimeout(150);
-  await page.evaluate(() => document.querySelector('[data-ev-when="week"]').click());
+  await chooseWhen(page, 'week');
   await page.waitForTimeout(150);
   await page.evaluate(() => localStorage.removeItem('event-cache-v1'));
   await page.evaluate(() => document.getElementById('evSearch').click());
@@ -220,11 +220,12 @@ check('but the app still adds where to look',
 check('and the formatting rules survive the edit',
   prompts.every((p) => /ONLY a JSON array/.test(p)));
 check('and the villages do too', prompts.some((p) => /Ashford-in-the-Water/.test(p)));
-await openEventForm(page);
+await openWhatSheet(page);
 check('an edited search is marked in the list', await page.evaluate(() =>
   !!document.querySelector('[data-ev-kind="hall"].tuned')));
 check('and an untouched one is not', await page.evaluate(() =>
   !document.querySelector('[data-ev-kind="clubs"].tuned')));
+await closeAskSheet(page);
 
 await openAnglePencils(page);
 await page.evaluate(() => document.querySelector('[data-ev-tune="hall"]').click());

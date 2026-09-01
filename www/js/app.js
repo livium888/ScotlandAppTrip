@@ -3660,6 +3660,27 @@
             </p>
 
             <div class="settings-divider"></div>
+            <label class="settings-label">What each search asks for</label>
+            <p class="settings-hint">
+              Finding what's on runs ${EVENT_ANGLES.length} separate searches, each looking for a
+              different kind of thing. This is the wording each one uses. It is worth
+              editing when you know something the app cannot guess — the actual name of a
+              village newsletter, a listings site you happen to read. A search you have
+              changed is marked wherever it appears.
+            </p>
+            <div class="angle-tune-list">
+              ${EVENT_ANGLES.map((a) => {
+                const tuned = !!loadTripSettings().anglePrompts[a.key];
+                return `<button class="more-row" data-ev-tune="${esc(a.key)}">
+                  <span class="more-row-main">
+                    <span class="more-row-title">${esc(a.label)}</span>
+                    <span class="more-row-meta">${tuned ? "Reworded by you" : "As it comes"}</span>
+                  </span>
+                  ${icon("edit", { size: 16, cls: "more-row-go" })}
+                </button>`;
+              }).join("")}
+            </div>
+
             <label class="settings-label">Offline maps</label>
             <p class="settings-hint">
               Maps are the one part of the app that needs signal. This fetches the area
@@ -3794,6 +3815,17 @@ ${(() => {
         : "No map area stored yet — maps will need signal.";
     };
     showTileCount();
+
+    // The nine prompt editors live here now rather than on the search form.
+    // They change what each search asks the model, which is a preference you
+    // set once - nobody rewrites a prompt for one Saturday and reverts it -
+    // so it has no business on the path you walk every time you search.
+    placeModal.querySelectorAll("[data-ev-tune]").forEach((b) =>
+      b.addEventListener("click", (e) => {
+        e.stopPropagation();
+        openAngleTuner(b.getAttribute("data-ev-tune"), { back: openSettings });
+      })
+    );
 
     const dlBtn = document.getElementById("downloadTilesBtn");
     if (dlBtn) {
@@ -9480,11 +9512,12 @@ ${(() => {
     `;
   }
 
-  function setEventRouteEnd(which, place) {
+  function setEventRouteEnd(which, place, redraw) {
     if (!eventSearch.route) eventSearch.route = { from: null, to: null, miles: DEFAULT_CORRIDOR_MILES };
     eventSearch.route[which] = place;
     eventSearch.editing = true;
-    renderEvents();
+    if (redraw) redraw();
+    else renderEvents();
   }
 
   function renderEventRoute(route) {
@@ -9541,6 +9574,322 @@ ${(() => {
     renderEvents();
   }
 
+  // ---------- The three questions, one sheet each ----------
+  // The form used to ask five at once, at one visual weight, on a slab 1721px
+  // tall with 34 controls on it - nine prompt editors level with "Today".
+  // Earlier in this same session a 27-control panel was removed for being
+  // exactly this, and what replaced it grew larger than the thing it
+  // replaced. Putting a control panel behind a button is not simplifying it.
+  //
+  // Three rows now, each saying its own answer so the form reads as a
+  // sentence you can check before spending quota, and each opening a sheet
+  // about exactly one thing. Nothing is gone; everything is one tap in.
+
+  function askSheet(title, body, onWire) {
+    // You came here from the form, so closing the sheet puts you back on the
+    // form - not on the results underneath it. Without this, changing the
+    // window after a search dropped you onto the old results with no way to
+    // run the new search.
+    eventSearch.editing = true;
+    placeModal.innerHTML = `
+      <div class="modal-backdrop" data-close="1">
+        <div class="modal-sheet" role="dialog" aria-label="${esc(title)}">
+          <div class="modal-handle"></div>
+          <button class="modal-close" data-close="1" aria-label="Close">${icon("close", { size: 17, cls: "ico-inline" })}</button>
+          <div class="modal-body">
+            <h2 class="modal-title">${esc(title)}</h2>
+            ${body()}
+          </div>
+        </div>
+      </div>
+    `;
+    placeModal.classList.add("open");
+    makeSheetDraggable(placeModal, closePlaceModal);
+    placeModal.querySelectorAll("[data-close]").forEach((el) =>
+      el.addEventListener("click", (e) => {
+        // The backdrop closes only when the backdrop itself is hit, or every
+        // tap inside the sheet would dismiss it. The close button closes
+        // wherever it is hit - it holds an icon, so the thing under your
+        // thumb is usually the svg and never the button.
+        if (el.classList.contains("modal-backdrop") && e.target !== el) return;
+        closePlaceModal();
+        // The rows behind it have to catch up with whatever was chosen.
+        if (view.dataset.activeTab === "events") renderEvents();
+      })
+    );
+    paintIcons(placeModal);
+    // A choice inside a sheet redraws the sheet, so the chips show what is
+    // on, and the rows underneath, so they say it too.
+    const redraw = () => {
+      askSheet(title, body, onWire);
+      if (view.dataset.activeTab === "events") renderEvents();
+    };
+    wireAskControls(placeModal, redraw);
+    if (onWire) onWire(placeModal, redraw);
+  }
+
+  function openWhereSheet() {
+    askSheet(
+      "Where should I look?",
+      () => {
+        const centre = eventSearch.centre || loadAnchor() || derivedAnchor();
+        return renderEventWhere(centre);
+      },
+      (root, redraw) => wireWhereControls(root, redraw)
+    );
+  }
+
+  function openWhenSheet() {
+    askSheet("When?", () => renderEventWhen(), (root, redraw) => wireWhenControls(root, redraw));
+  }
+
+  function openWhatSheet() {
+    askSheet("What should I look for?", () => renderEventWhat());
+  }
+
+  // The row for one question: what it is, and what it currently says.
+  function askRow(key, label, answer) {
+    return `
+      <button class="ask-row" data-ev-ask="${esc(key)}">
+        <span class="ask-row-label">${esc(label)}</span>
+        <span class="ask-row-answer">${esc(answer)}</span>
+        ${icon("forward", { size: 16, cls: "ask-row-go" })}
+      </button>
+    `;
+  }
+
+  function whereAnswer() {
+    const route = eventSearch.route;
+    if (route && route.from && route.to) {
+      return `${route.from.name} → ${route.to.name}, within ${route.miles || DEFAULT_CORRIDOR_MILES} miles of the road`;
+    }
+    if (route) return "A journey — say where from and where to";
+    const centre = eventSearch.centre || loadAnchor() || derivedAnchor();
+    return centre ? `${centre.name}, within ${anchorMiles(centre)} miles` : "Nowhere chosen yet";
+  }
+
+  function whenAnswer() {
+    const w = eventWindow(eventSearch.when);
+    return `${w.label}${w.fromTime ? `, from ${w.fromTime}` : ""}`;
+  }
+
+  function whatAnswer() {
+    if (!eventSearch.kinds.length) return `Everything (${EVENT_ANGLES.length} kinds)`;
+    const names = EVENT_ANGLES.filter((a) => eventSearch.kinds.includes(a.key)).map((a) => a.label);
+    return names.length <= 2 ? names.join(", ") : `${names.length} kinds`;
+  }
+
+  // Controls that live on a sheet now rather than on the form. They used to
+  // be wired by scanning `view`; they take the root they are in, so the same
+  // handler works wherever the control is drawn. `redraw` repaints the sheet
+  // and the rows behind it, since a chip has to show as chosen and the row
+  // has to say what was chosen.
+  function wireAskControls(root, redraw) {
+    root.querySelectorAll("[data-ev-when]").forEach((b) =>
+      b.addEventListener("click", () => {
+        eventSearch.when = b.getAttribute("data-ev-when");
+        redraw();
+      })
+    );
+
+    root.querySelectorAll("[data-ev-kind]").forEach((b) =>
+      b.addEventListener("click", () => {
+        const key = b.getAttribute("data-ev-kind");
+        // Tapping one narrows to it; tapping the last one off goes back to
+        // all nine, because a search for nothing is not a thing anybody wants.
+        const i = eventSearch.kinds.indexOf(key);
+        if (i >= 0) eventSearch.kinds.splice(i, 1);
+        else eventSearch.kinds.push(key);
+        redraw();
+      })
+    );
+
+    const allKinds = root.querySelector("#evAllKinds");
+    if (allKinds) {
+      allKinds.addEventListener("click", () => {
+        eventSearch.kinds = [];
+        redraw();
+      });
+    }
+  }
+
+  // The When sheet's date fields, which only exist while "Pick dates" is on.
+  function wireWhenControls(root, redraw) {
+    [
+      ["evFrom", "from"],
+      ["evTo", "to"],
+      ["evFromTime", "fromTime"],
+    ].forEach(([id, field]) => {
+      const el = root.querySelector("#" + id);
+      if (!el) return;
+      el.addEventListener("change", () => {
+        customWindow[field] = el.value;
+        if (field === "from" && !customWindow.to) customWindow.to = el.value;
+        redraw();
+      });
+    });
+    const clear = root.querySelector("#evClearTime");
+    if (clear) {
+      clear.addEventListener("click", () => {
+        customWindow.fromTime = "";
+        redraw();
+      });
+    }
+  }
+
+  // Everything the Where sheet can do: the saved areas, a typed place with
+  // suggestions, where you are, a point on a map, how far out, and the
+  // journey mode with its two ends. Root-scoped so the one implementation
+  // works wherever it is drawn.
+  function wireWhereControls(root, redraw) {
+    // Where and how far, all of it in place. Every one of these keeps the
+    // panel open - you are still describing the search.
+    const evCentreNow = () => eventSearch.centre || loadAnchor() || derivedAnchor();
+
+    root.querySelectorAll("[data-ev-where]").forEach((btn) =>
+      btn.addEventListener("click", () => {
+        const p = loadPicks().find((x) => x.id === btn.getAttribute("data-ev-where"));
+        if (!p) return;
+        // Keeping the distance already chosen: picking a different town is
+        // not a statement about how far you will travel from it.
+        const now = evCentreNow();
+        setEventCentreIn(redraw, { name: p.name, lat: p.lat, lon: p.lon, miles: anchorMiles(now), fromPick: true });
+      })
+    );
+
+    root.querySelectorAll("[data-ev-miles]").forEach((btn) =>
+      btn.addEventListener("click", () => {
+        const now = evCentreNow();
+        if (!now || now.lat == null) {
+          const el = root.querySelector("#evWhereStatus");
+          if (el) el.textContent = "Pick somewhere to look around first.";
+          return;
+        }
+        setEventCentreIn(redraw, Object.assign({}, now, { miles: Number(btn.getAttribute("data-ev-miles")) }));
+      })
+    );
+
+    const whereSay = (t) => {
+      const el = root.querySelector("#evWhereStatus");
+      if (el) el.textContent = t;
+    };
+
+    attachPlaceSuggest(
+      root.querySelector("#evWhereInput"),
+      root.querySelector("#evWhereSuggest"),
+      (p) => setEventCentreIn(redraw, { name: p.name, lat: p.lat, lon: p.lon, miles: anchorMiles(evCentreNow()) })
+    );
+
+    root.querySelectorAll("[data-ev-mode]").forEach((btn) =>
+      btn.addEventListener("click", () => {
+        const mode = btn.getAttribute("data-ev-mode");
+        if (mode === "route") {
+          // Starting from where you already are is very nearly always right:
+          // the trip's own centre is where the drive begins.
+          const now = evCentreNow();
+          eventSearch.route = eventSearch.route || {
+            from: now && now.lat != null ? { name: now.name, lat: now.lat, lon: now.lon } : null,
+            to: null,
+            miles: DEFAULT_CORRIDOR_MILES,
+          };
+        } else {
+          eventSearch.route = null;
+        }
+        eventSearch.editing = true;
+        redraw();
+      })
+    );
+
+    root.querySelectorAll("[data-ev-corridor]").forEach((btn) =>
+      btn.addEventListener("click", () => {
+        if (!eventSearch.route) return;
+        eventSearch.route.miles = Number(btn.getAttribute("data-ev-corridor"));
+        eventSearch.editing = true;
+        redraw();
+      })
+    );
+
+    const routeEnd = (which, inputId, suggestId, formId) => {
+      const input = document.getElementById(inputId);
+      attachPlaceSuggest(input, document.getElementById(suggestId), (p) =>
+        setEventRouteEnd(which, { name: p.name, lat: p.lat, lon: p.lon }, redraw)
+      );
+      const form = document.getElementById(formId);
+      if (form) {
+        form.addEventListener("submit", async (e) => {
+          e.preventDefault();
+          const text = input && input.value.trim();
+          if (!text) return;
+          const found = await anchorFromText(text, DEFAULT_CORRIDOR_MILES);
+          if (found) setEventRouteEnd(which, { name: found.name, lat: found.lat, lon: found.lon }, redraw);
+        });
+      }
+    };
+    routeEnd("from", "evRouteFrom", "evRouteFromSuggest", "evRouteFromForm");
+    routeEnd("to", "evRouteTo", "evRouteToSuggest", "evRouteToForm");
+
+    const whereForm = root.querySelector("#evWhereForm");
+    if (whereForm) {
+      whereForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const text = root.querySelector("#evWhereInput").value.trim();
+        if (!text) return;
+        whereSay("Looking that up…");
+        const found = await anchorFromText(text, anchorMiles(evCentreNow()));
+        if (!found) return whereSay(`Couldn't find "${text}". Try a town, or a postcode like PH16.`);
+        setEventCentreIn(redraw, found);
+      });
+    }
+
+    const whereHere = root.querySelector("#evWhereHere");
+    if (whereHere) {
+      whereHere.addEventListener("click", async () => {
+        whereSay("Finding you…");
+        try {
+          const pos = await currentPosition();
+          const place = await reverseGeocode(pos.lat, pos.lon).catch(() => null);
+          setEventCentreIn(redraw, {
+            name: place || "where you are",
+            lat: pos.lat,
+            lon: pos.lon,
+            miles: anchorMiles(evCentreNow()),
+          });
+        } catch (err) {
+          whereSay("Couldn't get your location.");
+        }
+      });
+    }
+
+    const whereMap = root.querySelector("#evWhereMap");
+    if (whereMap) {
+      whereMap.addEventListener("click", () => {
+        openMapPicker(
+          (spot) =>
+            setEventCentreIn(redraw, {
+              name: spot.name,
+              lat: spot.lat,
+              lon: spot.lon,
+              miles: anchorMiles(evCentreNow()),
+            }),
+          { title: "Where should I look?" }
+        );
+      });
+    }
+  }
+
+  // setEventCentre, but redrawing the sheet it was chosen in rather than the
+  // screen underneath.
+  function setEventCentreIn(redraw, next) {
+    if (!next || next.lat == null) return;
+    const chosen = Object.assign({}, next);
+    delete chosen.derived;
+    delete chosen.spread;
+    eventSearch.centre = chosen;
+    saveAnchor(chosen);
+    eventSearch.editing = true;
+    redraw();
+  }
+
   function renderEventsSearchBar() {
     const w = eventWindow(eventSearch.when);
     const centre = eventSearch.centre || loadAnchor() || derivedAnchor();
@@ -9591,91 +9940,99 @@ ${(() => {
     return `
       <div class="card ev-ask">
         <div class="ev-ask-head">
-          <b>${centre ? `What's on near ${esc(centre.name)}` : "What's on"}</b>
+          <b>Look for</b>
           <button class="link-btn" id="evAskDone">Done</button>
         </div>
-        ${renderEventWhere(centre)}
-        <div class="ev-field-label">When</div>
-        <div class="search-chips">
-          ${EVENT_WINDOWS.map(
-            (x) =>
-              `<button class="search-chip${eventSearch.when === x.key ? " on" : ""}" data-ev-when="${esc(x.key)}">${esc(
-                x.label
-              )}</button>`
-          ).join("")}
-          <button class="search-chip${eventSearch.when === "custom" ? " on" : ""}" data-ev-when="custom">Pick dates</button>
-        </div>
-        ${
-          eventSearch.when === "custom"
-            ? `
-          <div class="ev-dates">
-            <label class="ev-field">
-              <span>From</span>
-              <input type="date" id="evFrom" value="${esc(customWindow.from)}" />
-            </label>
-            <label class="ev-field">
-              <span>To</span>
-              <input type="date" id="evTo" value="${esc(customWindow.to)}" />
-            </label>
-            <label class="ev-field">
-              <span>From time</span>
-              <input type="time" id="evFromTime" value="${esc(customWindow.fromTime)}" />
-            </label>
-          </div>
-          <p class="settings-hint">
-            The time is a starting point, not a start time — pick 15:00 and a market that
-            ran 09:00–21:00 still counts, while one that finished at 14:00 does not. It only
-            applies to the first day. Anything with no finish time listed is taken to run
-            about ${ASSUMED_EVENT_HOURS} hours.
-            ${customWindow.fromTime ? `<button class="link-btn" id="evClearTime">Any time</button>` : ""}
-          </p>`
-            : ""
-        }
-        <p class="explore-note">${
-          // One day is a day, not a range from itself to itself.
-          isoDate(w.from) === isoDate(w.to)
-            ? esc(humanDate(w.from))
-            : `${esc(humanDate(w.from))} – ${esc(humanDate(w.to))}`
-        }${w.fromTime ? `, from ${esc(w.fromTime)}` : ""}</p>
-        <div class="ev-field-label">What to find ${
-          eventSearch.kinds.length
-            ? `<button class="link-btn" id="evAllKinds">all ${EVENT_ANGLES.length}</button>`
-            : `<span class="ev-field-note">all ${EVENT_ANGLES.length}</span>`
-        }</div>
-        <div class="search-chips ev-kinds">
-          ${EVENT_ANGLES.map((a) => {
-            const tuned = !!loadTripSettings().anglePrompts[a.key];
-            return `<span class="ev-kind-wrap">
-              <button class="search-chip${eventSearch.kinds.includes(a.key) ? " on" : ""}${
-                tuned ? " tuned" : ""
-              }" data-ev-kind="${esc(a.key)}">${esc(a.label)}</button>
-              ${
-                eventSearch.tuning
-                  ? `<button class="ev-kind-tune" data-ev-tune="${esc(a.key)}" aria-label="Change what ${esc(
-                      a.label
-                    )} looks for">✎</button>`
-                  : ""
-              }
-            </span>`;
-          }).join("")}
-        </div>
-        <button class="link-btn ev-tune-toggle" id="evTuneToggle">${
-          eventSearch.tuning ? "Done fine-tuning" : "Fine-tune what we ask"
-        }</button>
-        <p class="settings-hint">
-          ${
-            eventSearch.kinds.length
-              ? `${eventSearch.kinds.length} of ${EVENT_ANGLES.length} picked — ${eventSearch.kinds.length} request${
-                  eventSearch.kinds.length === 1 ? "" : "s"
-                } rather than ${EVENT_ANGLES.length}.`
-              : `All ${EVENT_ANGLES.length} at once, which is how it finds the coffee morning as well as the festival. Tap any to narrow it.`
-          }
-        </p>
+        ${askRow("where", "Where", whereAnswer())}
+        ${askRow("when", "When", whenAnswer())}
+        ${askRow("what", "What", whatAnswer())}
         <button class="modal-btn modal-btn-primary ev-go" id="evSearch">
           ${eventSearch.status === "loading" ? "Looking…" : `${icon("search", { size: 17, cls: "ico-inline" })} See what's on`}
         </button>
         ${handoffLink()}
       </div>
+    `;
+  }
+
+  // The When sheet's body: the windows, and the custom range when it is on.
+  function renderEventWhen() {
+    const w = eventWindow(eventSearch.when);
+    return `
+      <div class="search-chips">
+        ${EVENT_WINDOWS.map(
+          (x) =>
+            `<button class="search-chip${eventSearch.when === x.key ? " on" : ""}" data-ev-when="${esc(x.key)}">${esc(
+              x.label
+            )}</button>`
+        ).join("")}
+        <button class="search-chip${eventSearch.when === "custom" ? " on" : ""}" data-ev-when="custom">Pick dates</button>
+      </div>
+      ${
+        eventSearch.when === "custom"
+          ? `
+        <div class="ev-dates">
+          <label class="ev-field">
+            <span>From</span>
+            <input type="date" id="evFrom" value="${esc(customWindow.from)}" />
+          </label>
+          <label class="ev-field">
+            <span>To</span>
+            <input type="date" id="evTo" value="${esc(customWindow.to)}" />
+          </label>
+          <label class="ev-field">
+            <span>From time</span>
+            <input type="time" id="evFromTime" value="${esc(customWindow.fromTime)}" />
+          </label>
+        </div>
+        <p class="settings-hint">
+          The time is a starting point, not a start time — pick 15:00 and a market that
+          ran 09:00–21:00 still counts, while one that finished at 14:00 does not. It only
+          applies to the first day. Anything with no finish time listed is taken to run
+          about ${ASSUMED_EVENT_HOURS} hours.
+          ${customWindow.fromTime ? `<button class="link-btn" id="evClearTime">Any time</button>` : ""}
+        </p>`
+          : ""
+      }
+      <p class="explore-note">${
+        isoDate(w.from) === isoDate(w.to)
+          ? esc(humanDate(w.from))
+          : `${esc(humanDate(w.from))} – ${esc(humanDate(w.to))}`
+      }${w.fromTime ? `, from ${esc(w.fromTime)}` : ""}</p>
+    `;
+  }
+
+  // The What sheet's body. The nine kinds, and - with room to say it properly
+  // at last - why narrowing them matters: each one is a separate request to
+  // the model, so this is the only control on the screen that costs money.
+  function renderEventWhat() {
+    return `
+      <div class="search-chips ev-kinds">
+        ${EVENT_ANGLES.map((a) => {
+          const tuned = !!loadTripSettings().anglePrompts[a.key];
+          return `<button class="search-chip${eventSearch.kinds.includes(a.key) ? " on" : ""}${
+            tuned ? " tuned" : ""
+          }" data-ev-kind="${esc(a.key)}">${esc(a.label)}</button>`;
+        }).join("")}
+      </div>
+      ${
+        eventSearch.kinds.length
+          ? `<button class="link-btn" id="evAllKinds">Search everything again</button>`
+          : ""
+      }
+      <p class="settings-hint">
+        ${
+          eventSearch.kinds.length
+            ? `${eventSearch.kinds.length} of ${EVENT_ANGLES.length} picked — that is ${
+                eventSearch.kinds.length
+              } request${eventSearch.kinds.length === 1 ? "" : "s"} to the model rather than ${EVENT_ANGLES.length}.`
+            : `All ${EVENT_ANGLES.length} at once — ${EVENT_ANGLES.length} requests — which is how it finds the coffee morning as well as the festival.`
+        }
+        Each kind is one request to the model, so this is the only choice in the app that
+        changes what a search costs. Tap any to narrow it.
+      </p>
+      <p class="settings-hint">
+        What each of these asks for can be reworded in Settings.
+      </p>
     `;
   }
 
@@ -10071,139 +10428,6 @@ ${(() => {
       });
     }
 
-    // Where and how far, all of it in place. Every one of these keeps the
-    // panel open - you are still describing the search.
-    const evCentreNow = () => eventSearch.centre || loadAnchor() || derivedAnchor();
-
-    view.querySelectorAll("[data-ev-where]").forEach((btn) =>
-      btn.addEventListener("click", () => {
-        const p = loadPicks().find((x) => x.id === btn.getAttribute("data-ev-where"));
-        if (!p) return;
-        // Keeping the distance already chosen: picking a different town is
-        // not a statement about how far you will travel from it.
-        const now = evCentreNow();
-        setEventCentre({ name: p.name, lat: p.lat, lon: p.lon, miles: anchorMiles(now), fromPick: true });
-      })
-    );
-
-    view.querySelectorAll("[data-ev-miles]").forEach((btn) =>
-      btn.addEventListener("click", () => {
-        const now = evCentreNow();
-        if (!now || now.lat == null) {
-          const el = document.getElementById("evWhereStatus");
-          if (el) el.textContent = "Pick somewhere to look around first.";
-          return;
-        }
-        setEventCentre(Object.assign({}, now, { miles: Number(btn.getAttribute("data-ev-miles")) }));
-      })
-    );
-
-    const whereSay = (t) => {
-      const el = document.getElementById("evWhereStatus");
-      if (el) el.textContent = t;
-    };
-
-    attachPlaceSuggest(
-      document.getElementById("evWhereInput"),
-      document.getElementById("evWhereSuggest"),
-      (p) => setEventCentre({ name: p.name, lat: p.lat, lon: p.lon, miles: anchorMiles(evCentreNow()) })
-    );
-
-    view.querySelectorAll("[data-ev-mode]").forEach((btn) =>
-      btn.addEventListener("click", () => {
-        const mode = btn.getAttribute("data-ev-mode");
-        if (mode === "route") {
-          // Starting from where you already are is very nearly always right:
-          // the trip's own centre is where the drive begins.
-          const now = evCentreNow();
-          eventSearch.route = eventSearch.route || {
-            from: now && now.lat != null ? { name: now.name, lat: now.lat, lon: now.lon } : null,
-            to: null,
-            miles: DEFAULT_CORRIDOR_MILES,
-          };
-        } else {
-          eventSearch.route = null;
-        }
-        eventSearch.editing = true;
-        renderEvents();
-      })
-    );
-
-    view.querySelectorAll("[data-ev-corridor]").forEach((btn) =>
-      btn.addEventListener("click", () => {
-        if (!eventSearch.route) return;
-        eventSearch.route.miles = Number(btn.getAttribute("data-ev-corridor"));
-        eventSearch.editing = true;
-        renderEvents();
-      })
-    );
-
-    const routeEnd = (which, inputId, suggestId, formId) => {
-      const input = document.getElementById(inputId);
-      attachPlaceSuggest(input, document.getElementById(suggestId), (p) =>
-        setEventRouteEnd(which, { name: p.name, lat: p.lat, lon: p.lon })
-      );
-      const form = document.getElementById(formId);
-      if (form) {
-        form.addEventListener("submit", async (e) => {
-          e.preventDefault();
-          const text = input && input.value.trim();
-          if (!text) return;
-          const found = await anchorFromText(text, DEFAULT_CORRIDOR_MILES);
-          if (found) setEventRouteEnd(which, { name: found.name, lat: found.lat, lon: found.lon });
-        });
-      }
-    };
-    routeEnd("from", "evRouteFrom", "evRouteFromSuggest", "evRouteFromForm");
-    routeEnd("to", "evRouteTo", "evRouteToSuggest", "evRouteToForm");
-
-    const whereForm = document.getElementById("evWhereForm");
-    if (whereForm) {
-      whereForm.addEventListener("submit", async (e) => {
-        e.preventDefault();
-        const text = document.getElementById("evWhereInput").value.trim();
-        if (!text) return;
-        whereSay("Looking that up…");
-        const found = await anchorFromText(text, anchorMiles(evCentreNow()));
-        if (!found) return whereSay(`Couldn't find "${text}". Try a town, or a postcode like PH16.`);
-        setEventCentre(found);
-      });
-    }
-
-    const whereHere = document.getElementById("evWhereHere");
-    if (whereHere) {
-      whereHere.addEventListener("click", async () => {
-        whereSay("Finding you…");
-        try {
-          const pos = await currentPosition();
-          const place = await reverseGeocode(pos.lat, pos.lon).catch(() => null);
-          setEventCentre({
-            name: place || "where you are",
-            lat: pos.lat,
-            lon: pos.lon,
-            miles: anchorMiles(evCentreNow()),
-          });
-        } catch (err) {
-          whereSay("Couldn't get your location.");
-        }
-      });
-    }
-
-    const whereMap = document.getElementById("evWhereMap");
-    if (whereMap) {
-      whereMap.addEventListener("click", () => {
-        openMapPicker(
-          (spot) =>
-            setEventCentre({
-              name: spot.name,
-              lat: spot.lat,
-              lon: spot.lon,
-              miles: anchorMiles(evCentreNow()),
-            }),
-          { title: "Where should I look?" }
-        );
-      });
-    }
 
     const go = document.getElementById("evSearch");
     if (go) go.addEventListener("click", () => runEventSearch());
@@ -10215,6 +10439,15 @@ ${(() => {
         renderEvents();
       });
     }
+
+    view.querySelectorAll("[data-ev-ask]").forEach((row) =>
+      row.addEventListener("click", () => {
+        const which = row.getAttribute("data-ev-ask");
+        if (which === "where") openWhereSheet();
+        else if (which === "when") openWhenSheet();
+        else openWhatSheet();
+      })
+    );
 
     const askDone = document.getElementById("evAskDone");
     if (askDone) {
@@ -10994,7 +11227,11 @@ ${(() => {
   // The same sheet as the category tuner, for the nine event searches. This is
   // where local knowledge the app cannot guess belongs - the name of a village
   // newsletter, a listings site you happen to know about.
-  function openAngleTuner(key) {
+  function openAngleTuner(key, opts) {
+    // Opened from Settings, closing has to return to Settings. Landing on the
+    // search screen after editing one of nine would mean nine trips back in
+    // to change three of them.
+    const back = (opts && opts.back) || null;
     const angle = EVENT_ANGLES.find((a) => a.key === key);
     if (!angle) return;
     const current = anglePrompt(key);
@@ -11042,7 +11279,8 @@ ${(() => {
       else map[key] = text;
       saveTripSettings({ anglePrompts: map });
       closePlaceModal();
-      renderEvents();
+      if (back) back();
+      else renderEvents();
     });
 
     document.getElementById("anglePromptReset").addEventListener("click", () => {
@@ -11050,7 +11288,8 @@ ${(() => {
       delete map[key];
       saveTripSettings({ anglePrompts: map });
       closePlaceModal();
-      renderEvents();
+      if (back) back();
+      else renderEvents();
     });
   }
 

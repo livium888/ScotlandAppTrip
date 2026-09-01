@@ -10,7 +10,7 @@
 // Where, how far, when and what are one question. They belong on one panel,
 // with the current answer visible, and nothing closing under your thumb.
 import { chromium } from 'playwright';
-import { goTo, openEventForm } from './lib/screens.mjs';
+import { closeAskSheet, goTo, openEventForm, openWhereSheet } from './lib/screens.mjs';
 import fs from 'node:fs';
 const SANDBOX_CHROMIUM = '/opt/pw-browsers/chromium';
 const LAUNCH_OPTS = fs.existsSync(SANDBOX_CHROMIUM) ? { executablePath: SANDBOX_CHROMIUM } : {};
@@ -46,6 +46,10 @@ await openEventForm(page);
 
 const countOf = (sel) => page.evaluate((s) => document.querySelectorAll(s).length, sel);
 const txt = () => page.evaluate(() => document.getElementById('view').textContent.replace(/\s+/g, ' '));
+const sheetTxt = () => page.evaluate(() => {
+  const m = document.getElementById('placeModal');
+  return m && m.classList.contains('open') ? m.textContent.replace(/\s+/g, ' ') : '';
+});
 const modalOpen = () => page.evaluate(() => {
   const m = document.getElementById('placeModal');
   return !!m && m.classList.contains('open');
@@ -56,33 +60,47 @@ const tap = async (sel) => {
   return hit;
 };
 
-// ---------- Everything is on the one panel ----------
-check('where to look is on the panel, not behind a modal', await countOf('[data-ev-where]') >= 2,
-  `${await countOf('[data-ev-where]')} place chips`);
-check('how far is on the panel too', await countOf('[data-ev-miles]') >= 3,
-  `${await countOf('[data-ev-miles]')} distance chips`);
-check('and so is when', await countOf('[data-ev-when]') >= 5);
-check('and what to look for', await countOf('[data-ev-kind]') >= 9);
-check('with one button that runs it', await countOf('#evSearch') === 1);
+// ---------- One question, one sheet, and it stays put ----------
+// This suite was written when where, how far, when and what were all on one
+// panel. They are on three sheets now, one question each - the panel had
+// grown to 34 controls, which is the same crowding one level along. What
+// must never come back is the original bug: a sheet that closed on every
+// single tap and told you nothing about what you had chosen, so setting a
+// place and a distance took two visits and left no record of either.
+await openWhereSheet(page);
 
-// ---------- The choice is shown, not remembered ----------
-const before = await txt();
-check('the panel says where it will look', /bakewell|buxton/i.test(before), before.slice(0, 160));
-check('and how far out', /\b\d+\s*miles?\b/i.test(before), before.slice(0, 200));
+check('where and how far are one question, asked together',
+  await countOf('#placeModal [data-ev-where]') >= 2 && await countOf('#placeModal [data-ev-miles]') >= 3,
+  `${await countOf('#placeModal [data-ev-where]')} places, ${await countOf('#placeModal [data-ev-miles]')} distances`);
 
 // ---------- Nothing closes under your thumb ----------
-check('choosing a distance does not open a modal', await tap('[data-ev-miles="50"]') && !(await modalOpen()));
-check('and the panel is still open afterwards', await countOf('[data-ev-when]') >= 5);
-check('and it now says the distance you chose', /50 miles/i.test(await txt()), (await txt()).slice(0, 200));
+check('choosing a distance leaves the sheet open',
+  await tap('#placeModal [data-ev-miles="50"]') && (await modalOpen()));
+check('and everything else is still there', await countOf('#placeModal [data-ev-where]') >= 2);
+check('and it says the distance you chose', /50 miles/i.test(await sheetTxt()), (await sheetTxt()).slice(0, 200));
 
-check('choosing a place keeps the panel open too', await tap('[data-ev-where="a:2"]') && await countOf('[data-ev-miles]') >= 3);
-check('and says the place you chose', /buxton/i.test(await txt()), (await txt()).slice(0, 200));
-check('without losing the distance you already set', /50 miles/i.test(await txt()), (await txt()).slice(0, 200));
+check('choosing a place leaves it open too',
+  await tap('#placeModal [data-ev-where="a:2"]') && (await modalOpen()));
+check('and says the place you chose', /buxton/i.test(await sheetTxt()), (await sheetTxt()).slice(0, 200));
+check('without losing the distance you already set', /50 miles/i.test(await sheetTxt()), (await sheetTxt()).slice(0, 200));
 
 // The awkward cases still need somewhere to go - a town that is not saved,
-// where you are, a point on a map. They stay, as one row.
-check('there is still a way to name somewhere not saved', await countOf('#evWhereInput') === 1);
-check('and to use where you are', await countOf('#evWhereHere') === 1);
+// where you are, a point on a map. All on this one sheet.
+check('there is still a way to name somewhere not saved', await countOf('#placeModal #evWhereInput') === 1);
+check('and to use where you are', await countOf('#placeModal #evWhereHere') === 1);
+
+// ---------- And the form behind it says the answer ----------
+await closeAskSheet(page);
+const rowTxt = await page.evaluate(() => {
+  const r = document.querySelector('[data-ev-ask="where"]');
+  return r ? r.textContent.replace(/\s+/g, ' ') : '';
+});
+check('the row records both halves of what was chosen',
+  /buxton/i.test(rowTxt) && /50/.test(rowTxt), rowTxt);
+
+check('the other two questions are one tap away as well',
+  await countOf('[data-ev-ask]') === 3);
+check('with one button that runs it', await countOf('#evSearch') === 1);
 
 // ---------- The shared sheet had the same bug ----------
 // openAnchorSheet is also how the place search picks its area, and there a

@@ -14,7 +14,7 @@
 // there. The request count is what this suite mostly guards, because it is
 // the part that is easy to get wrong and invisible when you do.
 import { chromium } from 'playwright';
-import { goTo, openEventForm } from './lib/screens.mjs';
+import { goTo, openEventForm, openWhereSheet } from './lib/screens.mjs';
 import fs from 'node:fs';
 const SANDBOX_CHROMIUM = '/opt/pw-browsers/chromium';
 const LAUNCH_OPTS = fs.existsSync(SANDBOX_CHROMIUM) ? { executablePath: SANDBOX_CHROMIUM } : {};
@@ -71,7 +71,9 @@ await page.evaluate(() => {
 await page.reload({ waitUntil: 'load' });
 await page.waitForTimeout(600);
 await goTo(page, 'events', 400);
-await openEventForm(page);
+// The place field lives on the Where sheet now - where and how far are one
+// question, so they are asked together rather than sprinkled over a form.
+await openWhereSheet(page);
 
 const countOf = (sel) => page.evaluate((s) => document.querySelectorAll(s).length, sel);
 const txt = () => page.evaluate(() => document.getElementById('view').textContent.replace(/\s+/g, ' '));
@@ -100,8 +102,10 @@ await page.waitForTimeout(1400);
 check('typing a place name suggests places', await countOf('[data-suggest]') >= 3,
   `${await countOf('[data-suggest]')} suggestions`);
 check('and it asked once, not once per letter', lookups.length === 1, `${lookups.length} requests`);
-check('the suggestions tell the four Newports apart', /isle of wight|pembrokeshire|fife/i.test(await txt()),
-  (await txt()).slice(0, 300));
+// The suggestions are drawn in the sheet, which is where to read them.
+check('the suggestions tell the four Newports apart',
+  /isle of wight|pembrokeshire|fife/i.test(await page.evaluate(() => document.getElementById('placeModal').textContent)),
+  await page.evaluate(() => document.getElementById('placeModal').textContent.slice(0, 300)));
 
 // ---------- Choosing one ----------
 // Tolerant: run against the unfixed code there is nothing to click, and the
@@ -116,8 +120,8 @@ await page.waitForTimeout(400);
 check('choosing one sets it as the place to look around', /newport-on-tay|newport/i.test(await txt()),
   (await txt()).slice(0, 200));
 check('and the list of suggestions goes away', await countOf('[data-suggest]') === 0);
-check('the panel stays open, as it does for every other choice on it',
-  await countOf('[data-ev-when]') >= 5);
+check('the sheet stays open, as it does for every other choice on it',
+  await countOf('#placeModal [data-ev-miles]') >= 3);
 
 // ---------- Changing your mind mid-word ----------
 // Type "Newport", think better of it, type "Bakewell". The first answer is

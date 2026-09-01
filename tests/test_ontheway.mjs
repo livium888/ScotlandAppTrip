@@ -13,7 +13,7 @@
 // What it cannot do is follow a road around a firth, and the app says so
 // rather than pretending.
 import { chromium } from 'playwright';
-import { goTo, openEventForm } from './lib/screens.mjs';
+import { closeAskSheet, goTo, openEventForm, openWhereSheet } from './lib/screens.mjs';
 import { angleFromPrompt } from './lib/angles.mjs';
 import fs from 'node:fs';
 const SANDBOX_CHROMIUM = '/opt/pw-browsers/chromium';
@@ -129,12 +129,17 @@ const tap = async (sel) => {
 };
 
 // ---------- Getting into route mode ----------
+// Where you are looking is one question, so the journey lives on the Where
+// sheet beside the place and the distance rather than on the form.
+await openWhereSheet(page);
 check('there is a way to search along a route rather than around a point',
-  await countOf('[data-ev-mode="route"]') === 1);
-await tap('[data-ev-mode="route"]');
-check('choosing it offers a start and an end', await countOf('#evRouteFrom') === 1 && await countOf('#evRouteTo') === 1,
-  `from:${await countOf('#evRouteFrom')} to:${await countOf('#evRouteTo')}`);
-check('and how far off the route you will go', await countOf('[data-ev-corridor]') >= 3);
+  await countOf('#placeModal [data-ev-mode="route"]') === 1);
+await tap('#placeModal [data-ev-mode="route"]');
+check('choosing it offers a start and an end',
+  await countOf('#placeModal #evRouteFrom') === 1 && await countOf('#placeModal #evRouteTo') === 1,
+  `from:${await countOf('#placeModal #evRouteFrom')} to:${await countOf('#placeModal #evRouteTo')}`);
+check('and how far off the route you will go', await countOf('#placeModal [data-ev-corridor]') >= 3);
+await closeAskSheet(page);
 
 // ---------- Setting the two ends ----------
 await page.evaluate(() => {

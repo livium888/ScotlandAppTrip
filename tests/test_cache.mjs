@@ -19,6 +19,7 @@
 // "not selected".
 import { chromium } from 'playwright';
 import { angleFromPrompt, ANGLE_KEYS } from './lib/angles.mjs';
+import { chooseWhen, openWhatSheet, openWhenSheet } from './lib/screens.mjs';
 import fs from 'node:fs';
 const SANDBOX_CHROMIUM = '/opt/pw-browsers/chromium';
 const LAUNCH_OPTS = fs.existsSync(SANDBOX_CHROMIUM) ? { executablePath: SANDBOX_CHROMIUM } : {};
@@ -93,12 +94,7 @@ const openForm = async () => {
   await page.waitForTimeout(200);
 };
 const searchWindow = async (key) => {
-  await openForm();
-  await page.evaluate((k) => {
-    const b = document.querySelector(`[data-ev-when="${k}"]`);
-    if (b) b.click();
-  }, key);
-  await page.waitForTimeout(200);
+  await chooseWhen(page, key);
   calls = 0; prompts = [];
   await page.evaluate(() => document.getElementById('evSearch').click());
   await settle();
@@ -106,7 +102,7 @@ const searchWindow = async (key) => {
 
 // ---------- Easy keys for today and tomorrow ----------
 
-await openForm();
+await openWhenSheet(page);
 check('there is a one-tap search for today', await page.evaluate(() =>
   !!document.querySelector('[data-ev-when="today"]')));
 check('and for tomorrow', await page.evaluate(() =>
@@ -144,6 +140,7 @@ check('and it actually looks different from the others',
 check('and does not rely on colour alone to say so',
   chipLook.onWeight !== chipLook.offWeight, JSON.stringify(chipLook));
 
+await openWhatSheet(page);
 const kindLook = await page.evaluate(() => {
   const chip = document.querySelector('[data-ev-kind="market"]');
   if (!chip) return { on: 'x', off: 'x' };
@@ -153,8 +150,19 @@ const kindLook = await page.evaluate(() => {
   return { on: getComputedStyle(now).backgroundColor, off: getComputedStyle(other).backgroundColor };
 });
 check('the same is true of the kinds you pick', kindLook.on !== kindLook.off, JSON.stringify(kindLook));
-check('and the screen says how many you have picked',
-  /1 of 9 picked/.test(await screen()), (await screen()).slice(0, 600));
+// The count sentence moved into the What sheet, where there is room to say
+// why it matters. What the form itself has to do is tell you what you
+// narrowed to without opening anything - which the What row does by name.
+check('and the sheet says how many you have picked',
+  /1 of 9 picked/.test(await page.evaluate(() => document.getElementById('placeModal').textContent)),
+  await page.evaluate(() => document.getElementById('placeModal').textContent.slice(0, 300)));
+check('and the form says it too, in words', await page.evaluate(() => {
+  const row = document.querySelector('[data-ev-ask="what"]');
+  return !!row && /market/i.test(row.textContent);
+}), await page.evaluate(() => {
+  const row = document.querySelector('[data-ev-ask="what"]');
+  return row ? row.textContent : 'no what row';
+}));
 check('with a way back to all of them', await page.evaluate(() => !!document.getElementById('evAllKinds')));
 check('which puts them all back', await page.evaluate(() => {
   const all = document.getElementById('evAllKinds');
