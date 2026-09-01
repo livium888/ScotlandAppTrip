@@ -35,7 +35,6 @@ public class MainActivity extends BridgeActivity {
     // super.onCreate() returns. Calling it again here would double-fire
     // (and, with retainUntilConsumed, double-queue) every cold-start share.
     registerPlugin(SharePlugin.class);
-    registerPlugin(LocalModelPlugin.class);
     super.onCreate(savedInstanceState);
   }
 

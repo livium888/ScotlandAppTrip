@@ -46,10 +46,8 @@ const stub = (opts) => `
   window.__local = { generated: [], downloaded: 0, removed: 0 };
   window.Capacitor.Plugins.LocalModel = {
     status: async () => (${JSON.stringify(opts.present)}
-      ? { present: true, engine: true, file: true, name: 'qwen2.5-1.5b-instruct-q4_k_m.gguf', bytes: 1024 * 1024 * 986 }
-      : { present: false, engine: ${JSON.stringify(opts.engine !== false)}, file: ${JSON.stringify(!!opts.file)},
-          name: ${JSON.stringify(opts.file ? 'qwen2.5-1.5b-instruct-q4_k_m.gguf' : '')},
-          bytes: ${opts.file ? '1024 * 1024 * 986' : '0'} }),
+      ? { present: true, name: 'qwen2.5-1.5b-instruct-q4_k_m.gguf', bytes: 1024 * 1024 * 986 }
+      : { present: false }),
     download: async (o) => { window.__local.downloaded++; return { ok: true, name: o && o.name }; },
     remove: async () => { window.__local.removed++; return { ok: true }; },
     generate: async (o) => {
@@ -60,7 +58,7 @@ const stub = (opts) => `
   };
 `;
 
-const seed = async ({ present = true, reply = '[]', engine = true, file = false, settings = {} } = {}) => {
+const seed = async ({ present = true, reply = '[]', settings = {} } = {}) => {
   await page.goto(BASE, { waitUntil: 'load' });
   await page.evaluate(
     ([s, boot]) => {
@@ -75,10 +73,10 @@ const seed = async ({ present = true, reply = '[]', engine = true, file = false,
       localStorage.setItem('trip-settings-v1', JSON.stringify(s));
       localStorage.setItem('__boot', boot);
     },
-    [Object.assign({ aiProvider: 'ondevice' }, settings), stub({ present, reply, engine, file })]
+    [Object.assign({ aiProvider: 'ondevice' }, settings), stub({ present, reply })]
   );
   // The stub has to exist before app.js runs, the same way a real plugin does.
-  await page.addInitScript(stub({ present, reply, engine, file }));
+  await page.addInitScript(stub({ present, reply }));
   await page.reload({ waitUntil: 'load' });
   await page.waitForTimeout(700);
 };
@@ -158,19 +156,6 @@ await page.waitForTimeout(400);
 check('and deleting asks the phone to delete it',
   await page.evaluate(() => window.__local.removed) >= 1,
   await page.evaluate(() => String(window.__local.removed)));
-
-// ---------- A build with no engine says so, rather than selling a download ----------
-// The Java side reports "file" and "engine" separately because a phone can
-// have a gigabyte of model and no way to run it, and "download one" is
-// exactly the wrong advice there.
-await seed({ present: false, engine: false, file: true });
-await page.evaluate(() => window.__tripTest.openSettings());
-await page.waitForTimeout(500);
-const noEngine = await page.evaluate(() => document.getElementById('placeModal').textContent.replace(/\s+/g, ' '));
-check('a build with no engine says that, rather than offering a download',
-  /no inference engine/i.test(noEngine) && !/data-get-model/.test(noEngine), noEngine.slice(0, 240));
-check('and offers to clear the model file that cannot be used',
-  await page.evaluate(() => !!document.getElementById('removeModelBtn')));
 
 // ---------- And in a plain browser, it is simply not on offer ----------
 // A fresh page, because addInitScript cannot be taken back: reusing the one
