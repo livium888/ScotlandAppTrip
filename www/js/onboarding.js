@@ -1,9 +1,22 @@
+// The first thirty seconds, and the way back to them.
+//
+// app.js decides whether a brand-new install should be asked anything, and
+// opens its own three-question welcome sheet when the answer is yes. This file
+// runs after it and takes that sheet over: four questions, one screen each -
+// where, when, who, and what kind of trip - all of them skippable, none of them
+// asking about API keys or models.
+//
+// It also fixes the thing that made all of it invisible: only a *new* install
+// ever saw the questions, so anybody who already had a trip (which is everyone
+// who updates) could not find them at all. More now carries a "Trip setup" row
+// that opens the same four steps with the current trip filled in, so the
+// answers can be seen and changed without wiping the app.
 (function () {
   "use strict";
 
   const ONBOARDED_KEY = "onboarded-v1";
-  const welcomeOverlay = document.getElementById("welcomeOverlay");
-  if (!welcomeOverlay || localStorage.getItem(ONBOARDED_KEY)) return;
+  const overlay = document.getElementById("welcomeOverlay");
+  if (!overlay) return;
 
   const WHO_OPTIONS = [
     { label: "Just me", adults: 1, children: 0 },
@@ -21,24 +34,79 @@
     "City break",
   ];
   const SUGGESTIONS = ["Cornwall", "The Lake District", "Snowdonia", "The Highlands", "Amsterdam", "Lisbon"];
-  let state = {
-    step: 0,
-    where: "",
-    start: "",
-    days: "",
-    adults: "",
-    children: "",
-    details: "",
-    whoPreset: "",
-    tripType: "",
-  };
+
+  // Opened by a person rather than by a new install. It only changes two
+  // things: the first button says Cancel rather than Skip, and the answers
+  // start from the trip already stored instead of from nothing.
+  let openedByHand = false;
 
   const esc = (value) => String(value == null ? "" : value).replace(/[&<>"'`]/g, (c) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;", "`": "&#96;",
   }[c]));
 
+  function readJson(key, fallback) {
+    try {
+      const value = JSON.parse(localStorage.getItem(key));
+      return value == null ? fallback : value;
+    } catch (e) {
+      return fallback;
+    }
+  }
+
+  function storedBoard() {
+    const state = readJson("boards-v1", { activeId: null, boards: [] });
+    const boards = Array.isArray(state.boards) ? state.boards : [];
+    return boards.find((item) => item.id === state.activeId) || boards[0] || null;
+  }
+
+  function blank() {
+    return { step: 0, where: "", start: "", days: "", adults: "", children: "", details: "", whoPreset: "", tripType: "" };
+  }
+
+  let state = blank();
+
+  // What the app already knows, in the shape the four steps ask for. Anything
+  // it does not know stays empty, so a question you have never answered still
+  // reads as a question.
+  function fromCurrentTrip() {
+    const next = blank();
+    const settings = readJson("trip-settings-v1", {});
+    const board = storedBoard();
+
+    const where = String(settings.destination || (board && board.destination) || "").trim();
+    if (where) next.where = where;
+
+    const travellers = String(settings.travellers || "").trim();
+    if (travellers) {
+      const preset = WHO_OPTIONS.find((x) => x.label === travellers);
+      if (preset) {
+        next.whoPreset = preset.label;
+        next.adults = String(preset.adults);
+        next.children = String(preset.children);
+      } else {
+        const adults = /(\d+)\s+adult/.exec(travellers);
+        const children = /(\d+)\s+child/.exec(travellers);
+        if (adults) next.adults = adults[1];
+        if (children) next.children = children[1];
+        const stop = travellers.indexOf(". ");
+        if (stop >= 0) next.details = travellers.slice(stop + 2).trim();
+      }
+    }
+
+    if (settings.tripType) next.tripType = settings.tripType;
+
+    const plan = board ? readJson(`board:${board.id}:plan`, null) : null;
+    if (plan && Array.isArray(plan.days) && plan.days.length && plan.days[0].date) {
+      next.start = plan.days[0].date;
+      next.days = String(plan.days.length);
+    }
+    return next;
+  }
+
+  // ---------- The questions ----------
+
   // Only the questions that cannot be left blank disable the way on. Dates are
-  // asked for (and used to build the days) but staying optional, because a trip
+  // asked for (and used to build the days) but stay optional, because a trip
   // can legitimately be planned before its dates are known.
   function canContinue() {
     if (state.step === 0) return !!state.where.trim();
@@ -93,45 +161,47 @@
   function render() {
     const step = stepMarkup();
     const last = state.step === 3;
-    welcomeOverlay.innerHTML = `<div class="welcome-body"><div class="welcome-dots">${[0, 1, 2, 3].map((i) => `<span class="welcome-dot${i === state.step ? " on" : ""}"></span>`).join("")}</div>
+    overlay.innerHTML = `<div class="welcome-body"><div class="welcome-dots">${[0, 1, 2, 3].map((i) => `<span class="welcome-dot${i === state.step ? " on" : ""}"></span>`).join("")}</div>
       <div class="welcome-kicker">${esc(step.kicker)}</div><h1 class="welcome-title">${esc(step.title)}</h1><p class="welcome-sub">${esc(step.sub)}</p>${step.body}</div>
-      <div class="welcome-foot">${state.step > 0 ? '<button class="modal-btn" data-welcome-back="1">Back</button>' : '<button class="modal-btn" data-welcome-skip="1">Skip</button>'}
+      <div class="welcome-foot">${state.step > 0
+        ? '<button class="modal-btn" data-welcome-back="1">Back</button>'
+        : `<button class="modal-btn" data-welcome-skip="1">${openedByHand ? "Cancel" : "Skip"}</button>`}
       <button class="modal-btn modal-btn-primary" data-welcome-next="1"${canContinue() ? "" : " disabled"}>${last ? "Start planning" : "Next"}</button></div>`;
-    welcomeOverlay.classList.add("open");
+    overlay.classList.add("open");
     wire();
   }
 
   function updateFromInput() {
     readInputs();
-    const next = welcomeOverlay.querySelector("[data-welcome-next]");
+    const next = overlay.querySelector("[data-welcome-next]");
     if (next) next.disabled = !canContinue();
   }
 
   function wire() {
-    welcomeOverlay.querySelectorAll("[data-welcome-where]").forEach((button) => button.addEventListener("click", () => {
+    overlay.querySelectorAll("[data-welcome-where]").forEach((button) => button.addEventListener("click", () => {
       state.where = button.getAttribute("data-welcome-where");
       render();
     }));
-    welcomeOverlay.querySelectorAll("[data-welcome-who]").forEach((button) => button.addEventListener("click", () => {
+    overlay.querySelectorAll("[data-welcome-who]").forEach((button) => button.addEventListener("click", () => {
       const preset = WHO_OPTIONS.find((x) => x.label === button.getAttribute("data-welcome-who"));
       state.whoPreset = preset.label;
       state.adults = String(preset.adults);
       state.children = String(preset.children);
       render();
     }));
-    welcomeOverlay.querySelectorAll("[data-welcome-trip-type]").forEach((button) => button.addEventListener("click", () => {
+    overlay.querySelectorAll("[data-welcome-trip-type]").forEach((button) => button.addEventListener("click", () => {
       state.tripType = button.getAttribute("data-welcome-trip-type");
       render();
     }));
-    welcomeOverlay.querySelectorAll("input").forEach((input) => {
+    overlay.querySelectorAll("input").forEach((input) => {
       input.addEventListener("input", updateFromInput);
       input.addEventListener("change", updateFromInput);
     });
-    const skip = welcomeOverlay.querySelector("[data-welcome-skip]");
+    const skip = overlay.querySelector("[data-welcome-skip]");
     if (skip) skip.addEventListener("click", () => finish(true));
-    const back = welcomeOverlay.querySelector("[data-welcome-back]");
+    const back = overlay.querySelector("[data-welcome-back]");
     if (back) back.addEventListener("click", () => { readInputs(); state.step -= 1; render(); });
-    const next = welcomeOverlay.querySelector("[data-welcome-next]");
+    const next = overlay.querySelector("[data-welcome-next]");
     if (next) next.addEventListener("click", () => {
       readInputs();
       if (!canContinue()) return;
@@ -140,21 +210,27 @@
     });
   }
 
+  function close() {
+    overlay.classList.remove("open");
+    overlay.innerHTML = "";
+  }
+
   function finish(skipped) {
     localStorage.setItem(ONBOARDED_KEY, String(Date.now()));
     if (skipped) {
-      welcomeOverlay.classList.remove("open");
-      welcomeOverlay.innerHTML = "";
+      close();
       return;
     }
+
     const boards = readJson("boards-v1", { activeId: null, boards: [] });
-    const board = boards.boards.find((item) => item.id === boards.activeId) || boards.boards[0];
+    const board = (boards.boards || []).find((item) => item.id === boards.activeId) || (boards.boards || [])[0];
     if (board) {
       board.name = state.where.trim() || board.name;
       board.destination = state.where.trim();
       if (state.start) board.dated = true;
       localStorage.setItem("boards-v1", JSON.stringify(boards));
     }
+
     const settings = readJson("trip-settings-v1", {});
     const adults = Math.max(0, Number(state.adults) || 0);
     const children = Math.max(0, Number(state.children) || 0);
@@ -165,6 +241,7 @@
     settings.travellers = [count.join(" and "), state.details.trim()].filter(Boolean).join(". ");
     settings.tripType = state.tripType;
     localStorage.setItem("trip-settings-v1", JSON.stringify(settings));
+
     if (board && state.start) {
       const [year, month, day] = state.start.split("-").map(Number);
       const plan = readJson(`board:${board.id}:plan`, { days: [], items: {} });
@@ -181,24 +258,91 @@
       plan.items = plan.items || {};
       localStorage.setItem(`board:${board.id}:plan`, JSON.stringify(plan));
     }
-    welcomeOverlay.classList.remove("open");
-    welcomeOverlay.innerHTML = "";
+
+    close();
+    // The trip just changed under the screens that were showing it. The title
+    // comes from the board name and only board changes redraw it (app.js sets
+    // it the same way in refreshForBoard), so it is written here too.
+    if (board) {
+      const title = document.getElementById("topbarTitle");
+      if (title && board.name) title.textContent = board.name;
+    }
     const planTab = document.querySelector('[data-view="itinerary"]');
     if (planTab) planTab.click();
+    paintSetupRow();
   }
 
-  function readJson(key, fallback) {
-    try {
-      const value = JSON.parse(localStorage.getItem(key));
-      return value == null ? fallback : value;
-    } catch (e) {
-      return fallback;
+  function open(byHand) {
+    openedByHand = !!byHand;
+    state = openedByHand ? fromCurrentTrip() : blank();
+    render();
+  }
+
+  // ---------- The way back to it ----------
+  //
+  // Only a new install used to be asked, which meant the questions were
+  // invisible to anyone who already had a trip - the exact people who wanted
+  // to answer them. This is the row that makes them reachable, and it says what
+  // the app currently believes so the row is worth reading even if it is never
+  // opened.
+
+  function setupSummary() {
+    const settings = readJson("trip-settings-v1", {});
+    const where = String(settings.destination || "").trim();
+    if (!where) return "Not set up yet — where, when and who";
+    const parts = [where];
+    const board = storedBoard();
+    const plan = board ? readJson(`board:${board.id}:plan`, null) : null;
+    const days = plan && Array.isArray(plan.days) ? plan.days.length : 0;
+    if (days) parts.push(`${days} day${days === 1 ? "" : "s"}`);
+    if (settings.travellers) parts.push(String(settings.travellers).split(". ")[0]);
+    if (!parts.length) return "Where, when, who and what kind of trip";
+    return parts.join(" · ");
+  }
+
+  function paintSetupRow() {
+    const list = document.querySelector("#view .more-list");
+    if (!list) return;
+    const meta = setupSummary();
+    const existing = list.querySelector("[data-onboarding-open]");
+    if (existing) {
+      // Only ever touch the DOM when the text has actually changed: this runs
+      // from a mutation observer, and rewriting identical markup would mutate
+      // the view again, which is a loop that starves the page of everything
+      // else - including the test that was watching it.
+      const line = existing.querySelector(".more-row-meta");
+      if (line && line.textContent !== meta) line.textContent = meta;
+      return;
     }
+    const row = document.createElement("button");
+    row.className = "more-row";
+    row.setAttribute("data-onboarding-open", "1");
+    row.innerHTML = `<span class="more-row-ico">${icon("pin", { size: 20 })}</span>
+      <span class="more-row-main">
+        <span class="more-row-title">Trip setup</span>
+        <span class="more-row-meta">${esc(meta)}</span>
+      </span>
+      ${icon("forward", { size: 16, cls: "more-row-go" })}`;
+    row.addEventListener("click", () => open(true));
+    list.insertBefore(row, list.firstChild);
   }
 
-  // app.js runs before this script and has already decided whether a new
-  // install needs the welcome sheet. Render once; observing the overlay here
-  // creates an unnecessary lifecycle that can keep browser tests alive after
-  // the user has finished onboarding.
-  if (welcomeOverlay.classList.contains("open")) render();
+  const view = document.getElementById("view");
+  if (view) {
+    // Every screen is drawn by app.js into #view, so the row is re-added when
+    // the More screen is drawn rather than once at startup. Nothing is observed
+    // on the overlay: that was the lifecycle that kept browser tests alive.
+    new MutationObserver(paintSetupRow).observe(view, { childList: true, subtree: true });
+    paintSetupRow();
+  }
+
+  // A door for the browser suite, in the spirit of app.js's __tripTest: the
+  // More row is what a person uses, but a test that only finds the row cannot
+  // tell "the row is there" from "the row works".
+  window.__tripTest = window.__tripTest || {};
+  window.__tripTest.openTripSetup = () => open(true);
+
+  // app.js runs first and has already decided whether a new install needs the
+  // questions. If it opened the sheet, take it over with the four-step version.
+  if (overlay.classList.contains("open")) open(false);
 })();

@@ -1,7 +1,3 @@
-.welcome-counts { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-.welcome-counts .welcome-label { margin-top: 16px; }
-.welcome-trip-types .search-chip { flex: 1 1 42%; justify-content: center; text-align: center; }
-
 :root {
   /* Colour is defined once, here, and everything else refers to it. The app
      previously carried 40-odd raw #fff values that dark mode could not reach,

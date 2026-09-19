@@ -1,0 +1,14 @@
+/* The four questions in the first-run setup.
+   In its own file rather than appended to style.css, which is large enough that
+   edits to its tail are unreliable: everything the setup needs that the app did
+   not already have lives here. The base look of the sheet - .welcome-overlay,
+   .welcome-title, .welcome-input, .welcome-chips - is in style.css, because the
+   original three-question welcome used it. */
+
+/* Two counts side by side, under the quick presets. */
+.welcome-counts { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.welcome-counts .welcome-label { margin-top: 16px; }
+
+/* Trip styles wrap two to a row rather than trailing off the side. */
+.welcome-trip-types { display: flex; flex-wrap: wrap; }
+.welcome-trip-types .search-chip { flex: 1 1 42%; justify-content: center; text-align: center; }

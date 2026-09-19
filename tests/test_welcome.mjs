@@ -140,6 +140,78 @@ await page.waitForTimeout(600);
 check('an app with a trip already in it does not ask', await page.evaluate(() =>
   !document.getElementById('welcomeOverlay').classList.contains('open')));
 
+// ---------- Finding it again when the trip already exists ----------
+// The first version of this could only be seen by somebody who had just
+// installed the app. Everyone who updates already has a trip, so the questions
+// were invisible to exactly the people who wanted to answer them - which is how
+// a shipped feature came back looking like nothing had changed.
+
+await fresh();
+await page.evaluate(() => {
+  localStorage.setItem('boards-v1', JSON.stringify({
+    activeId: 'b-old',
+    boards: [{ id: 'b-old', name: 'Trip', destination: 'Skye', dated: true, hasGuide: false, createdAt: 1 }],
+  }));
+  localStorage.setItem('board:b-old:picks', JSON.stringify([
+    { id: 'p1', name: 'Edinburgh Castle', city: 'Edinburgh', category: 'Castle', addedAt: 1 },
+  ]));
+  localStorage.setItem('trip-settings-v1', JSON.stringify({
+    destination: 'Skye',
+    travellers: '2 adults and 1 child. A 4-year-old',
+    tripType: 'Outdoors and walking',
+  }));
+});
+await page.reload({ waitUntil: 'load' });
+await page.waitForTimeout(600);
+
+await page.evaluate(() => document.querySelector('[data-view="more"]').click());
+await page.waitForTimeout(500);
+const rowText = await page.evaluate(() => {
+  const row = document.querySelector('[data-onboarding-open]');
+  return row ? row.textContent.replace(/\s+/g, ' ').trim() : '';
+});
+check('the More screen offers the trip setup', /Trip setup/.test(rowText), rowText);
+check('and says what the app already knows about the trip',
+  /Skye/.test(rowText) && /2 adults/.test(rowText), rowText);
+
+await page.evaluate(() => document.querySelector('[data-onboarding-open]').click());
+await page.waitForTimeout(400);
+check('opening it asks the same four questions', await page.evaluate(() =>
+  document.querySelectorAll('.welcome-dot').length === 4 &&
+  /Where are you going/.test(document.getElementById('welcomeOverlay').textContent)));
+check('with the destination already in the box', await page.evaluate(() =>
+  document.getElementById('welcomeWhere').value) === 'Skye');
+check('and the way on is open, because there is already an answer', await page.evaluate(() =>
+  document.querySelector('[data-welcome-next]').disabled === false));
+check('cancelling is offered as cancelling, not as skipping', /Cancel/.test(
+  await page.evaluate(() => document.getElementById('welcomeOverlay').textContent)));
+
+await page.evaluate(() => document.querySelector('[data-welcome-next]').click());
+await page.waitForTimeout(300);
+await page.evaluate(() => document.querySelector('[data-welcome-next]').click());
+await page.waitForTimeout(300);
+check('the travellers already given are remembered', await page.evaluate(() =>
+  document.getElementById('welcomeAdults').value) === '2');
+check('including the child', await page.evaluate(() =>
+  document.getElementById('welcomeChildren').value) === '1');
+check('and the detail that changes the day', /4-year-old/.test(
+  await page.evaluate(() => document.getElementById('welcomeDetails').value)));
+
+await page.evaluate(() => document.querySelector('[data-welcome-next]').click());
+await page.waitForTimeout(300);
+check('the trip style already chosen is shown as chosen', await page.evaluate(() =>
+  document.querySelector('[data-welcome-trip-type="Outdoors and walking"]').classList.contains('on')));
+await page.evaluate(() => document.querySelector('[data-welcome-next]').click());
+await page.waitForTimeout(700);
+check('finishing closes it', await page.evaluate(() =>
+  !document.getElementById('welcomeOverlay').classList.contains('open')));
+check('and the trip it was asked about is still there', await page.evaluate(() =>
+  JSON.parse(localStorage.getItem('board:b-old:picks')).length === 1));
+check('with the answers written down', await page.evaluate(() => {
+  const s = JSON.parse(localStorage.getItem('trip-settings-v1'));
+  return s.destination === 'Skye' && /2 adults and 1 child/.test(s.travellers) && s.tripType === 'Outdoors and walking';
+}));
+
 await browser.close();
 console.log(failures === 0 ? '\nALL TESTS PASSED' : `\n${failures} FAILED`);
 process.exit(failures ? 1 : 0);

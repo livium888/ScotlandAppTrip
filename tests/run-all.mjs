@@ -167,7 +167,17 @@ function run(suite) {
 }
 
 server.listen(PORT, async () => {
-  const queue = SUITES.slice();
+  // An optional argument runs a subset: `node tests/run-all.mjs welcome` is the
+  // difference between a three-second check and a six-minute one while working
+  // on one screen. CI passes nothing and still runs everything.
+  const wanted = process.argv.slice(2).filter((a) => !a.startsWith("-"));
+  const chosen = wanted.length ? SUITES.filter((s) => wanted.some((w) => s.includes(w))) : SUITES;
+  if (!chosen.length) {
+    console.log(`No suite matches ${wanted.join(", ")}`);
+    process.exit(1);
+  }
+  if (wanted.length) console.log(`Running ${chosen.length} of ${SUITES.length} suites: ${chosen.join(", ")}`);
+  const queue = chosen.slice();
   const results = [];
   const wallStart = Date.now();
 
