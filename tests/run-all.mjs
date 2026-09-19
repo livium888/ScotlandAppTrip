@@ -169,6 +169,10 @@ server.listen(PORT, async () => {
     }
   };
   await Promise.all(Array.from({ length: LANES }, lane));
+  // Chromium can leave keep-alive connections to the shared test server after
+  // its suite closes. Close those sockets explicitly or Node can remain alive
+  // after the summary has already printed "All suites passed".
+  if (typeof server.closeAllConnections === "function") server.closeAllConnections();
   server.close();
 
   const failed = results.filter((r) => r.code !== 0);
@@ -186,4 +190,5 @@ server.listen(PORT, async () => {
     process.exit(1);
   }
   console.log("\nAll suites passed.");
+  process.exit(0);
 });
