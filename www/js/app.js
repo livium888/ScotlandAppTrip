@@ -250,6 +250,10 @@
       // Free text about who is travelling, so AI suggestions are tailored
       // rather than generic ("family of 3, 4-year-old who walks, no stroller").
       travellers: stored.travellers !== undefined ? stored.travellers : TRIP.traveler || "",
+      // The simple trip shape chosen during first-run setup. Advanced AI
+      // configuration stays in Settings and is deliberately not part of
+      // onboarding.
+      tripType: stored.tripType || "",
       // Standing instructions added to every AI search, in the user's own
       // words ("avoid chains", "nothing needing a car", "vegetarian
       // options"). Applies to search, Explore and the day planner alike.
@@ -556,6 +560,7 @@
     const lines = [];
     const who = whoDescription();
     if (who) lines.push(`Travellers: ${who}`);
+    if (s.tripType) lines.push(`Trip type: ${s.tripType}`);
     if (s.preferences.trim()) lines.push(`What matters to us: ${s.preferences.trim()}`);
     return lines.length ? `\n${lines.join("\n")}` : "";
   }
