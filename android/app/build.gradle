@@ -1,5 +1,13 @@
 apply plugin: 'com.android.application'
 
+def releaseKeystorePath = System.getenv('ANDROID_KEYSTORE_FILE')
+def releaseSigningReady = releaseKeystorePath &&
+        System.getenv('ANDROID_KEYSTORE_PASSWORD') &&
+        System.getenv('ANDROID_KEY_ALIAS') &&
+        System.getenv('ANDROID_KEY_PASSWORD')
+def buildVersionCode = (System.getenv('VERSION_CODE') ?: System.getenv('GITHUB_RUN_NUMBER') ?: '1').toInteger()
+def buildVersionName = System.getenv('VERSION_NAME') ?: "1.0.${buildVersionCode}"
+
 android {
     // The app is called Wayfare; this string is not its name, it is how
     // Android identifies the app. Changing it would install a second, empty
@@ -11,8 +19,11 @@ android {
         applicationId "com.livium888.scotlandtrip"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        // CI supplies VERSION_CODE, falling back to the GitHub run number so
+        // every APK can be installed over the previous one without a manual
+        // Gradle edit. Local builds remain installable with version 1.
+        versionCode buildVersionCode
+        versionName buildVersionName
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -37,6 +48,18 @@ android {
             keyAlias 'androiddebugkey'
             keyPassword 'android'
         }
+        // Release signing is opt-in. The keystore and credentials come from
+        // CI secrets and are never stored in the repository. Without them a
+        // local assembleRelease still produces an unsigned build rather than
+        // silently using the public debug key.
+        if (releaseSigningReady) {
+            release {
+                storeFile file(releaseKeystorePath)
+                storePassword System.getenv('ANDROID_KEYSTORE_PASSWORD')
+                keyAlias System.getenv('ANDROID_KEY_ALIAS')
+                keyPassword System.getenv('ANDROID_KEY_PASSWORD')
+            }
+        }
     }
     buildTypes {
         debug {
@@ -44,6 +67,9 @@ android {
         }
         release {
             minifyEnabled false
+            if (releaseSigningReady) {
+                signingConfig signingConfigs.release
+            }
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
     }
