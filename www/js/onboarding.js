@@ -37,9 +37,12 @@
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;", "`": "&#96;",
   }[c]));
 
+  // Only the questions that cannot be left blank disable the way on. Dates are
+  // asked for (and used to build the days) but staying optional, because a trip
+  // can legitimately be planned before its dates are known.
   function canContinue() {
     if (state.step === 0) return !!state.where.trim();
-    if (state.step === 1) return !!state.start && Number(state.days) >= 1;
+    if (state.step === 1) return true;
     if (state.step === 2) return Number(state.adults) + Number(state.children) > 0;
     return !!state.tripType;
   }
@@ -55,7 +58,7 @@
     if (state.step === 1) return {
       kicker: "2 of 4 · Dates",
       title: "What dates are you going?",
-      sub: "A start date and trip length give Today and your itinerary a useful shape. You can change them later.",
+      sub: "A start date and trip length give Today and your itinerary a useful shape. Optional — you can add or change them later.",
       body: `<label class="welcome-label" for="welcomeStart">First day</label>
         <input class="welcome-input" id="welcomeStart" type="date" value="${esc(state.start)}" />
         <label class="welcome-label" for="welcomeDays">How many days?</label>
@@ -120,9 +123,12 @@
       state.tripType = button.getAttribute("data-welcome-trip-type");
       render();
     }));
-    welcomeOverlay.querySelectorAll("input").forEach((input) => input.addEventListener("input", updateFromInput));
+    welcomeOverlay.querySelectorAll("input").forEach((input) => {
+      input.addEventListener("input", updateFromInput);
+      input.addEventListener("change", updateFromInput);
+    });
     const skip = welcomeOverlay.querySelector("[data-welcome-skip]");
-    if (skip) skip.addEventListener("click", () => finish());
+    if (skip) skip.addEventListener("click", () => finish(true));
     const back = welcomeOverlay.querySelector("[data-welcome-back]");
     if (back) back.addEventListener("click", () => { readInputs(); state.step -= 1; render(); });
     const next = welcomeOverlay.querySelector("[data-welcome-next]");
@@ -134,14 +140,19 @@
     });
   }
 
-  function finish() {
+  function finish(skipped) {
     localStorage.setItem(ONBOARDED_KEY, String(Date.now()));
+    if (skipped) {
+      welcomeOverlay.classList.remove("open");
+      welcomeOverlay.innerHTML = "";
+      return;
+    }
     const boards = readJson("boards-v1", { activeId: null, boards: [] });
     const board = boards.boards.find((item) => item.id === boards.activeId) || boards.boards[0];
     if (board) {
       board.name = state.where.trim() || board.name;
       board.destination = state.where.trim();
-      board.dated = true;
+      if (state.start) board.dated = true;
       localStorage.setItem("boards-v1", JSON.stringify(boards));
     }
     const settings = readJson("trip-settings-v1", {});
@@ -160,7 +171,9 @@
       const days = Math.max(1, Math.min(21, Number(state.days) || 1));
       for (let i = 0; i < days; i++) {
         const date = new Date(year, month - 1, day + i);
-        const iso = date.toISOString().slice(0, 10);
+        // Local date, not UTC: toISOString would shift the day backwards for
+        // anyone west of Greenwich.
+        const iso = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
         if (!plan.days.some((item) => item.date === iso)) {
           plan.days.push({ id: `d-${Date.now()}-${i}`, date: iso, label: `Day ${plan.days.length + 1} · ${date.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" })}` });
         }
