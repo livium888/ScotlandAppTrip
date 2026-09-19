@@ -1,0 +1,10 @@
+{
+  "appId": "com.livium888.scotlandtrip",
+  "appName": "Wayfare",
+  "webDir": "www",
+  "bundledWebRuntime": false,
+  "backgroundColor": "#f7f6f3",
+  "android": {
+    "backgroundColor": "#f7f6f3"
+  }
+}

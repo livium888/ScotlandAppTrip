@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The colour the window is painted before the WebView has drawn
+         anything. It has to be the app's own paper colour: any other value is
+         a flash of somebody else's app on every cold start. -->
+    <color name="appBackground">#f7f6f3</color>
+    <color name="colorPrimary">#1d4e6f</color>
+    <color name="colorPrimaryDark">#143850</color>
+    <color name="colorAccent">#1d4e6f</color>
+</resources>

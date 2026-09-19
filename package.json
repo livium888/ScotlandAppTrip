@@ -1,0 +1,40 @@
+{
+  "name": "wayfare",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "eslint www/js tests && node tests/check-android-xml.mjs && node tests/check-identity.mjs && node tests/run-all.mjs",
+    "lint": "eslint www/js tests"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/livium888/scotlandapptrip.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/livium888/scotlandapptrip/issues"
+  },
+  "homepage": "https://github.com/livium888/scotlandapptrip#readme",
+  "dependencies": {
+    "@capacitor/android": "^8.5.0",
+    "@capacitor/app": "^8.1.1",
+    "@capacitor/browser": "^8.0.4",
+    "@capacitor/core": "^8.5.0",
+    "@capacitor/filesystem": "^8.1.2",
+    "@capacitor/geolocation": "^8.2.1",
+    "@capacitor/haptics": "^8.0.2",
+    "@capacitor/local-notifications": "^8.3.0",
+    "@capacitor/share": "^8.0.1",
+    "@capacitor/status-bar": "^8.0.3"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.5.0",
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.9.0",
+    "globals": "^17.11.0",
+    "playwright": "^1.62.1"
+  }
+}

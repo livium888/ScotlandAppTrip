@@ -1,0 +1,4049 @@
+:root {
+  /* Colour is defined once, here, and everything else refers to it. The app
+     previously carried 40-odd raw #fff values that dark mode could not reach,
+     which is why it showed white slabs on a dark background.
+
+     Dark values are not the light ones inverted: pure black is avoided in
+     favour of a slightly lifted grey (harsh contrast is tiring at night),
+     text sits just under pure white for the same reason, and accents are
+     desaturated because saturated colour vibrates against a dark surface. */
+
+  --bg: #f7f6f3;          /* page behind everything */
+  --surface: #ffffff;     /* cards, sheets, inputs */
+  --surface-2: #efece6;   /* inset areas, chips at rest */
+  --text: #1a1f27;
+  --text-muted: #5c6672;
+  --border: #e2ded6;
+
+  --accent: #1d4e6f;      /* primary actions, active state */
+  --on-accent: #ffffff;
+  --accent-soft: #e8eef3;
+
+  --success: #2e7d6a;
+  --warn: #9a6410;
+  --warn-bg: rgba(217, 164, 65, 0.16);
+  --danger: #a33636;
+  --danger-bg: rgba(163, 54, 54, 0.1);
+  --ai: #6b4c8a;
+
+  /* Kept so older rules that still name them keep working. */
+  --navy: var(--accent);
+  --navy-dark: #143850;
+  --teal: var(--success);
+  --thistle: var(--ai);
+  --mustard: #d9a441;
+  --paper: var(--bg);
+  --card: var(--surface);
+  --ink: var(--text);
+  --ink-soft: var(--text-muted);
+  --line: var(--border);
+
+
+  /* ---- Type scale ----
+     Nine steps. Before this the sheet carried 23 distinct sizes, seven of
+     them on half pixels, which is what nudging one thing to sit nicely
+     beside another ninety times looks like afterwards. Nothing shared a
+     rhythm, so nothing looked related - the single biggest reason the app
+     read as cluttered even on screens that were individually fine.
+     Steps are far enough apart to read as a decision rather than a wobble. */
+  --type-2xs: 11px;   /* badges, the smallest labels */
+  --type-xs: 12px;    /* captions, meta lines, tab labels */
+  --type-sm: 13px;    /* secondary body, chips */
+  --type-md: 15px;    /* body */
+  --type-lg: 17px;    /* card titles */
+  --type-xl: 20px;    /* section headings */
+  --type-2xl: 24px;   /* screen titles */
+  --type-3xl: 28px;
+  --type-4xl: 34px;   /* hero numerals */
+
+  /* ---- Spacing ----
+     Lighter touch than type: the gaps were mostly already on 4/8/12, and the
+     handful of 5s, 7s and 9s are a pixel of jitter nobody sees. These exist
+     so new rules have something to reach for instead of guessing again. */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  --radius: 14px;
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  overscroll-behavior: none;
+  /* The root of the scale. Without this, anything the sheet does not name
+     inherits the browser's own 16px, which is not a step on the scale and
+     lands between two of them - which is exactly how a stray unstyled span
+     and an unclassed <h2> ended up being the last two things off-rhythm. */
+  font-size: var(--type-md);
+}
+
+/* Headings default into the scale rather than into the browser's 2em-of-
+   Times sizing. Class rules outrank these, so nothing already styled moves;
+   this only catches the ones nobody got to. */
+h1, h2, h3, h4, h5, h6 {
+  font-size: var(--type-lg);
+  line-height: 1.25;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.topbar {
+  background: linear-gradient(135deg, var(--navy) 0%, var(--navy-dark) 100%);
+  color: var(--on-accent);
+  padding: calc(14px + var(--safe-top)) 20px 14px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.topbar-text { flex: 1; min-width: 0; }
+.topbar-settings {
+  flex-shrink: 0;
+  background: rgba(255, 255, 255, 0.14);
+  border: none;
+  color: var(--on-accent);
+  font-size: var(--type-lg);
+  line-height: 1;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+}
+.topbar-settings:active { opacity: 0.6; }
+
+.topbar-title {
+  font-size: var(--type-xl);
+  font-weight: 700;
+  letter-spacing: 0.2px;
+}
+
+.topbar-sub {
+  font-size: var(--type-sm);
+  opacity: 0.75;
+  margin-top: 2px;
+}
+
+/* One fact, at the top, above whatever screen you are on. */
+.app-banner {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 16px;
+  font-size: var(--type-sm);
+  font-weight: 600;
+  line-height: 1.35;
+}
+.app-banner.offline { background: var(--warn-bg); color: var(--warn); }
+.app-banner.nudge { background: var(--accent-soft); color: var(--accent); }
+.app-banner span { flex: 1; }
+.app-banner-action {
+  flex-shrink: 0;
+  font-family: inherit;
+  font-size: var(--type-xs);
+  font-weight: 800;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  background: transparent;
+  color: inherit;
+}
+.backup-overdue { color: var(--warn); }
+
+.view {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 16px 16px calc(90px + var(--safe-bottom));
+}
+
+.tabbar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  background: var(--surface);
+  border-top: 1px solid var(--line);
+  padding: 6px 4px calc(6px + var(--safe-bottom));
+  box-shadow: 0 -2px 10px rgba(0,0,0,0.05);
+}
+
+.tab {
+  flex: 1;
+  background: none;
+  border: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 2px;
+  color: var(--ink-soft);
+  font-size: var(--type-2xs);
+  font-family: inherit;
+  border-radius: 10px;
+}
+
+.tab.active { color: var(--navy); font-weight: 700; }
+.tab-icon { font-size: var(--type-xl); }
+
+/* Cards */
+.card {
+  background: var(--card);
+  border-radius: var(--radius);
+  padding: 16px;
+  margin-bottom: 14px;
+  box-shadow: 0 1px 3px rgba(20,30,50,0.06);
+  border: 1px solid var(--line);
+}
+
+.card h2 { margin: 0 0 6px; font-size: var(--type-lg); }
+.card p { margin: 0; color: var(--ink-soft); font-size: var(--type-md); line-height: 1.45; }
+
+.section-label {
+  font-size: var(--type-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--ink-soft);
+  margin: 18px 0 8px;
+  font-weight: 700;
+}
+.section-label:first-child { margin-top: 0; }
+
+/* Overview hero */
+.hero {
+  background: linear-gradient(135deg, var(--teal), var(--navy));
+  color: var(--on-accent);
+  border-radius: var(--radius);
+  padding: 18px;
+  margin-bottom: 16px;
+}
+.hero h1 { margin: 0 0 4px; font-size: var(--type-xl); }
+.hero p { margin: 0; opacity: 0.85; font-size: var(--type-sm); }
+.hero-stats { display: flex; gap: 10px; margin-top: 14px; }
+.hero-stat { flex: 1; background: rgba(255,255,255,0.14); border-radius: 10px; padding: 10px; text-align: center; }
+.hero-stat b { display: block; font-size: var(--type-lg); }
+.hero-stat span { font-size: var(--type-2xs); opacity: 0.85; }
+
+.hero-share {
+  display: block;
+  width: 100%;
+  margin-top: 14px;
+  padding: 11px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.3);
+  background: rgba(255,255,255,0.1);
+  color: var(--on-accent);
+  font-family: inherit;
+  font-size: var(--type-sm);
+  font-weight: 700;
+}
+.hero-share:active { background: rgba(255,255,255,0.2); }
+
+.pill {
+  display: inline-block;
+  font-size: var(--type-2xs);
+  font-weight: 700;
+  padding: 3px 9px;
+  border-radius: 999px;
+  color: var(--on-accent);
+  margin-right: 6px;
+}
+
+/* Itinerary */
+.day-card { padding: 0; overflow: hidden; }
+.day-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  cursor: pointer;
+}
+.day-head-left { display: flex; flex-direction: column; gap: 4px; }
+.day-name { font-size: var(--type-xs); color: var(--ink-soft); font-weight: 600; }
+.day-title { font-size: var(--type-lg); font-weight: 700; }
+.day-date { font-size: var(--type-xs); color: var(--ink-soft); }
+.chevron { transition: transform 0.2s ease; color: var(--ink-soft); font-size: var(--type-md); }
+.day-card.open .chevron { transform: rotate(90deg); }
+
+.day-summary {
+  padding: 0 16px 12px;
+  font-size: var(--type-sm);
+  color: var(--ink-soft);
+  line-height: 1.4;
+}
+
+.day-items { display: none; border-top: 1px solid var(--line); }
+.day-card.open .day-items { display: block; }
+
+.day-share {
+  display: block;
+  width: calc(100% - 32px);
+  margin: 4px 16px 16px;
+  padding: 11px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--paper);
+  color: var(--navy);
+  font-family: inherit;
+  font-size: var(--type-sm);
+  font-weight: 700;
+}
+.day-share:active { background: var(--line); }
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(84px + var(--safe-bottom));
+  transform: translateX(-50%) translateY(12px);
+  background: var(--ink);
+  color: var(--on-accent);
+  font-size: var(--type-sm);
+  font-weight: 600;
+  padding: 10px 18px;
+  border-radius: 999px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  z-index: 60;
+  max-width: 85vw;
+  text-align: center;
+}
+/* A stop whose time has passed: still there, still tappable, visibly behind
+   you rather than competing with what is next. */
+.today-card.done { opacity: 0.55; }
+.today-done-flag {
+  font-size: var(--type-2xs);
+  font-weight: 800;
+  letter-spacing: 0.6px;
+  color: var(--ink-soft);
+  margin-bottom: 4px;
+}
+
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+.item {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  gap: 12px;
+}
+.item:last-child { border-bottom: none; }
+.item-time {
+  flex-shrink: 0;
+  width: 46px;
+  font-size: var(--type-2xs);
+  font-weight: 700;
+  color: var(--navy);
+  padding-top: 2px;
+}
+.item-body { flex: 1; }
+.item-name { font-weight: 700; font-size: var(--type-md); margin-bottom: 2px; }
+.item-detail { font-size: var(--type-sm); color: var(--ink-soft); line-height: 1.42; margin-bottom: 6px; }
+.item-tag {
+  display: inline-block;
+  font-size: var(--type-2xs);
+  font-weight: 700;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  color: var(--ink-soft);
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+
+.item-linked { cursor: pointer; }
+.item-linked:active { background: var(--paper); }
+.item-arrow { color: var(--ink-soft); font-weight: 700; }
+
+/* Place detail modal */
+.modal {
+  position: fixed;
+  inset: 0;
+  /* Above the map (60) and search (65) overlays: a sheet is always opened
+     from something, so it has to sit on top of whatever opened it. At 50 the
+     search-result preview rendered underneath the search screen and looked
+     like a dead tap. */
+  z-index: 80;
+  display: none;
+}
+.modal.open { display: block; }
+.modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(20, 24, 32, 0.5);
+  display: flex;
+  align-items: flex-end;
+}
+.modal-sheet {
+  position: relative;
+  width: 100%;
+  max-height: 85vh;
+  overflow-y: auto;
+  background: var(--card);
+  border-radius: 18px 18px 0 0;
+  padding: 10px 20px calc(24px + var(--safe-bottom));
+  box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.2);
+}
+.modal-handle {
+  width: 36px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--line);
+  margin: 6px auto 14px;
+}
+.modal-close {
+  position: absolute;
+  top: 12px;
+  right: 16px;
+  background: var(--paper);
+  border: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  font-size: var(--type-md);
+  color: var(--ink-soft);
+  line-height: 1;
+}
+.modal-title { margin: 10px 0 2px; font-size: var(--type-xl); }
+.modal-subtitle { font-size: var(--type-sm); color: var(--ink-soft); margin-bottom: 8px; }
+.modal-price {
+  display: inline-block;
+  font-size: var(--type-sm);
+  font-weight: 700;
+  color: var(--navy);
+  background: var(--paper);
+  padding: 4px 10px;
+  border-radius: 8px;
+  margin-bottom: 8px;
+}
+.modal-notes { font-size: var(--type-md); color: var(--ink); line-height: 1.5; margin: 10px 0 18px; }
+.modal-actions { display: flex; flex-direction: column; gap: 10px; }
+.modal-btn {
+  display: block;
+  text-align: center;
+  text-decoration: none;
+  font-size: var(--type-md);
+  font-weight: 700;
+  padding: 12px;
+  border-radius: 10px;
+  background: var(--paper);
+  color: var(--navy);
+  border: 1px solid var(--line);
+}
+.modal-btn-primary { background: var(--navy); color: var(--on-accent); border-color: var(--navy); }
+
+/* Places */
+.search-bar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.search-bar input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  border-radius: 10px;
+  padding: 11px 14px;
+  min-height: 44px;
+  font-size: var(--type-md);
+  font-family: inherit;
+  color: var(--ink);
+}
+.search-bar input::placeholder { color: var(--ink-soft); }
+.search-bar button {
+  flex-shrink: 0;
+  width: 44px;
+  border: none;
+  border-radius: 10px;
+  background: var(--navy);
+  color: var(--on-accent);
+  font-size: var(--type-lg);
+}
+.search-bar button:active { background: var(--navy-dark); }
+.search-hint {
+  font-size: var(--type-xs);
+  color: var(--ink-soft);
+  margin: 0 0 16px;
+  line-height: 1.4;
+}
+
+.filter-row { display: flex; gap: 8px; margin-bottom: 14px; overflow-x: auto; padding-bottom: 2px; }
+.filter-chip {
+  flex-shrink: 0;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink-soft);
+  font-size: var(--type-sm);
+  font-weight: 700;
+  padding: 7px 14px;
+  border-radius: 999px;
+  font-family: inherit;
+}
+.filter-chip.active { background: var(--navy); color: var(--on-accent); border-color: var(--navy); }
+/* Marks the app's guess as a guess, so the highlighted chip reads as an offer
+   rather than as a choice already made. */
+/* Marks a search result that is a town rather than somewhere in one. */
+.area-badge {
+  font-size: var(--type-2xs);
+  font-weight: 800;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+.search-result-area { border-left: 3px solid var(--teal); }
+
+.chip-suggested {
+  font-size: var(--type-2xs);
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  opacity: 0.75;
+  margin-left: 4px;
+}
+/* The folder chips wrap onto as many lines as they need: a trip with a dozen
+   folders must not hide half of them off the right-hand edge. */
+#folderChips { flex-wrap: wrap; }
+
+.place-card { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+.place-name { font-weight: 700; font-size: var(--type-md); margin-bottom: 3px; }
+.place-meta { font-size: var(--type-xs); color: var(--ink-soft); margin-bottom: 6px; }
+.place-distance {
+  font-size: var(--type-xs);
+  font-weight: 700;
+  color: var(--teal);
+  margin-bottom: 5px;
+}
+.place-notes { font-size: var(--type-sm); color: var(--ink-soft); line-height: 1.4; }
+.place-links { display: flex; gap: 14px; margin-top: 8px; }
+.place-links a {
+  font-size: var(--type-sm);
+  font-weight: 700;
+  color: var(--navy);
+  text-decoration: none;
+}
+.place-links a:active { opacity: 0.6; }
+/* Address / hours / phone lines on a pick card. */
+.place-fact {
+  font-size: var(--type-sm);
+  color: var(--ink-soft);
+  line-height: 1.45;
+  margin-top: 4px;
+}
+.place-fact a { color: var(--navy); text-decoration: none; font-weight: 600; }
+/* Preview of what was found for a shared place, above the folder chips. */
+.share-summary {
+  background: rgba(0, 0, 0, 0.04);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin: 4px 0 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.share-summary-row {
+  font-size: var(--type-sm);
+  color: var(--ink-soft);
+  line-height: 1.4;
+  word-break: break-word;
+}
+.place-price {
+  flex-shrink: 0;
+  font-size: var(--type-xs);
+  font-weight: 700;
+  color: var(--navy);
+  background: var(--paper);
+  padding: 4px 9px;
+  border-radius: 8px;
+  white-space: nowrap;
+}
+
+/* Picks */
+.pick-toggle {
+  border: none;
+  background: none;
+  font-size: var(--type-2xl);
+  line-height: 1;
+  color: var(--ink-faint, var(--ink-soft));
+  padding: 2px;
+}
+.pick-toggle.picked { color: #c8455a; }
+.pick-toggle:active { opacity: 0.6; }
+
+.pick-remove {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 50%;
+  background: var(--paper);
+  color: var(--ink-soft);
+  font-size: var(--type-xs);
+  align-self: flex-start;
+}
+.pick-remove:active { background: var(--line); }
+
+.pick-status {
+  font-size: var(--type-sm);
+  color: var(--ink-soft);
+  font-style: italic;
+  margin: 0 0 8px;
+}
+
+.pick-card { padding: 0; overflow: hidden; }
+.pick-card-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 16px;
+}
+.pick-mini-map {
+  height: 130px;
+  width: 100%;
+  background: var(--paper);
+}
+
+.pick-maps-btn {
+  display: block;
+  text-align: center;
+  text-decoration: none;
+  margin: 12px 16px;
+  padding: 12px;
+  border-radius: 10px;
+  background: var(--navy);
+  color: var(--on-accent);
+  font-size: var(--type-sm);
+  font-weight: 700;
+}
+.pick-maps-btn:active { background: var(--navy-dark); }
+
+.move-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 0 16px 14px;
+}
+.move-label { font-size: var(--type-xs); color: var(--ink-soft); font-weight: 700; margin-right: 2px; }
+.move-chip {
+  flex-shrink: 0;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink-soft);
+  font-size: var(--type-xs);
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-family: inherit;
+}
+.move-chip.active { background: var(--navy); color: var(--on-accent); border-color: var(--navy); }
+
+.search-map {
+  height: 220px;
+  width: 100%;
+}
+
+/* ---- Guide entries, shaped like everything else ----
+   These used to be tall cards whose body did nothing, sitting under rows that
+   opened a sheet. Same row, same chevron, same behaviour - with the ♥ kept
+   because saving one is still a single tap. */
+.guide-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 12px 14px;
+  margin-bottom: 8px;
+}
+.guide-row-main {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: none;
+  padding: 0;
+  margin: 0;
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+  text-align: left;
+}
+.guide-row-main:active { opacity: 0.6; }
+.guide-row .pick-toggle { flex-shrink: 0; }
+
+.sort-row {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 10px;
+  scrollbar-width: none;
+}
+.sort-row::-webkit-scrollbar { display: none; }
+
+/* What used to be two whole tabs. Three chips wide enough to hit, sitting
+   above the list they filter rather than beside it in the tab bar. */
+.kind-row { margin: 14px 0 4px; }
+.kind-row .filter-chip { flex: 1; text-align: center; padding: 9px 8px; }
+
+/* ---- Suggestions while you type ----
+   Sits directly under the field it belongs to, as a list rather than a
+   floating layer: on a phone there is nothing to float over, and a popup
+   would just be a thing that can be dismissed by accident. */
+.suggest-list {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  overflow: hidden;
+  margin: 8px 0 10px;
+}
+.suggest-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 52px;
+  padding: 10px 14px;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: none;
+  color: var(--text);
+  font-family: inherit;
+  text-align: left;
+}
+.suggest-item:last-child { border-bottom: none; }
+.suggest-item:active { background: var(--surface-2); }
+.suggest-icon { flex-shrink: 0; font-size: var(--type-lg); }
+.suggest-text { flex: 1; min-width: 0; }
+.suggest-name { display: block; font-size: var(--type-md); font-weight: 600; }
+.suggest-context {
+  display: block;
+  font-size: var(--type-sm);
+  color: var(--text-muted);
+  margin-top: 1px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.suggest-msg { padding: 12px 14px; font-size: var(--type-sm); color: var(--text-muted); }
+
+/* ---- Weather ----
+   A quiet line, not a widget. It's context for a decision you're already
+   making, so it sits with the day rather than competing with it. */
+.weather-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  margin: 0 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-2);
+  font-size: var(--type-sm);
+  color: var(--text);
+}
+.weather-line.muted { color: var(--text-muted); font-size: var(--type-sm); }
+.weather-line.wet {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+.weather-bits { font-weight: 600; }
+.weather-line.muted .weather-bits { font-weight: 400; }
+.weather-stale { font-size: var(--type-2xs); color: var(--text-muted); font-weight: 400; }
+.weather-suggest {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  margin: -4px 0 12px;
+  padding: 10px 14px;
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--accent);
+  font-family: inherit;
+  font-size: var(--type-sm);
+  font-weight: 600;
+}
+.weather-suggest:active { opacity: 0.7; }
+
+/* Inside a day card the line is flush with the card's own padding. */
+.day-card .weather-line { margin: 0 0 10px; }
+
+.detail-weather { display: flex; align-items: center; gap: 10px; margin: 12px 0 0; }
+.detail-weather-day {
+  flex-shrink: 0;
+  font-size: var(--type-xs);
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.detail-weather .weather-line { flex: 1; margin: 0; }
+
+.overview-day-right { display: flex; align-items: center; gap: 12px; }
+.overview-day-weather { font-size: var(--type-sm); color: var(--text); }
+
+/* ---- Search, on its own screen ----
+   The app's most-used action, given the whole display: keyboard on arrival,
+   results with room to breathe, and no saved list being shoved down the page
+   underneath them. */
+.search-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 65;
+  display: none;
+  flex-direction: column;
+  background: var(--bg);
+}
+.search-overlay.open { display: flex; }
+
+.search-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: calc(10px + var(--safe-top)) 12px 10px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.search-back {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  border: none;
+  border-radius: 50%;
+  background: none;
+  color: var(--text);
+  font-size: var(--type-2xl);
+  line-height: 1;
+}
+.search-back:active { opacity: 0.5; }
+.search-field {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 6px 0 14px;
+}
+.search-field input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: none;
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--type-lg); /* 16px or Android zooms the page on focus */
+  padding: 12px 0;
+  outline: none;
+}
+.search-clear {
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  border: none;
+  border-radius: 50%;
+  background: var(--border);
+  color: var(--text);
+  font-size: var(--type-sm);
+}
+
+.search-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 16px calc(20px + var(--safe-bottom));
+  -webkit-overflow-scrolling: touch;
+}
+
+.search-trigger {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 48px;
+  padding: 12px 16px;
+  margin-bottom: 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: var(--type-md);
+  text-align: left;
+}
+.search-trigger-icon { flex-shrink: 0; }
+.search-trigger-text { flex: 1; min-width: 0; }
+
+.search-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.search-chip {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 9px 14px;
+  font-family: inherit;
+  font-size: var(--type-sm);
+  min-height: 40px;
+}
+.search-chip:active { opacity: 0.6; }
+/* A chosen chip has to LOOK chosen. This class was being written into the
+   markup by the events screen, the category filters and the welcome flow, and
+   styled in exactly one of them - so everywhere else "on" changed nothing at
+   all and there was no way to tell what you had picked. Every other chip in
+   the app (.day-chip, .map-chip, .sort-chip) fills in when selected; this one
+   now does the same, plus a weight change so it does not rely on colour
+   alone. */
+.search-chip.on {
+  background: var(--navy);
+  border-color: var(--navy);
+  color: var(--on-accent);
+  font-weight: 600;
+}
+.search-chip.on .ico { color: var(--on-accent); }
+.search-tip { margin-top: 16px; }
+
+.search-filters { display: flex; gap: 8px; overflow-x: auto; padding: 10px 0; scrollbar-width: none; }
+.search-filters::-webkit-scrollbar { display: none; }
+.search-map-wrap { border-radius: 14px; overflow: hidden; border: 1px solid var(--border); margin-bottom: 12px; }
+/* Leaflet's own backdrop is a fixed light grey, which shows as a bright slab
+   in dark mode while tiles are still loading - or forever, offline. */
+.leaflet-container { background: var(--surface-2); }
+
+.search-results { display: flex; flex-direction: column; gap: 10px; }
+.search-result {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 14px;
+}
+/* The body of a result opens its full details before you commit to saving.
+   The tap target is a button, but the citation link sits outside it - a link
+   nested in a button is neither valid nor reliably clickable. */
+.search-result-main,
+.explore-result-main { flex: 1; min-width: 0; }
+.result-tap {
+  display: block;
+  width: 100%;
+  border: none;
+  background: none;
+  padding: 0;
+  margin: 0;
+  font-family: inherit;
+  font-size: inherit;
+  text-align: left;
+  color: inherit;
+}
+.result-tap:active { opacity: 0.6; }
+.search-result-more {
+  margin-top: 6px;
+  font-size: var(--type-xs);
+  font-weight: 600;
+  color: var(--accent);
+}
+.preview-loading { color: var(--text-muted); font-style: italic; }
+.search-add {
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  border: none;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: var(--type-xl);
+  line-height: 1;
+}
+.search-add.added { background: var(--success); }
+.search-add:disabled { opacity: 1; }
+.search-foot { text-align: center; margin-top: 14px; }
+
+.search-loading { display: flex; flex-direction: column; align-items: center; gap: 14px; padding: 48px 0; }
+.spinner {
+  width: 28px;
+  height: 28px;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ---- Category picker ----
+   One button that opens the whole list, instead of a row of chips running
+   off the side of the screen. Deliberately not a native <select>: on Android
+   that opens a plain full-screen list with no icons and no grouping. */
+.cat-select {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  min-height: 48px;
+  margin: 4px 0 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--type-md);
+  font-weight: 600;
+  text-align: left;
+}
+.cat-select-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cat-select-caret { opacity: 0.6; flex-shrink: 0; }
+
+.cat-select-row { display: flex; align-items: center; gap: 8px; }
+.cat-select-row .cat-select { flex: 1; min-width: 0; }
+.cat-tune {
+  flex-shrink: 0;
+  width: 48px;
+  min-height: 48px;
+  margin: 4px 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: var(--type-lg);
+}
+.cat-tune:active { opacity: 0.6; }
+.cat-tuned { opacity: 0.7; font-size: var(--type-2xs); }
+
+/* A quiet inline control for "show me the working" - not a button competing
+   with the ones that actually do something. */
+.link-btn {
+  display: block;
+  width: 100%;
+  margin: 6px 0 2px;
+  padding: 8px 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font-family: inherit;
+  font-size: var(--type-sm);
+  font-weight: 600;
+  text-align: left;
+  min-height: 36px;
+}
+.prompt-shown {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: var(--type-xs);
+  line-height: 1.5;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+/* Standing preferences: chips edit the box rather than replacing it. */
+.pref-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.pref-chip {
+  border: 1px dashed var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: 999px;
+  padding: 7px 12px;
+  font-family: inherit;
+  font-size: var(--type-xs);
+  min-height: 34px;
+}
+.pref-chip.on {
+  background: var(--accent-soft);
+  border-style: solid;
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.cat-group-label {
+  font-size: var(--type-xs);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin: 18px 0 8px;
+}
+.cat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(102px, 1fr));
+  gap: 8px;
+}
+.cat-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 74px;
+  padding: 10px 6px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-family: inherit;
+  text-align: center;
+}
+.cat-tile.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+.cat-tile-icon { font-size: var(--type-2xl); line-height: 1; }
+.cat-tile-label { font-size: var(--type-xs); font-weight: 600; line-height: 1.25; }
+
+/* ---- Trip overview, built from the board's own places ---- */
+.overview-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.overview-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px 14px;
+  font-family: inherit;
+  text-align: left;
+  min-height: 62px;
+}
+.overview-stat b { font-size: var(--type-2xl); color: var(--text); }
+.overview-stat span { font-size: var(--type-xs); color: var(--text-muted); }
+.overview-day,
+.overview-budget {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  padding: 12px 0;
+  font-family: inherit;
+  font-size: var(--type-md);
+  color: var(--text);
+  text-align: left;
+  min-height: 48px;
+}
+.overview-day:last-child { border-bottom: none; }
+.overview-day-label { font-weight: 600; }
+.overview-day-count { font-size: var(--type-sm); color: var(--text-muted); }
+.overview-budget { border-bottom: none; }
+
+/* ---- Budget you can actually edit ---- */
+.budget-hero { text-align: center; padding: 20px 16px; }
+.budget-hero-total { font-size: var(--type-4xl); font-weight: 700; color: var(--text); }
+.budget-hero-sub { font-size: var(--type-sm); color: var(--text-muted); margin-top: 4px; }
+.budget-input-wrap { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.budget-currency { color: var(--text-muted); font-size: var(--type-md); }
+.budget-input {
+  width: 74px;
+  min-height: 40px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--type-md);
+  text-align: right;
+}
+.budget-remove {
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  font-size: var(--type-md);
+  min-width: 34px;
+  min-height: 34px;
+}
+.budget-add { display: flex; gap: 8px; margin-top: 12px; }
+.budget-add input[type="text"] { flex: 1; min-width: 0; }
+.budget-add input[type="number"] { width: 84px; flex-shrink: 0; text-align: right; }
+.budget-add input {
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--type-md);
+}
+.budget-add button {
+  flex-shrink: 0;
+  min-width: 44px;
+  min-height: 44px;
+  border: none;
+  border-radius: 10px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: var(--type-xl);
+}
+.cost-field { display: flex; align-items: center; gap: 6px; }
+.cost-field .settings-input { flex: 1; }
+
+/* ---- Packing list, per board and editable ---- */
+.packing-list li { display: flex; align-items: center; gap: 10px; }
+.packing-text { flex: 1; min-width: 0; }
+.packing-remove {
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  font-size: var(--type-md);
+  min-width: 44px;
+  min-height: 44px;
+  flex-shrink: 0;
+}
+.packing-add { margin-top: 12px; }
+/* The strikethrough belongs to the item's text, not to its delete button. */
+.packing-list li.checked { text-decoration: none; }
+.packing-list li.checked .packing-text { text-decoration: line-through; }
+/* A textarea doesn't inherit the page font on its own, and the default
+   monospace made notes look like a terminal. */
+.notes-box { resize: vertical; min-height: 92px; line-height: 1.45; font-family: inherit; }
+
+/* ---- Every saved place on one map ---- */
+/* Full screen rather than a card: the whole point is seeing the spread, and
+   a 220px window inside a scrolling list can't show it. Sits above the tab
+   bar (z-index 60 vs the sheet's 50) because it's a place you leave, not a
+   layer you peer through. */
+.map-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: none;
+  flex-direction: column;
+  background: var(--bg);
+}
+.map-overlay.open { display: flex; }
+
+.map-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: calc(10px + var(--safe-top)) 14px 10px;
+  background: linear-gradient(135deg, var(--navy) 0%, var(--navy-dark) 100%);
+  color: var(--on-accent);
+  flex-shrink: 0;
+}
+.map-head-text { flex: 1; min-width: 0; }
+.map-title { font-size: var(--type-lg); font-weight: 700; }
+.map-sub { font-size: var(--type-xs); opacity: 0.75; margin-top: 2px; }
+.map-close,
+.map-locate {
+  flex-shrink: 0;
+  width: 38px;
+  height: 38px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.14);
+  color: var(--on-accent);
+  font-size: var(--type-lg);
+  line-height: 1;
+}
+.map-close:active,
+.map-locate:active { opacity: 0.6; }
+.map-locate:disabled { opacity: 0.4; }
+
+.map-filters {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 10px 14px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  scrollbar-width: none;
+}
+.map-filters::-webkit-scrollbar { display: none; }
+.map-chip {
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 7px 14px;
+  font-size: var(--type-sm);
+  font-family: inherit;
+  min-height: 34px;
+}
+.map-chip.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+  font-weight: 600;
+}
+/* Looks like a map chip, but is not one: the sort row now sits on the same
+   screen the map opens over, and a shared class made "every chip on the page"
+   mean two different sets of controls. */
+.sort-chip {
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 7px 14px;
+  font-size: var(--type-sm);
+  font-family: inherit;
+  min-height: 34px;
+}
+.sort-chip.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+  font-weight: 600;
+}
+
+.map-canvas { flex: 1; min-height: 0; background: var(--surface-2); }
+
+/* Pointing at a place: the pin is fixed to the centre of the screen and the
+   map moves under it. Steadier than tapping - your finger isn't covering the
+   thing you're aiming at. */
+.map-pick-canvas { position: relative; }
+.map-crosshair {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -100%);
+  z-index: 500; /* over Leaflet's panes, under its controls */
+  font-size: var(--type-4xl);
+  line-height: 1;
+  pointer-events: none;
+  filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.4));
+}
+.map-pick-label {
+  font-size: var(--type-md);
+  font-weight: 600;
+  color: var(--text);
+  text-align: center;
+  margin-bottom: 10px;
+  min-height: 20px;
+}
+.search-chip-wide { width: 100%; text-align: center; }
+
+.map-foot {
+  flex-shrink: 0;
+  padding: 12px 14px calc(12px + var(--safe-bottom));
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+}
+.map-open-btn {
+  width: 100%;
+  min-height: 48px;
+  border: none;
+  border-radius: 12px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: var(--type-md);
+  font-weight: 600;
+  font-family: inherit;
+}
+.map-open-btn:active { opacity: 0.8; }
+.map-note {
+  font-size: var(--type-xs);
+  color: var(--text-muted);
+  margin-top: 8px;
+  text-align: center;
+}
+.map-foot .map-note:only-child { margin-top: 0; }
+
+/* Numbered pins for a planned day, plain dots otherwise - the number is the
+   thing that tells you the order you'd actually walk it. */
+.map-pin-wrap { background: none; border: none; }
+.map-pin {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--on-accent);
+  border: 2px solid var(--surface);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+  font-size: var(--type-xs);
+  font-weight: 700;
+}
+.map-pin.booked { background: var(--success); }
+.map-pin.ordered { width: 28px; height: 28px; }
+
+.map-pop-name { font-size: var(--type-md); font-weight: 700; color: var(--text); }
+.map-pop-meta { font-size: var(--type-xs); color: var(--text-muted); margin-top: 2px; }
+.map-pop-actions { display: flex; gap: 8px; margin-top: 10px; }
+.map-pop-btn {
+  flex: 1;
+  min-height: 36px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: var(--type-sm);
+  font-family: inherit;
+  white-space: nowrap;
+}
+.leaflet-popup-content-wrapper { background: var(--surface); color: var(--text); }
+.leaflet-popup-tip { background: var(--surface); }
+.leaflet-popup-content { margin: 12px 14px; min-width: 170px; }
+
+.candidate-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+}
+.candidate-add {
+  flex-shrink: 0;
+  border: none;
+  border-radius: 8px;
+  background: var(--navy);
+  color: var(--on-accent);
+  font-family: inherit;
+  font-size: var(--type-sm);
+  font-weight: 700;
+  padding: 9px 16px;
+}
+.candidate-add:active { background: var(--navy-dark); }
+
+/* Leaflet control tweaks to match the app's rounded-card look */
+.leaflet-container { border-radius: inherit; font-family: inherit; }
+
+.nearby-panel { border-top: 1px solid var(--line); }
+.nearby-toggle {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: none;
+  color: var(--navy);
+  font-family: inherit;
+  font-size: var(--type-sm);
+  font-weight: 700;
+  padding: 14px 16px;
+}
+.nearby-toggle:active { background: var(--paper); }
+.nearby-map { height: 200px; width: 100%; }
+.center-marker { font-size: var(--type-xl); color: #c8455a; text-align: center; line-height: 1; }
+
+/* Budget */
+.budget-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 11px 0;
+  border-bottom: 1px solid var(--line);
+  gap: 10px;
+}
+.budget-row:last-child { border-bottom: none; }
+.budget-item { font-size: var(--type-sm); flex: 1; }
+.budget-range { font-size: var(--type-sm); font-weight: 700; color: var(--navy); white-space: nowrap; }
+.budget-total {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-top: 14px;
+  margin-top: 4px;
+  border-top: 2px solid var(--navy);
+}
+.budget-total b { font-size: var(--type-lg); }
+.budget-total .budget-range { font-size: var(--type-lg); }
+
+/* Tips */
+.tip-card h2 { display: flex; align-items: center; gap: 8px; }
+
+.packing-list { list-style: none; margin: 0; padding: 0; }
+.packing-list li {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  font-size: var(--type-sm);
+  line-height: 1.45;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+  color: var(--ink);
+}
+.packing-list li:last-child { border-bottom: none; }
+.packing-list li::before { content: "☐"; color: var(--teal); font-size: var(--type-md); flex-shrink: 0; }
+.packing-list li.checked { color: var(--ink-soft); text-decoration: line-through; }
+.packing-list li.checked::before { content: "☑"; color: var(--mustard); }
+
+/* ---------- Settings sheet ---------- */
+.settings-label {
+  display: block;
+  font-size: var(--type-sm);
+  font-weight: 700;
+  color: var(--ink);
+  margin: 14px 0 5px;
+}
+.settings-input {
+  width: 100%;
+  padding: 11px 12px;
+  border: 1px solid rgba(0, 0, 0, 0.14);
+  border-radius: 10px;
+  font-size: var(--type-md);
+  background: var(--surface);
+  color: var(--ink);
+}
+.settings-hint {
+  font-size: var(--type-xs);
+  color: var(--ink-soft);
+  line-height: 1.45;
+  margin-top: 6px;
+}
+#saveSettings { margin-top: 18px; width: 100%; text-align: center; }
+
+/* ---------- Personal itinerary planner ---------- */
+.plan-toggle { margin-bottom: 4px; }
+.plan-day-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.plan-day-remove {
+  background: none;
+  border: none;
+  color: var(--ink-soft);
+  font-size: var(--type-md);
+  padding: 0;
+  min-width: 44px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.plan-items { display: flex; flex-direction: column; gap: 8px; }
+.plan-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 9px;
+  background: rgba(0, 0, 0, 0.035);
+  border-radius: 10px;
+}
+.plan-time {
+  width: 60px;
+  min-height: 44px;
+  flex-shrink: 0;
+  padding: 6px 7px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 8px;
+  font-size: var(--type-xs);
+  background: var(--surface);
+  color: var(--ink);
+}
+.plan-item-main { flex: 1; min-width: 0; }
+.plan-item-name { font-size: var(--type-sm); font-weight: 700; color: var(--ink); }
+.plan-item-sub {
+  font-size: var(--type-xs);
+  color: var(--ink-soft);
+  margin-top: 2px;
+  line-height: 1.35;
+}
+.plan-item-actions { display: flex; gap: 4px; flex-shrink: 0; }
+.plan-item-actions button {
+  background: none;
+  border: none;
+  color: var(--ink-soft);
+  font-size: var(--type-md);
+  /* Was 4px 5px, which drew a 23x27 target - and the one immediately to its
+     right deletes the stop. A missed tap on a reorder arrow was not a near
+     miss, it removed the thing you were trying to move. The glyph is
+     unchanged; only the box that receives the tap grew. */
+  padding: 0;
+  min-width: 44px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+}
+.plan-item-actions button:disabled { opacity: 0.25; }
+.plan-add-row { margin-top: 10px; }
+.plan-add-row select {
+  width: 100%;
+  padding: 10px 11px;
+  border: 1px solid rgba(0, 0, 0, 0.14);
+  border-radius: 10px;
+  font-size: var(--type-sm);
+  background: var(--surface);
+  color: var(--ink);
+}
+
+/* AI-sourced results and the auto-planner */
+.ai-badge {
+  display: inline-block;
+  font-size: var(--type-2xs);
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  background: var(--thistle);
+  color: var(--on-accent);
+  padding: 2px 6px;
+  border-radius: 999px;
+  vertical-align: middle;
+}
+.candidate-rating { font-size: var(--type-xs); color: var(--ink-soft); font-weight: 600; }
+/* A score the AI reported reads differently from one a ratings API measured:
+   dotted underline and a "~" so the two are never mistaken for each other. */
+.ai-rating {
+  color: var(--ai);
+  border-bottom: 1px dotted var(--ai);
+}
+.rating-caveat { color: var(--text-muted); font-weight: 400; font-size: var(--type-xs); }
+.plan-ai-card { padding: 14px; }
+.plan-ai-btn {
+  width: 100%;
+  padding: 12px;
+  border-radius: 10px;
+  border: none;
+  background: var(--thistle);
+  color: var(--on-accent);
+  font-family: inherit;
+  font-size: var(--type-md);
+  font-weight: 700;
+}
+.plan-ai-btn:disabled { opacity: 0.6; }
+.plan-ai-btn:active { opacity: 0.8; }
+
+/* Diagnostic output (API errors, key test results) - monospace and wrapped
+   so a long Google error message is actually readable on a phone. */
+.settings-result {
+  margin-top: 10px;
+  padding: 10px 11px;
+  border-radius: 9px;
+  font-size: var(--type-2xs);
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: rgba(0, 0, 0, 0.05);
+  color: var(--ink-soft);
+  max-height: 220px;
+  overflow-y: auto;
+}
+.settings-result.ok { background: rgba(47, 122, 107, 0.12); color: #24614f; }
+.settings-result.bad { background: rgba(160, 50, 50, 0.1); color: #8c2f2f; }
+
+/* ---------- Explore around a place ---------- */
+.explore-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  font-size: var(--type-md);
+}
+.explore-centre-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+.explore-centre-row select {
+  flex: 1;
+  min-width: 150px;
+  padding: 8px 10px;
+  border: 1px solid rgba(0, 0, 0, 0.14);
+  border-radius: 9px;
+  font-size: var(--type-sm);
+  background: var(--surface);
+  color: var(--ink);
+}
+.explore-centre { font-size: var(--type-sm); color: var(--ink-soft); margin: 6px 0 8px; }
+.explore-radius { display: flex; align-items: center; gap: 8px; margin: 10px 0 4px; }
+.explore-radius label { font-size: var(--type-sm); color: var(--ink-soft); font-weight: 600; }
+.explore-radius select {
+  padding: 7px 9px;
+  border: 1px solid rgba(0, 0, 0, 0.14);
+  border-radius: 8px;
+  font-size: var(--type-sm);
+  background: var(--surface);
+  color: var(--ink);
+}
+.explore-results { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+.explore-result { margin-bottom: 0; }
+
+/* The only control that runs a search, so it looks like the end of the form
+   rather than one more setting in it. */
+/* Two actions per result: save it, or look around it. */
+/* Looks and behaves like the field it always looked like. */
+/* The chip that makes a day rather than choosing one. */
+.day-chip.add {
+  border-style: dashed;
+  font-weight: 700;
+}
+
+.refine-bar { margin-top: 4px; }
+.refine-bar input { font-size: var(--type-sm); }
+
+.search-trigger-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0 16px;
+  margin-bottom: 14px;
+}
+.search-trigger-input {
+  flex: 1;
+  border: 0;
+  background: none;
+  font-family: inherit;
+  font-size: var(--type-md);
+  color: var(--ink);
+  padding: 13px 0;
+  outline: none;
+}
+.search-trigger-input::placeholder { color: var(--ink-soft); }
+
+.search-result-actions { display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; }
+.search-around {
+  font-family: inherit;
+  font-size: var(--type-md);
+  width: 38px;
+  height: 34px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--paper);
+  color: var(--ink);
+}
+.search-around:active { background: var(--card); }
+.explore-lead { margin: 0 0 8px; }
+
+.explore-describe { margin: 8px 0 0; }
+.explore-describe input { font-size: var(--type-sm); }
+.explore-run { width: 100%; margin-top: 12px; }
+.explore-run[disabled] { opacity: 0.5; }
+.explore-run-hint { text-align: center; margin-top: 6px; }
+
+/* ---------- Settings extras ---------- */
+.settings-divider { height: 1px; background: var(--line); margin: 18px 0 4px; }
+.settings-btn-row { display: flex; gap: 8px; margin-top: 8px; }
+.settings-btn-row .modal-btn { flex: 1; text-align: center; }
+
+/* ---------- Plan warnings, walking legs, booked ---------- */
+.plan-leg {
+  font-size: var(--type-xs);
+  color: var(--ink-soft);
+  padding: 2px 4px 2px 12px;
+  border-left: 2px dashed var(--line);
+  margin-left: 22px;
+}
+/* A long walk with a small child is the thing worth noticing. */
+.plan-leg.far { color: #8a5a1f; border-left-color: var(--mustard); font-weight: 600; }
+.plan-warn {
+  font-size: var(--type-xs);
+  color: #8c2f2f;
+  background: rgba(160, 50, 50, 0.09);
+  border-radius: 7px;
+  padding: 5px 7px;
+  margin-top: 5px;
+  line-height: 1.4;
+}
+.booked-badge {
+  font-size: var(--type-2xs);
+  font-weight: 700;
+  background: var(--teal);
+  color: var(--on-accent);
+  padding: 2px 6px;
+  border-radius: 999px;
+  vertical-align: middle;
+}
+.pick-note-row { display: flex; gap: 8px; margin-top: 10px; align-items: center; }
+.booked-toggle {
+  flex-shrink: 0;
+  font-size: var(--type-xs);
+  font-weight: 700;
+  padding: 7px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--paper);
+  color: var(--ink-soft);
+  font-family: inherit;
+  min-height: 34px;
+}
+.booked-toggle.on { background: var(--teal); border-color: var(--teal); color: var(--on-accent); }
+.pick-note {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  font-size: var(--type-sm);
+  background: var(--surface);
+  color: var(--ink);
+  font-family: inherit;
+}
+
+/* ---------- Accessibility & touch targets ----------
+   Interactive controls get a 44px minimum so they're reliably tappable
+   one-handed, and a visible focus ring for keyboard/switch access. */
+button, select, input[type="text"], input[type="file"] { font-family: inherit; }
+.tab, .modal-btn, .filter-chip, .move-chip, .candidate-add, .pick-remove {
+  min-height: 44px;
+}
+.candidate-add, .pick-remove { min-width: 44px; }
+:focus-visible {
+  outline: 2px solid var(--teal);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
+
+/* ---------- Dark mode ----------
+   Follows the system setting. Worth having for a trip app: most planning
+   happens in the evening, and a white screen at 6am in a shared room with a
+   sleeping 4-year-old is antisocial. */
+@media (prefers-color-scheme: dark) {
+  /* Only the tokens change. Everything downstream follows automatically,
+     which is the whole point of having them - the previous dark mode had to
+     patch individual rules and missed most of them. */
+  :root {
+    --bg: #121417;
+    --surface: #1b1f24;
+    --surface-2: #262b32;
+    --text: #e7e9ec;        /* not pure white - less glare at night */
+    --text-muted: #a2aab6;
+    --border: #2f353d;
+
+    --accent: #6aa5d6;      /* lightened and desaturated for dark surfaces */
+    --on-accent: #0e1319;   /* dark text on the light accent */
+    --accent-soft: #1e2a35;
+
+    --success: #5cae99;
+    --warn: #e0b45c;
+    --warn-bg: rgba(224, 180, 92, 0.14);
+    --danger: #e08b86;
+    --danger-bg: rgba(224, 139, 134, 0.13);
+    --ai: #a184c4;
+
+    --navy-dark: #0d1116;
+    --mustard: #e0b45c;
+  }
+
+  /* Shadows read as murk on dark; a border carries the edge instead. */
+  .card { box-shadow: none; }
+  .tabbar { box-shadow: none; border-top-color: var(--border); }
+  .modal-sheet { box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.5); }
+  .modal-backdrop { background: rgba(0, 0, 0, 0.65); }
+
+  /* The header gradient loses its point when both stops are near-black. */
+  .topbar {
+    background: var(--surface);
+    color: var(--text);
+    border-bottom: 1px solid var(--border);
+  }
+  .topbar-settings { background: var(--surface-2); color: var(--text); }
+  .hero { background: linear-gradient(135deg, #1f4a5e, #23303f); color: var(--text); }
+
+  /* Same reasoning as the topbar: the map header is that header. */
+  .map-head {
+    background: var(--surface);
+    color: var(--text);
+    border-bottom: 1px solid var(--border);
+  }
+  .map-close, .map-locate { background: var(--surface-2); color: var(--text); }
+
+  /* Leaflet ships its own white controls, which sit on the map as bright
+     slabs at night. */
+  .leaflet-bar a,
+  .leaflet-bar a:hover {
+    background: var(--surface);
+    color: var(--text);
+    border-bottom-color: var(--border);
+  }
+  .leaflet-bar { border-color: var(--border); }
+  .leaflet-popup-close-button { color: var(--text-muted) !important; }
+}
+
+/* ---------- One-tap adding ----------
+   Replaces native <select> pickers, which open a full-screen modal on
+   Android and made adding several places a trip through several modals. */
+.plan-add-row { margin-top: 12px; }
+.plan-add-label { font-size: var(--type-xs); color: var(--ink-soft); font-weight: 700; margin-bottom: 6px; }
+.plan-add-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.add-chip {
+  font-size: var(--type-xs);
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px dashed var(--line);
+  background: transparent;
+  color: var(--ink-soft);
+  font-family: inherit;
+  min-height: 44px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.add-chip:active { background: var(--paper); border-style: solid; }
+
+.quick-times { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.quick-time {
+  font-size: var(--type-2xs);
+  font-weight: 600;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink-soft);
+  font-family: inherit;
+  min-height: 30px;
+}
+.quick-time:active { background: var(--paper); }
+
+/* Schedule straight from a pick card, instead of going to another tab. */
+.day-assign-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin-top: 10px;
+}
+.day-chip {
+  font-size: var(--type-xs);
+  font-weight: 700;
+  padding: 7px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink-soft);
+  font-family: inherit;
+  min-height: 34px;
+}
+.day-chip.on { background: var(--navy); border-color: var(--navy); color: var(--on-accent); }
+
+/* Toast carrying a single corrective action ("Change"), so a reversible
+   choice is offered after the fact rather than prompted for beforehand. */
+.toast.with-action { display: flex; align-items: center; gap: 14px; }
+.toast-action {
+  background: none;
+  border: none;
+  color: #8fc0f0;
+  font-family: inherit;
+  font-size: var(--type-sm);
+  font-weight: 700;
+  padding: 2px 0;
+  flex-shrink: 0;
+}
+
+/* ---------- Picks: compact rows ----------
+   A saved place is a row you can scan, not a full dossier. Everything else
+   is one tap away in the detail sheet. */
+.pick-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 13px 14px;
+  margin-bottom: 8px;
+  font-family: inherit;
+  min-height: 60px;
+}
+.pick-row:active { background: var(--paper); }
+.pick-row-main { flex: 1; min-width: 0; }
+.pick-row-name {
+  font-size: var(--type-md);
+  font-weight: 700;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pick-row-meta { font-size: var(--type-xs); color: var(--ink-soft); margin-top: 2px; }
+.pick-row-badges { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.pick-row-badges:empty { display: none; }
+.row-badge {
+  font-size: var(--type-2xs);
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  color: var(--ink-soft);
+}
+.row-badge.day { background: var(--navy); border-color: var(--navy); color: var(--on-accent); }
+/* An unresolved question about where a place actually is - warning-coloured,
+   because it quietly affects the map, the distances and the forecast. */
+.row-badge.doubt { background: var(--warn-bg); border-color: transparent; color: var(--warn); }
+.doubt-fact { color: var(--warn); }
+.location-option { width: 100%; text-align: left; font-family: inherit; background: var(--card); }
+.location-option:active { background: var(--paper); }
+.row-badge.booked { background: var(--teal); border-color: var(--teal); color: var(--on-accent); }
+.pick-row-chevron { color: var(--ink-soft); font-size: var(--type-xl); flex-shrink: 0; }
+
+/* ---------- A major place: the heading its own section sits under ---------- */
+/* Reads as a heading rather than a row - flush to the edge, no card - while
+   the places filed under it keep their cards, so the nesting is obvious at a
+   glance instead of being two identical-looking lists. */
+.area-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 20px 0 10px;
+  padding-bottom: 8px;
+  border-bottom: 2px solid var(--line);
+}
+.area-head:first-child { margin-top: 0; }
+.area-head-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+  background: none;
+  border: 0;
+  padding: 0;
+  text-align: left;
+  font-family: inherit;
+}
+.area-head-icon { font-size: var(--type-xl); flex-shrink: 0; }
+.area-head-text { flex: 1; min-width: 0; }
+.area-head-name {
+  display: block;
+  font-size: var(--type-lg);
+  font-weight: 800;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.area-head-meta { display: block; font-size: var(--type-xs); color: var(--ink-soft); margin-top: 1px; }
+.area-head-explore {
+  flex-shrink: 0;
+  font-family: inherit;
+  font-size: var(--type-xs);
+  font-weight: 700;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  color: var(--ink);
+}
+.area-head-explore:active { background: var(--card); }
+
+.detail-map {
+  height: 160px;
+  border-radius: 10px;
+  overflow: hidden;
+  margin: 12px 0;
+  background: var(--paper);
+}
+.modal-btn.danger { color: #8c2f2f; border-color: rgba(160, 50, 50, 0.3); }
+
+/* ---------- Empty states ---------- */
+.empty-state { text-align: center; padding: 28px 20px; }
+.empty-icon { font-size: var(--type-4xl); margin-bottom: 8px; }
+.empty-state h2 { font-size: var(--type-lg); margin-bottom: 8px; }
+.empty-list {
+  text-align: left;
+  margin: 12px 0 8px;
+  padding-left: 18px;
+  color: var(--ink-soft);
+  font-size: var(--type-sm);
+  line-height: 1.6;
+}
+.empty-list b { color: var(--ink); }
+
+/* ---------- Today ---------- */
+.today-head { margin-bottom: 14px; }
+/* Shown when every planned day is behind you: says so, and offers the one
+   thing worth doing from there. */
+.today-over { margin-bottom: 14px; }
+.today-over .modal-btn { margin-top: 10px; }
+.today-label {
+  font-size: var(--type-xs);
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--teal);
+}
+.today-date { font-size: var(--type-2xl); font-weight: 700; color: var(--ink); margin-top: 2px; }
+
+.today-card { position: relative; }
+/* The next stop is the one thing you're looking for when you open the app. */
+.today-card.next { border-color: var(--teal); border-width: 2px; }
+.today-next-flag {
+  position: absolute;
+  top: -9px;
+  left: 14px;
+  background: var(--teal);
+  color: var(--on-accent);
+  font-size: var(--type-2xs);
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+.today-card-head { display: flex; justify-content: space-between; gap: 12px; }
+.today-time { font-size: var(--type-xs); font-weight: 700; color: var(--teal); text-transform: uppercase; }
+.today-name { font-size: var(--type-lg); font-weight: 700; color: var(--ink); margin-top: 2px; }
+.today-sub { font-size: var(--type-sm); color: var(--ink-soft); margin-top: 3px; line-height: 1.4; }
+.today-note {
+  font-size: var(--type-sm);
+  color: var(--ink);
+  background: rgba(217, 164, 65, 0.14);
+  border-radius: 8px;
+  padding: 7px 9px;
+  margin-top: 8px;
+}
+.today-actions { display: flex; gap: 8px; margin-top: 12px; }
+.today-actions .modal-btn { flex: 1; text-align: center; }
+.today-leg {
+  font-size: var(--type-xs);
+  color: var(--ink-soft);
+  text-align: center;
+  padding: 2px 0 10px;
+}
+
+/* ---------- Boards ---------- */
+.topbar-text { cursor: pointer; }
+/* A quiet affordance that the title is tappable, without a button's weight. */
+.topbar-title::after { content: " ⌄"; opacity: 0.6; font-size: var(--type-md); }
+
+.board-list { display: flex; flex-direction: column; gap: 8px; margin: 12px 0 4px; }
+.board-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px 14px;
+  font-family: inherit;
+  min-height: 56px;
+}
+.board-row.active { border-color: var(--accent); background: var(--accent-soft); }
+.board-row-main { flex: 1; min-width: 0; }
+.board-row-name { font-size: var(--type-md); font-weight: 700; color: var(--text); }
+.board-row-meta { font-size: var(--type-xs); color: var(--text-muted); margin-top: 2px; }
+.board-row-tick { color: var(--accent); font-weight: 700; font-size: var(--type-lg); }
+
+.board-dated-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  font-size: var(--type-sm);
+  color: var(--text-muted);
+}
+.board-dated-row input { width: 20px; height: 20px; }
+
+/* ---------- Suggest a trip ---------- */
+/* The question builder reuses the search overlay's frame - same full screen,
+   same back arrow - because it is the same kind of thing: a screen you go into
+   to ask for something and come out of with places. Everything below is the
+   parts that differ. */
+
+.idea-head-text { flex: 1; min-width: 0; }
+.idea-head-title { font-size: var(--type-lg); font-weight: 700; color: var(--text); }
+.idea-head-sub {
+  font-size: var(--type-xs);
+  color: var(--text-muted);
+  margin-top: 1px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.idea-sentence {
+  margin: 0;
+  font-size: var(--type-md);
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 14px;
+}
+.idea-sentence b { color: var(--accent); font-weight: 700; }
+/* An unanswered part reads as a gap in the sentence rather than as absent,
+   so what is still missing is visible without counting rows. */
+.idea-blank {
+  color: var(--text-muted);
+  border-bottom: 1.5px dashed var(--border);
+}
+.idea-sentence-soft {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: var(--type-sm);
+  color: var(--text-muted);
+}
+.idea-sentence-soft b { color: var(--text); font-weight: 600; }
+
+/* One question a screen. The dots are the map of it: filled where answered,
+   ringed where you are, and every one of them a way back. */
+.idea-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 0 4px;
+}
+.idea-dots { display: flex; gap: 6px; flex: 1; flex-wrap: wrap; }
+.idea-dot {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  background: none;
+  position: relative;
+}
+.idea-dot::after {
+  content: "";
+  position: absolute;
+  top: 7px;
+  left: 7px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--border);
+}
+.idea-dot.on::after { background: var(--success); }
+.idea-dot.now::after {
+  background: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-soft);
+}
+.idea-count { font-size: var(--type-xs); font-weight: 700; color: var(--text-muted); flex-shrink: 0; }
+
+/* The step fills the screen so the sentence being built can sit at the foot of
+   it rather than floating under the chips with a void beneath.
+   Only the question screens: a column flex container shrinks its children to
+   fit rather than overflowing, so applying this to the results turned three
+   route cards into three 25px slivers with nothing scrollable. Hence
+   `flex: 1 0 auto` here too - grow into spare room, never shrink below the
+   content. */
+.idea-body { display: flex; flex-direction: column; }
+.idea-body > * { flex-shrink: 0; }
+.idea-step { padding: 8px 0 4px; flex: 1 0 auto; display: flex; flex-direction: column; }
+.idea-step-title {
+  margin: 0;
+  font-size: var(--type-2xl);
+  line-height: 1.25;
+  font-weight: 700;
+  color: var(--text);
+}
+.idea-step .idea-slot-hint { margin: 8px 0 14px; }
+.idea-slot-hint {
+  margin: 6px 0 10px;
+  font-size: var(--type-sm);
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+.idea-chips { margin-bottom: 4px; }
+.idea-chip.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+  font-weight: 600;
+}
+.idea-input { width: 100%; margin-top: 10px; }
+
+/* The sentence being built, kept on screen under the answer - the reason for
+   one question a screen rather than eight on one is that both now fit. */
+.idea-so-far { margin-top: auto; padding-top: 22px; border-top: 1px solid var(--border); }
+.idea-so-far-label {
+  display: block;
+  font-size: var(--type-2xs);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.idea-review { margin-top: 16px; display: flex; flex-direction: column; }
+.idea-review-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  border: none;
+  border-top: 1px solid var(--border);
+  background: none;
+  font-family: inherit;
+  padding: 12px 0;
+}
+.idea-review-row:active { opacity: 0.6; }
+.idea-review-label {
+  flex-shrink: 0;
+  width: 74px;
+  font-size: var(--type-2xs);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.idea-review-value { flex: 1; min-width: 0; font-size: var(--type-md); color: var(--text); }
+.idea-review-value.empty { color: var(--text-muted); font-style: italic; }
+.idea-review-edit { flex-shrink: 0; font-size: var(--type-xs); font-weight: 600; color: var(--accent); }
+
+/* Next is pinned rather than scrolled to: the whole point of the change was
+   not having to go looking for it. */
+.idea-nav {
+  flex-shrink: 0;
+  display: flex;
+  gap: 10px;
+  padding: 10px 16px calc(10px + var(--safe-bottom));
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+}
+.idea-nav .modal-btn { flex: 1; text-align: center; min-height: 48px; }
+.idea-nav .idea-back { flex: 0 0 96px; }
+.idea-nav .modal-btn:disabled { opacity: 0.4; }
+.idea-nav-hint {
+  flex-shrink: 0;
+  text-align: center;
+  margin: 0;
+  padding: 0 16px calc(8px + var(--safe-bottom));
+  background: var(--surface);
+}
+.idea-slide-next .idea-step { animation: ideaInRight 0.18s ease-out; }
+.idea-slide-back .idea-step { animation: ideaInLeft 0.18s ease-out; }
+@keyframes ideaInRight { from { opacity: 0; transform: translateX(26px); } }
+@keyframes ideaInLeft { from { opacity: 0; transform: translateX(-26px); } }
+.plan-idea-btn { background: var(--accent); margin-top: 8px; }
+
+/* The question that produced these results. Two lines is enough to recognise
+   it; the whole thing is one tap away under Change. */
+.idea-asked { margin: 6px 0 14px; }
+.idea-asked-line {
+  margin: 0 0 4px;
+  font-size: var(--type-sm);
+  line-height: 1.5;
+  color: var(--text-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.idea-asked-line b { color: var(--text); font-weight: 600; }
+
+.idea-option { padding: 0; overflow: hidden; }
+.idea-option-head {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: none;
+  font-family: inherit;
+  padding: 16px;
+}
+.idea-option-title { display: block; font-size: var(--type-lg); font-weight: 700; color: var(--text); line-height: 1.3; }
+.idea-option-meta {
+  display: block;
+  font-size: var(--type-xs);
+  font-weight: 600;
+  color: var(--accent);
+  margin-top: 4px;
+}
+.idea-option-summary { display: block; font-size: var(--type-sm); line-height: 1.45; color: var(--text-muted); margin-top: 8px; }
+/* What the route actually is: the places it goes through, in order. The line
+   that lets two closed cards be compared without opening either. */
+.idea-option-route {
+  display: block;
+  font-size: var(--type-sm);
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--surface-2);
+  border-radius: 10px;
+  padding: 8px 10px;
+  margin-top: 10px;
+}
+.idea-option-chevron {
+  display: block;
+  margin-top: 12px;
+  font-size: var(--type-sm);
+  font-weight: 700;
+  color: var(--accent);
+}
+.idea-option.open { border-color: var(--accent); }
+.idea-option-actions { padding: 4px 16px 0; }
+.idea-option .settings-hint { padding: 8px 16px 14px; }
+
+.idea-day { padding: 0 16px; }
+.idea-day-label {
+  font-size: var(--type-xs);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin: 14px 0 2px;
+}
+.idea-stop { padding: 11px 0 8px; border-top: 1px solid var(--border); }
+.idea-stop-main { display: block; width: 100%; text-align: left; }
+.idea-stop-kind { font-size: var(--type-md); margin-right: 4px; }
+.idea-stop-name { display: block; font-size: var(--type-md); font-weight: 600; color: var(--text); line-height: 1.35; }
+.idea-stop-time { font-weight: 700; color: var(--success); font-size: var(--type-xs); }
+.idea-stop-meta { display: block; font-size: var(--type-xs); color: var(--text-muted); margin-top: 3px; }
+.idea-stop-why { display: block; font-size: var(--type-sm); line-height: 1.45; color: var(--text-muted); margin-top: 5px; }
+/* A stop the measurement says is outside the distance asked for. Flagged
+   rather than dropped: the model may know a road we do not, and silently
+   removing a stop looks like the AI simply had less to say. */
+.idea-stop-warn { display: block; font-size: var(--type-xs); color: var(--warn); margin-top: 6px; }
+.idea-stop.over { background: var(--warn-bg); border-radius: 10px; padding-left: 10px; padding-right: 10px; }
+
+/* Actions under the text, not beside it: stacked in a column they were three
+   rows deep and made every stop 145px tall. */
+.idea-stop-actions { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.idea-swap {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  border: none;
+  background: none;
+  font-family: inherit;
+  font-size: var(--type-sm);
+  font-weight: 600;
+  color: var(--accent);
+  /* Sized to its neighbours in the row: a 27px text button next to two 38px
+     ones is both hard to hit and reads as less real than it is. */
+  min-height: 38px;
+  padding: 4px 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.idea-swap:active { opacity: 0.6; }
+.idea-swap-spacer { flex: 1; }
+.idea-stop-actions .search-around { flex-shrink: 0; height: 38px; }
+.idea-stop-actions .candidate-add { flex-shrink: 0; padding: 10px 14px; }
+.idea-stop-actions .candidate-add.saved { background: var(--success); }
+.idea-loading { text-align: center; }
+
+/* "Refine" and "Again" are words, not icons. They inherited the 44px icon
+   button from the search bar, which cut them off against the screen edge. */
+.refine-bar button { width: auto; padding: 0 14px; font-size: var(--type-sm); font-weight: 700; }
+
+/* ---------- Where a search is anchored ---------- */
+/* Always on screen, directly under the field it constrains. The old behaviour
+   was to scope by the region's name invisibly, which meant a wrong area was
+   both the cause of bad results and impossible to notice. */
+.search-anchor {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+  font-family: inherit;
+  text-align: left;
+  padding: 10px 16px;
+  min-height: 44px;
+}
+.search-anchor:active { opacity: 0.7; }
+.search-anchor-pin { flex-shrink: 0; font-size: var(--type-sm); }
+.search-anchor-text {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--type-sm);
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.search-anchor-text b { color: var(--text); font-weight: 700; }
+.search-anchor-change { flex-shrink: 0; font-size: var(--type-sm); font-weight: 700; color: var(--accent); }
+.search-outside {
+  background: var(--warn-bg);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-top: 12px;
+  color: var(--warn);
+}
+.search-outside .link-btn { color: var(--warn); font-weight: 700; }
+
+/* ---------- Plan my days ---------- */
+.planner-lead { margin: 10px 0 12px; }
+.planner-count {
+  font-size: var(--type-sm);
+  color: var(--text-muted);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px 12px;
+  line-height: 1.5;
+}
+.planner-count b { color: var(--text); }
+.planner-count-warn { display: block; color: var(--warn); margin-top: 4px; }
+.planner-bulk { display: flex; gap: 8px; margin: 12px 0 4px; }
+
+.planner-area { margin-top: 14px; }
+.planner-area-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  font-family: inherit;
+  padding: 12px 14px;
+  min-height: 48px;
+  text-align: left;
+}
+.planner-area-head.on { border-color: var(--accent); background: var(--accent-soft); }
+.planner-area-head.part { border-color: var(--accent); }
+.planner-area-tick { width: 16px; color: var(--accent); font-weight: 700; }
+.planner-area-name { flex: 1; min-width: 0; font-size: var(--type-md); font-weight: 700; color: var(--text); }
+.planner-area-count { font-size: var(--type-xs); color: var(--text-muted); font-weight: 600; }
+
+.planner-places { padding: 4px 0 0 10px; }
+.planner-place {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: none;
+  font-family: inherit;
+  padding: 11px 4px;
+  min-height: 46px;
+  text-align: left;
+}
+.planner-place-tick {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  border: 1.5px solid var(--border);
+  border-radius: 6px;
+  font-size: var(--type-xs);
+  line-height: 17px;
+  text-align: center;
+  color: var(--on-accent);
+}
+.planner-place.on .planner-place-tick { background: var(--accent); border-color: var(--accent); }
+.planner-place-main { flex: 1; min-width: 0; }
+.planner-place-name { display: block; font-size: var(--type-md); color: var(--text); }
+.planner-place-meta { display: block; font-size: var(--type-xs); color: var(--text-muted); margin-top: 2px; }
+
+.planner-notes { background: var(--accent-soft); border-color: transparent; }
+.planner-day-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 8px; }
+.planner-day-name { font-size: var(--type-md); font-weight: 700; color: var(--text); }
+.planner-day-meta { font-size: var(--type-xs); color: var(--text-muted); flex-shrink: 0; }
+.planner-stop { display: flex; gap: 10px; padding: 8px 0; border-top: 1px solid var(--border); }
+.planner-stop-time { width: 46px; flex-shrink: 0; font-size: var(--type-xs); font-weight: 700; color: var(--success); }
+.planner-stop-main { flex: 1; min-width: 0; }
+.planner-stop-name { display: block; font-size: var(--type-md); color: var(--text); }
+.planner-stop-why { display: block; font-size: var(--type-sm); color: var(--text-muted); margin-top: 2px; line-height: 1.4; }
+/* Our own arithmetic, not the model's opinion of its own plan. */
+.planner-warn {
+  margin: 10px 0 0;
+  font-size: var(--type-sm);
+  line-height: 1.45;
+  color: var(--warn);
+  background: var(--warn-bg);
+  border-radius: 10px;
+  padding: 8px 10px;
+}
+.planner-left-row { padding: 9px 0; border-top: 1px solid var(--border); }
+.planner-left-name { display: block; font-size: var(--type-md); font-weight: 600; color: var(--text); }
+.planner-left-why { display: block; font-size: var(--type-sm); color: var(--text-muted); margin-top: 2px; line-height: 1.45; }
+.planner-trip-title { margin: 6px 0 4px; font-size: var(--type-lg); color: var(--text); }
+.planner-trip-places { font-size: var(--type-sm); color: var(--text-muted); margin: 8px 0 12px; line-height: 1.5; }
+.planner-trip .modal-btn { width: 100%; }
+
+/* ---------- Comparing a stop with its alternatives ---------- */
+.chooser-head { display: flex; align-items: center; gap: 12px; margin: 2px 0 6px; }
+.chooser-arrow {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--type-2xl);
+  line-height: 1;
+  font-family: inherit;
+}
+.chooser-arrow:disabled { opacity: 0.35; }
+.chooser-arrow:active:not(:disabled) { background: var(--surface-2); }
+.chooser-dots { flex: 1; display: flex; justify-content: center; gap: 8px; }
+.chooser-dot {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  background: none;
+  position: relative;
+}
+.chooser-dot::after {
+  content: "";
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--border);
+}
+.chooser-dot.now::after { background: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
+.chooser-position {
+  margin: 0 0 10px;
+  text-align: center;
+  font-size: var(--type-xs);
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.chooser-sheet .modal-btn:disabled { opacity: 0.5; }
+
+/* ---------- For kids ---------- */
+.kids-head { margin: 4px 0 18px; }
+.kids-title { margin: 0; font-size: var(--type-2xl); font-weight: 700; color: var(--text); }
+.kids-sub { margin: 4px 0 0; font-size: var(--type-sm); color: var(--text-muted); }
+
+/* Two rows of large targets rather than a list of words: this screen gets used
+   one-handed, usually in a hurry. */
+.kids-finds { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 8px; }
+.kids-find {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 4px;
+  min-height: 66px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  font-family: inherit;
+}
+.kids-find:active { background: var(--surface-2); }
+.kids-find-icon { font-size: var(--type-xl); line-height: 1; }
+.kids-find-label { font-size: var(--type-2xs); font-weight: 600; color: var(--text); text-align: center; line-height: 1.2; }
+
+.kids-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 12px 14px;
+  margin-bottom: 8px;
+}
+.kids-row-main { flex: 1; min-width: 0; text-align: left; border: none; background: none; font-family: inherit; padding: 0; }
+.kids-row-name { display: block; font-size: var(--type-md); font-weight: 600; color: var(--text); }
+.kids-row-meta { display: block; font-size: var(--type-xs); color: var(--text-muted); margin-top: 2px; }
+.kids-row-days { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.kids-row-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.search-chip-surprise { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+
+/* ==========================================================================
+   Design layer
+   --------------------------------------------------------------------------
+   Everything above this line is the app working. This is the app looking like
+   somebody meant it: one typeface, one type scale, one spacing rhythm, one
+   set of shadows, and motion that responds to a finger.
+
+   It sits at the end deliberately - it restates a handful of components
+   rather than rewriting two thousand lines in place, and every colour still
+   comes from the tokens at the top, so dark mode follows without a second
+   set of rules.
+   ========================================================================== */
+
+/* Inter, bundled rather than fetched: the app has to work on a hillside with
+   no signal, and a font that arrives over the network is a font that does not
+   arrive. One variable file covers every weight used here. */
+@font-face {
+  font-family: "InterVar";
+  src: url("../vendor/fonts/inter-latin.woff2") format("woff2");
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+    U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "InterVar";
+  src: url("../vendor/fonts/inter-latin-ext.woff2") format("woff2");
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF,
+    U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020,
+    U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+:root {
+  /* Shadow as one system, not a value guessed per component. Two layers each:
+     a tight dark line for the edge, a wide soft one for the lift. */
+  --shadow-1: 0 1px 2px rgba(16, 24, 40, 0.04), 0 1px 3px rgba(16, 24, 40, 0.06);
+  --shadow-2: 0 2px 4px rgba(16, 24, 40, 0.04), 0 6px 16px rgba(16, 24, 40, 0.08);
+  --shadow-3: 0 8px 24px rgba(16, 24, 40, 0.12), 0 2px 6px rgba(16, 24, 40, 0.06);
+  --shadow-up: 0 -1px 2px rgba(16, 24, 40, 0.03), 0 -8px 24px rgba(16, 24, 40, 0.07);
+
+  /* One curve for things entering, one for things responding to a touch.
+     Nothing in the app should move on a straight line. */
+  --ease: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --fast: 140ms;
+  --med: 260ms;
+
+  --radius-sm: 10px;
+  --radius: 16px;
+  --radius-lg: 22px;
+}
+
+html, body {
+  font-family: "InterVar", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  /* Inter's default figures are proportional; tabular ones stop times and
+     prices from jittering as they change. */
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.011em;
+}
+
+/* Icons inherit colour and sit on the text baseline wherever they land. */
+.ico { display: block; flex-shrink: 0; }
+.ico-inline { display: inline-block; vertical-align: -0.18em; }
+
+/* ---------- Type ---------- */
+/* Size, weight and tracking move together: the bigger the text, the tighter
+   it is set, which is what stops large headings looking like a browser
+   default. */
+.today-date, .kids-title, .picks-title, .screen-title {
+  font-size: var(--type-3xl);
+  font-weight: 700;
+  letter-spacing: -0.028em;
+  line-height: 1.12;
+  color: var(--text);
+}
+.today-label, .section-label, .cat-group-label {
+  font-size: var(--type-xs);
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.today-label { color: var(--accent); }
+.card h2 { font-size: var(--type-lg); font-weight: 650; letter-spacing: -0.018em; }
+.card p, .pick-status, .settings-hint { font-size: var(--type-md); line-height: 1.5; }
+
+/* ---------- The bar along the top ---------- */
+/* The gradient was doing the work of an era that has passed. A flat surface
+   with a hairline underneath reads as part of the phone rather than a banner
+   printed on it. */
+.topbar {
+  background: var(--surface);
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+  padding: calc(12px + var(--safe-top)) 16px 12px;
+  gap: 8px;
+}
+.topbar-title {
+  font-size: var(--type-lg);
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+.topbar-sub { font-size: var(--type-sm); color: var(--text-muted); opacity: 1; margin-top: 1px; }
+.topbar-settings {
+  background: transparent;
+  color: var(--text-muted);
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background var(--fast) var(--ease), transform var(--fast) var(--ease);
+}
+.topbar-settings:active { background: var(--surface-2); transform: scale(0.92); opacity: 1; }
+
+/* ---------- The bar along the bottom ---------- */
+.tabbar {
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  border-top: 1px solid var(--border);
+  box-shadow: var(--shadow-up);
+  padding: 8px 6px calc(8px + var(--safe-bottom));
+}
+.tab {
+  gap: 4px;
+  padding: 5px 2px 4px;
+  font-size: var(--type-2xs);
+  font-weight: 550;
+  letter-spacing: -0.005em;
+  color: var(--text-muted);
+  transition: color var(--fast) var(--ease);
+}
+.tab .ico { transition: transform var(--med) var(--ease-out); }
+.tab.active { color: var(--accent); font-weight: 650; }
+/* The active icon lifts a little. It is two pixels, and it is the difference
+   between a row of labels and something that knows where you are. */
+.tab.active .ico { transform: translateY(-1px) scale(1.06); }
+.tab:active .ico { transform: scale(0.9); }
+.tab-icon { display: flex; align-items: center; justify-content: center; height: 24px; }
+
+/* ---------- Surfaces ---------- */
+.card {
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-1);
+  border: 1px solid var(--border);
+  padding: 16px;
+  margin-bottom: 12px;
+}
+
+/* ---------- Anything you press ---------- */
+/* One rule, so a button, a chip and a row all answer a finger the same way.
+   Scale rather than opacity: a thing that shrinks has been pressed; a thing
+   that fades has been switched off. */
+.modal-btn, .search-chip, .cat-tile, .kids-find, .kids-row, .today-card,
+.app-banner-action, .pick-row, .chooser-card, .idea-chip, .map-chip {
+  transition: transform var(--fast) var(--ease), box-shadow var(--fast) var(--ease),
+    background var(--fast) var(--ease), border-color var(--fast) var(--ease);
+}
+.modal-btn:active, .search-chip:active, .cat-tile:active, .kids-find:active,
+.app-banner-action:active, .idea-chip:active, .map-chip:active {
+  transform: scale(0.965);
+}
+
+.modal-btn {
+  border-radius: 12px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  padding: 13px 16px;
+  min-height: 46px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-1);
+}
+/* A primary action should look like the thing to press, not like a slab of
+   the accent colour with the contrast washed out of it. */
+.modal-btn-primary {
+  background: var(--accent);
+  color: var(--on-accent);
+  border-color: var(--accent);
+  box-shadow: var(--shadow-2);
+}
+.modal-btn-primary:active { box-shadow: var(--shadow-1); }
+
+.search-chip {
+  border-radius: 999px;
+  padding: 10px 15px;
+  font-size: var(--type-sm);
+  font-weight: 500;
+  letter-spacing: -0.008em;
+  min-height: 42px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  box-shadow: var(--shadow-1);
+}
+.search-chip-surprise {
+  background: var(--accent-soft);
+  border-color: transparent;
+  color: var(--accent);
+  font-weight: 650;
+}
+
+/* ---------- Motion ---------- */
+/* Screens arrive rather than appear. 200ms and 8 pixels: enough to register
+   as a change of place, not enough to wait for. */
+@keyframes view-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+.view.switching > * { animation: view-in var(--med) var(--ease-out) both; }
+
+/* Rows land one after another, which reads as a list being dealt out rather
+   than a block being pasted in. Capped so a long list is not a slow one. */
+.view.switching > *:nth-child(1) { animation-delay: 0ms; }
+.view.switching > *:nth-child(2) { animation-delay: 28ms; }
+.view.switching > *:nth-child(3) { animation-delay: 56ms; }
+.view.switching > *:nth-child(4) { animation-delay: 78ms; }
+.view.switching > *:nth-child(5) { animation-delay: 96ms; }
+.view.switching > *:nth-child(n + 6) { animation-delay: 110ms; }
+
+@media (prefers-reduced-motion: reduce) {
+  .view.switching > * { animation: none; }
+  * { transition-duration: 1ms !important; }
+}
+
+/* ---------- Dark ---------- */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-2: 0 4px 14px rgba(0, 0, 0, 0.45);
+    --shadow-3: 0 10px 30px rgba(0, 0, 0, 0.55);
+    --shadow-up: 0 -8px 24px rgba(0, 0, 0, 0.4);
+  }
+  .card { box-shadow: none; }
+  .modal-btn { box-shadow: none; }
+  .search-chip { box-shadow: none; }
+  .tabbar { background: color-mix(in srgb, var(--surface) 90%, transparent); }
+}
+
+/* ---------- Today, read at arm's length ---------- */
+/* The time was set in the success green, which meant nothing - green is the
+   colour this app uses for "that worked". A time is just a time; the name of
+   the place is what you are looking for, so that is what carries the weight. */
+.today-time {
+  font-size: var(--type-sm);
+  font-weight: 600;
+  color: var(--text-muted);
+  letter-spacing: 0.01em;
+  text-transform: none;
+  font-variant-numeric: tabular-nums;
+}
+.today-name { font-size: var(--type-lg); font-weight: 650; letter-spacing: -0.02em; margin-top: 3px; }
+.today-card { padding: 15px 16px 14px; }
+.today-card.next {
+  border-color: var(--accent);
+  border-width: 1px;
+  box-shadow: var(--shadow-2), 0 0 0 1px var(--accent);
+}
+/* A pill, sitting on the card's edge, rather than eight grey capitals
+   floating above the time. */
+.today-next-flag {
+  top: -10px;
+  left: 15px;
+  background: var(--accent);
+  border-radius: 999px;
+  padding: 4px 9px;
+  font-size: var(--type-2xs);
+  letter-spacing: 0.09em;
+  box-shadow: var(--shadow-1);
+}
+.today-card.done { opacity: 1; background: transparent; box-shadow: none; border-style: dashed; }
+.today-card.done .today-name { color: var(--text-muted); font-weight: 600; }
+.today-done-flag {
+  font-size: var(--type-2xs);
+  letter-spacing: 0.09em;
+  color: var(--text-muted);
+  opacity: 0.8;
+}
+.today-note {
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--text);
+  padding: 9px 11px;
+  line-height: 1.45;
+}
+.today-leg {
+  font-size: var(--type-xs);
+  color: var(--text-muted);
+  padding: 2px 0 10px 16px;
+  margin-top: -4px;
+}
+
+/* ---------- The line at the top that tells you one thing ---------- */
+/* It was a full-width slab in the accent colour, directly under a header in
+   the accent colour, and it out-shouted the screen it was captioning. A tint
+   and a hairline say the same thing without taking the top of the app. */
+.app-banner {
+  padding: 10px 16px;
+  font-size: var(--type-sm);
+  font-weight: 500;
+  border-bottom: 1px solid var(--border);
+}
+.app-banner.nudge { background: var(--surface); color: var(--text-muted); }
+.app-banner.nudge .app-banner-action { color: var(--accent); border-color: var(--accent); }
+.app-banner-action { font-size: var(--type-xs); font-weight: 650; padding: 6px 13px; }
+
+/* ---------- Rows in a list ---------- */
+.pick-row { transition: transform var(--fast) var(--ease), background var(--fast) var(--ease); }
+.pick-row:active { transform: scale(0.985); background: var(--surface-2); }
+.pick-row-chevron { color: var(--text-muted); opacity: 0.55; }
+.search-trigger-icon { display: flex; align-items: center; color: var(--text-muted); }
+
+/* ---------- One order, said out loud ---------- */
+/* The old sort row was four unlabelled chips whose choice was saved but never
+   explained, so the list came back in a different order from the one you left
+   it in for no visible reason. */
+.order-bar { margin: 4px 0 12px; }
+.order-chips { display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; padding-bottom: 2px; }
+.order-chips::-webkit-scrollbar { display: none; }
+.order-chip {
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: var(--type-sm);
+  font-weight: 550;
+  padding: 8px 14px;
+  border-radius: 999px;
+  min-height: 38px;
+  transition: transform var(--fast) var(--ease), background var(--fast) var(--ease),
+    color var(--fast) var(--ease), border-color var(--fast) var(--ease);
+}
+.order-chip:active { transform: scale(0.95); }
+.order-chip.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+  font-weight: 650;
+}
+.order-note { margin: 7px 2px 0; font-size: var(--type-xs); color: var(--text-muted); }
+
+/* Section headings stay put while their section scrolls past, so you always
+   know which day or which town you are looking at. */
+.section-label.list-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 18px 0 8px;
+  padding: 7px 2px;
+  background: var(--bg);
+}
+.list-head-count {
+  font-size: var(--type-2xs);
+  font-weight: 650;
+  letter-spacing: 0;
+  color: var(--text-muted);
+  background: var(--surface-2);
+  border-radius: 999px;
+  padding: 2px 8px;
+  min-width: 22px;
+  text-align: center;
+}
+.hero-share { width: 100%; }
+
+/* ---------- Budget: a number the app worked out ---------- */
+.budget-card { padding: 4px 0; }
+.budget-line {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  font-family: inherit;
+  text-align: left;
+  padding: 13px 16px;
+  transition: background var(--fast) var(--ease);
+}
+.budget-card .budget-line:last-child { border-bottom: none; }
+.budget-line:active { background: var(--surface-2); }
+.budget-line-main { min-width: 0; display: block; }
+.budget-line-name { display: block; font-size: var(--type-md); font-weight: 550; color: var(--text); }
+.budget-line-note { display: block; font-size: var(--type-xs); color: var(--text-muted); margin-top: 2px; }
+.budget-line-right { flex-shrink: 0; text-align: right; }
+.budget-line-amount { display: block; font-size: var(--type-md); font-weight: 650; color: var(--text); }
+/* Where the number came from, on every line. An estimate that does not admit
+   to being one is just a wrong number. */
+.budget-tag {
+  display: inline-block;
+  font-size: var(--type-2xs);
+  font-weight: 650;
+  letter-spacing: 0.03em;
+  margin-top: 3px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-muted);
+}
+.budget-tag.yours { background: var(--accent-soft); color: var(--accent); }
+.budget-unknown-head {
+  font-size: var(--type-xs);
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  padding: 14px 16px 6px;
+  border-top: 1px solid var(--border);
+}
+.budget-hero { text-align: center; padding: 22px 16px; }
+.budget-hero-total { font-size: var(--type-4xl); font-weight: 700; letter-spacing: -0.03em; color: var(--text); }
+.budget-hero-sub { font-size: var(--type-sm); color: var(--text-muted); margin-top: 6px; line-height: 1.45; }
+
+/* ---------- Pictures ---------- */
+/* There were none. Not one image anywhere in the app, which is most of why a
+   list of places read as a database rather than as somewhere you might go. */
+.photo-thumb,
+.photo-hero {
+  background: var(--surface-2);
+  overflow: hidden;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+}
+.photo-thumb { width: 54px; height: 54px; border-radius: 11px; }
+.photo-hero {
+  width: 100%;
+  height: 190px;
+  border-radius: 14px;
+  margin-bottom: 14px;
+}
+.photo-thumb img,
+.photo-hero img { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* No photograph is an ordinary state, not a broken one: the category, drawn,
+   on a tint. An empty grey box would say the app had failed at something. */
+.photo-none { background: var(--accent-soft); color: var(--accent); }
+.photo-hero.photo-none { height: 120px; }
+.photo-failed { background: var(--surface-2); }
+
+/* Rows became a picture, a stack of text and a chevron. */
+.pick-row,
+.kids-row { gap: 12px; align-items: center; }
+.pick-row-main { min-width: 0; }
+
+/* ---------- The map ---------- */
+/* Leaflet's own pin is a blue teardrop with a drop shadow, drawn for a
+   different app in a different decade, and it was the most obviously foreign
+   object left on the screen. */
+/* A separate class from .map-pin, which is the numbered circle the
+   all-places map already uses and which works. This is for the single-place
+   maps, where Leaflet was drawing its own stock blue teardrop. */
+.map-drop {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50% 50% 50% 4px;
+  transform: rotate(-45deg);
+  background: var(--accent);
+  color: var(--on-accent);
+  border: 2px solid var(--surface);
+  box-shadow: var(--shadow-2);
+}
+.map-drop .ico { transform: rotate(45deg); }
+
+/* The tiles are somebody else's colours - bright green woodland, red A-roads -
+   under an interface that is paper and navy. A light touch on saturation
+   settles them behind it without making the map hard to read. */
+.leaflet-tile-pane { filter: saturate(0.78) contrast(0.96); }
+@media (prefers-color-scheme: dark) {
+  /* Inverting the hue rather than the whole image keeps the labels legible
+     and stops the water going orange. */
+  .leaflet-tile-pane { filter: invert(0.92) hue-rotate(180deg) saturate(0.6) brightness(0.95); }
+  .photo-none { background: rgba(127, 180, 212, 0.14); }
+}
+.leaflet-container { background: var(--surface-2); font-family: inherit; }
+
+/* ---------- Swipe a row aside ---------- */
+/* The actions sit underneath and never move; the row slides off them. */
+.swipeable { position: relative; overflow: hidden; border-radius: var(--radius); }
+.swipeable .pick-row,
+.swipeable .kids-row {
+  position: relative;
+  z-index: 1;
+  transition: transform var(--med) var(--ease-out);
+  will-change: transform;
+}
+.swipeable.swiping .pick-row,
+.swipeable.swiping .kids-row { transition: none; }
+.row-actions {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 8px;
+  display: flex;
+  gap: 6px;
+  padding-left: 8px;
+}
+.row-action {
+  width: 63px;
+  border: none;
+  border-radius: 12px;
+  font-family: inherit;
+  font-size: var(--type-2xs);
+  font-weight: 600;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  color: var(--on-accent);
+}
+.row-action.day { background: var(--accent); }
+.row-action.remove { background: var(--danger); }
+.row-action:active { filter: brightness(0.9); }
+/* Reachable without the gesture: a keyboard or a screen reader gets there by
+   opening the place, and these would otherwise be a tab stop into nowhere. */
+.swipeable:not(.swiped) .row-action { pointer-events: none; }
+
+/* The sheet follows a thumb back down, and springs if you let go early. */
+.modal-sheet { transition: transform var(--med) var(--ease-out); }
+.modal-handle { cursor: grab; touch-action: none; }
+
+/* ---------- The first time you open it ---------- */
+.welcome-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: var(--bg);
+  display: none;
+  flex-direction: column;
+  padding: calc(28px + var(--safe-top)) 22px calc(18px + var(--safe-bottom));
+}
+.welcome-overlay.open { display: flex; }
+.welcome-body { flex: 1; overflow-y: auto; }
+.welcome-dots { display: flex; gap: 6px; margin-bottom: 26px; }
+.welcome-dot {
+  width: 26px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--border);
+  transition: background var(--med) var(--ease);
+}
+.welcome-dot.on { background: var(--accent); }
+.welcome-kicker {
+  font-size: var(--type-xs);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.welcome-title {
+  font-size: var(--type-3xl);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1.14;
+  margin: 8px 0 10px;
+  color: var(--text);
+}
+.welcome-sub { font-size: var(--type-md); line-height: 1.5; color: var(--text-muted); margin: 0 0 22px; }
+.welcome-label {
+  display: block;
+  font-size: var(--type-sm);
+  font-weight: 600;
+  color: var(--text-muted);
+  margin: 16px 0 6px;
+}
+.welcome-input {
+  width: 100%;
+  font-family: inherit;
+  font-size: var(--type-lg);
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 15px;
+  min-height: 50px;
+}
+.welcome-input:focus { outline: none; border-color: var(--accent); }
+.welcome-chips { margin-top: 14px; }
+.welcome-chips .search-chip.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+  font-weight: 650;
+}
+.welcome-foot { display: flex; gap: 10px; padding-top: 14px; }
+.welcome-foot .modal-btn { flex: 1; }
+.welcome-foot .modal-btn[disabled] { opacity: 0.45; }
+
+/* ---------- Stacking ---------- */
+/* The tab bar is fixed but had no z-index, so it sat at the bottom of the
+   root stacking order and won only by being last in the document. That held
+   until the design work put positioned, z-indexed things inside the scroller:
+   rows at z-index 1 so the swipe actions could sit behind them, sticky
+   section headings at 2. Nothing contained those, so they competed with the
+   bar directly and buried it - visible through the cards, and deaf to a tap.
+
+   Two fixes, because either alone would leave the trap set. The bar gets a
+   real place in the order, above every screen and below every sheet; and the
+   scroller becomes a stacking context of its own, so nothing inside it can
+   ever reach past it again however it is styled. */
+.view { position: relative; z-index: 0; }
+.tabbar { z-index: 40; }
+
+/* ---------- Folding a long list ---------- */
+.section-fold {
+  width: 100%;
+  border: none;
+  font-family: inherit;
+  cursor: pointer;
+  gap: 8px;
+  text-align: left;
+}
+.section-fold .fold-caret { display: flex; align-items: center; opacity: 0.55; }
+.section-fold .fold-label { flex: 1; min-width: 0; }
+.section-fold:active { opacity: 0.6; }
+.fold-all { display: flex; justify-content: flex-end; margin: 2px 2px 6px; }
+.area-head { position: relative; }
+.area-fold {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  z-index: 1;
+  width: 34px;
+  height: 34px;
+  border: none;
+  background: var(--surface-2);
+  color: var(--text-muted);
+  border-radius: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.area-fold:active { opacity: 0.6; }
+
+/* A guessed search area reads differently from one you chose, because it is a
+   different kind of claim. */
+.search-anchor.guessed { border-style: dashed; }
+.search-anchor.guessed .search-anchor-change { color: var(--accent); font-weight: 650; }
+
+/* ---------- Reminders ---------- */
+/* Same shape as the board-dated row - a checkbox is a checkbox - but the
+   sub-options are indented under the master switch, because "time to leave"
+   only means anything once reminders are on at all. */
+.settings-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  font-size: var(--type-md);
+  color: var(--text);
+}
+.settings-toggle input { width: 20px; height: 20px; flex: none; }
+#notifyDetail {
+  margin-left: 8px;
+  padding-left: 14px;
+  border-left: 2px solid var(--line);
+}
+#notifyDetail .settings-toggle { font-size: var(--type-sm); color: var(--text-muted); }
+
+/* ---------- Who's travelling ---------- */
+/* A card per person rather than a table: on a phone a table of five people
+   with four columns is a horizontal scroll, and the fields differ in kind -
+   a name and an age belong together, the flags below them. */
+.person-row {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm, 10px);
+  padding: 10px;
+  margin-top: 10px;
+  background: var(--surface-2, var(--card));
+}
+.person-top { display: flex; gap: 8px; align-items: center; }
+.person-top .settings-input { margin: 0; }
+.person-name { flex: 1; min-width: 0; }
+.person-age { width: 76px; flex: none; }
+.person-remove {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.person-remove:active { background: var(--line); }
+.person-flags { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; }
+.person-flags label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--type-sm);
+  color: var(--text-muted);
+}
+.person-flags input { width: 18px; height: 18px; flex: none; }
+.person-diet { margin: 0; }
+
+/* A warning about the youngest person on the trip, on a place row and in a
+   day. Same weight as the other plan warnings - it is the same kind of thing. */
+.child-warn, .nap-warn { display: flex; align-items: center; gap: 6px; }
+.budget-hero-split {
+  margin-top: 6px;
+  font-size: var(--type-md);
+  font-weight: 600;
+  color: var(--text);
+}
+.budget-split-note { font-weight: 400; font-size: var(--type-xs); color: var(--text-muted); }
+
+/* ---------- What's on ---------- */
+/* An event's date is the thing you read first, so it sits above the address
+   rather than in the run of metadata below it. */
+.place-when {
+  font-size: var(--type-sm);
+  font-weight: 600;
+  color: var(--accent, var(--text));
+  margin-top: 2px;
+}
+.event-when { margin-bottom: 6px; }
+.explore-note {
+  margin: 2px 0 10px;
+  font-size: var(--type-xs);
+  color: var(--text-muted);
+}
+/* Been and gone. Still readable — it is a record of what you did — but plainly
+   in the past, so a list of events does not rot into a list of things you
+   have missed with nothing to tell them apart. */
+.pick-row-past { opacity: 0.55; }
+.row-badge.past { background: var(--surface-2); color: var(--text-muted); }
+
+/* ---------- Finding something you already saved ---------- */
+/* Visually quieter than the add-a-place box above it: that one is a doorway to
+   another screen, this one filters the list in place. */
+.find-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0 4px;
+  padding: 0 12px;
+  background: var(--surface-2, var(--card));
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.find-icon { display: flex; color: var(--text-muted); flex: none; }
+.find-input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--type-md);
+  padding: 10px 0;
+  outline: none;
+}
+.find-input::-webkit-search-cancel-button { display: none; }
+.find-clear {
+  flex: none;
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  padding: 4px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+.find-result {
+  margin: 6px 2px 0;
+  font-size: var(--type-sm);
+  color: var(--text-muted);
+}
+
+/* Daylight sits with the weather line — same kind of fact about the day. */
+.daylight {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0 10px;
+  font-size: var(--type-sm);
+  color: var(--text-muted);
+}
+
+/* ---------- What's on ---------- */
+/* A diary, not a list of places: the time is the left-hand column and
+   everything else hangs off it, so scanning down a day answers "what time"
+   before it answers "what". */
+/* Not flex. Twice now a flex row here has squeezed the heading down to one
+   word per line: with a nowrap link beside it the title ends up at its
+   min-content width, which for "What's on near Stirling" is "Stirling".
+   Ordinary block layout with the link running on after the text cannot do
+   that, and reads better anyway. */
+.ev-ask-head {
+  margin-bottom: 10px;
+  line-height: 1.4;
+}
+/* The place name can be long, so it takes the free space and wraps like
+   ordinary text; the link keeps its own width beside it. `min-width: 0` alone
+   did the opposite - it let the heading shrink to one word per line and the
+   link sat on top of it. */
+.ev-ask-head b { font-size: var(--type-md); }
+.ev-ask-head .link-btn { margin-left: 8px; white-space: nowrap; }
+.ev-kinds { margin-top: 10px; }
+
+.ev-day {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 18px 2px 8px;
+  font-size: var(--type-md);
+  font-weight: 700;
+  color: var(--text);
+}
+.ev-day-date { font-size: var(--type-xs); font-weight: 400; color: var(--text-muted); }
+
+.ev-row {
+  display: grid;
+  grid-template-columns: 56px 1fr;
+  gap: 12px;
+  padding: 12px;
+  margin-bottom: 8px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius, 12px);
+}
+.ev-saved { border-left: 3px solid var(--accent, var(--navy)); }
+
+.ev-time {
+  font-size: var(--type-md);
+  font-weight: 700;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  padding-top: 1px;
+}
+.ev-time-none { font-size: var(--type-2xs); font-weight: 500; color: var(--text-muted); }
+
+.ev-main { min-width: 0; }
+.ev-name { font-size: var(--type-md); font-weight: 600; line-height: 1.3; }
+.ev-runs { font-size: var(--type-xs); font-weight: 400; color: var(--text-muted); }
+.ev-where { font-size: var(--type-sm); color: var(--text-muted); margin-top: 2px; }
+.ev-what { font-size: var(--type-sm); margin-top: 4px; line-height: 1.45; }
+
+.ev-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.ev-tag {
+  font-size: var(--type-2xs);
+  padding: 2px 7px;
+  border-radius: 20px;
+  background: var(--surface-2, var(--bg));
+  border: 1px solid var(--line);
+  color: var(--text-muted);
+}
+.ev-tag.soft { border-style: dashed; }
+
+.ev-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.ev-btn {
+  font: inherit;
+  font-size: var(--type-sm);
+  padding: 6px 11px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--surface-2, var(--bg));
+  color: var(--text);
+  cursor: pointer;
+}
+.ev-btn-primary {
+  background: var(--navy, var(--text));
+  border-color: transparent;
+  color: var(--card);
+  font-weight: 600;
+}
+.ev-caveat { margin-top: 12px; display: flex; align-items: flex-start; gap: 6px; }
+
+/* What the search left out, and the way back to it. Quiet - these are worse
+   answers, and the point is that they exist, not that they compete with the
+   ones that were confirmed. */
+.ev-leftout { margin-top: 12px; }
+.ev-leftout .link-btn { margin-top: 6px; }
+.ev-note { margin: -2px 0 8px; }
+.ev-held-why {
+  font-size: var(--type-xs);
+  color: var(--text-muted);
+  margin: 10px 2px 2px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.ev-held-why + .ev-row { opacity: 0.82; }
+
+/* Five tabs rather than seven. The three that went - Kids, Budget, Notes -
+   were the ones you open once a day at most, and paying for them with a
+   permanently cramped bar was the wrong trade. There is room to read the
+   labels now, and they still must never wrap: one two-line label makes its
+   own tab taller than the rest and shoves the icon out of line. */
+.tab-label {
+  font-size: var(--type-xs);
+  white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Pick your own dates and a time to search from. */
+.ev-dates {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 12px 0 8px;
+}
+.ev-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1 1 8.5rem;
+  min-width: 0;
+}
+.ev-field span {
+  font-size: var(--type-2xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.ev-field input {
+  font: inherit;
+  font-size: var(--type-md);
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface-2, var(--card));
+  color: var(--text);
+  min-width: 0;
+}
+/* The finish time is the quieter half of the pair — the start is what you
+   scan a column of times for. */
+.ev-until { font-weight: 400; font-size: var(--type-2xs); color: var(--text-muted); display: block; }
+
+
+/* ---------- More ---------- */
+/* The hub for everything that is not a tab. Rows rather than a grid of
+   tiles: each one carries a number saying whether it is worth opening, and a
+   number wants a line of its own next to a name, not a caption under an
+   icon. */
+.more-list { padding: 4px 0; }
+.more-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 13px 14px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: none;
+  font: inherit;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+.more-list .more-row:last-child { border-bottom: 0; }
+.more-row:active { background: var(--surface-2, rgba(0, 0, 0, 0.03)); }
+.more-row-ico { display: flex; color: var(--text-muted); flex: 0 0 auto; }
+/* Block rather than flex: a flexed title next to anything that will not wrap
+   gets floored at its min-content width, which is one word per line. */
+.more-row-main { flex: 1; min-width: 0; }
+.more-row-title { display: block; font-weight: 600; font-size: var(--type-md); }
+.more-row-meta { display: block; font-size: var(--type-sm); color: var(--text-muted); margin-top: 1px; }
+.more-row-go { color: var(--text-muted); flex: 0 0 auto; opacity: 0.65; }
+
+/* The way back from a screen that no longer has a tab of its own. */
+.sub-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0 0 10px -6px;
+  padding: 6px;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: var(--type-sm);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+/* The search form, after it has answered: one line saying what was asked. */
+.ev-asked {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: var(--text);
+  cursor: pointer;
+  border: 1px solid var(--line);
+}
+.ev-asked-main { flex: 1; min-width: 0; }
+.ev-asked-main b { display: block; font-size: var(--type-md); }
+.ev-asked-meta { display: block; font-size: var(--type-sm); color: var(--text-muted); margin-top: 1px; }
+.ev-asked-change { flex: 0 0 auto; font-size: var(--type-sm); font-weight: 600; color: var(--navy, var(--text)); }
+
+/* Nap window and bedtime, under the switch that reveals them. */
+.person-times { display: flex; flex-wrap: wrap; gap: 10px; margin: 6px 0 2px; }
+.person-time { display: flex; align-items: center; gap: 6px; font-size: var(--type-sm); }
+.person-time span { color: var(--text-muted); }
+.person-time input {
+  font: inherit;
+  font-size: var(--type-sm);
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--text);
+}
+
+/* The one thing that would stop you going. Deliberately one line and
+   deliberately not a badge: a row wearing six of these is a row nobody
+   reads, and only one of the six is ever the reason. */
+.ev-verdict {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  margin-top: 6px;
+  font-size: var(--type-sm);
+  line-height: 1.35;
+  font-weight: 600;
+}
+.ev-verdict-no { color: var(--danger); }
+.ev-verdict-warn { color: var(--warn); }
+.ev-verdict-yes { color: var(--success); }
+.ev-weather-chips { margin-top: 10px; }
+
+/* The six searches, named, while they run. Quiet on purpose: this is a
+   progress report, not a control, and it disappears into a plain summary the
+   moment there is nothing left to wait for. */
+.ev-progress { margin-top: 10px; }
+.ev-progress-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.ev-angle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--type-xs);
+  padding: 4px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--text-muted);
+}
+.ev-angle-mark { font-weight: 700; }
+.ev-angle-running { border-color: var(--navy); color: var(--text); }
+.ev-angle-done { border-color: var(--success); color: var(--success); }
+.ev-angle-failed { border-style: dashed; }
+.ev-angle-stopped { opacity: 0.6; }
+.ev-progress .link-btn { margin-top: 6px; margin-right: 12px; }
+
+/* Nine searches now, each with a way to change what it asks for. The pencil
+   sits against its chip rather than inside it, so tapping the chip still
+   toggles the search and only the pencil opens the wording. */
+.ev-kind-wrap { display: inline-flex; align-items: center; }
+.ev-kinds .ev-kind-wrap .search-chip { border-top-right-radius: 0; border-bottom-right-radius: 0; padding-right: 10px; }
+.ev-kinds .search-chip { font-size: var(--type-sm); padding-left: 12px; }
+.ev-kind-tune {
+  font: inherit;
+  font-size: var(--type-2xs);
+  line-height: 1;
+  padding: 7px 6px;
+  border: 1px solid var(--line);
+  border-left: 0;
+  border-radius: 0 999px 999px 0;
+  background: var(--card);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+/* A search whose wording you have changed says so, the way an edited Explore
+   category already does. */
+.search-chip.tuned { border-style: dashed; }
+.search-chip.on.tuned { border-color: var(--on-accent); }
+
+/* What the AI is costing. Three figures side by side rather than a table:
+   the comparison between today, this week and all time is the whole point,
+   and a table would make it a reading exercise. */
+.usage-grid { display: flex; flex-wrap: wrap; gap: 4px; }
+.usage-block { flex: 1 1 120px; min-width: 0; padding: 4px 2px; }
+.usage-label {
+  font-size: var(--type-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  font-weight: 700;
+}
+.usage-figure { font-size: var(--type-2xl); font-weight: 700; margin-top: 2px; }
+.usage-figure span { font-size: var(--type-sm); font-weight: 400; color: var(--text-muted); }
+.usage-detail { font-size: var(--type-xs); color: var(--text-muted); margin-top: 2px; line-height: 1.35; }
+.usage-cost { font-size: var(--type-sm); font-weight: 600; margin-top: 3px; }
+.usage-rates { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 8px; }
+.usage-rates input { width: 84px; }
+
+/* Labels over each row of chips. Two unlabelled rows of pills, one choosing
+   when and one choosing what, were indistinguishable at a glance. */
+.ev-field-label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  font-size: var(--type-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  margin: 14px 0 7px;
+}
+.ev-field-label .link-btn { font-size: var(--type-xs); text-transform: none; letter-spacing: 0; }
+.ev-field-note { font-size: var(--type-xs); font-weight: 400; text-transform: none; letter-spacing: 0; }
+
+/* Offered whether the search form is open or folded away - it is most wanted
+   exactly when there are already results and the form has collapsed. */
+.ev-handoff-link { display: block; margin: 10px auto 0; }
+
+/* Throwing a row off the list. Small and quiet - it sits in the corner of the
+   card rather than competing with Save - but a real target, not a hairline. */
+.ev-row { position: relative; }
+.ev-drop {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--text-muted);
+  opacity: 0.55;
+  cursor: pointer;
+}
+.ev-drop:active { opacity: 1; background: var(--surface-2, rgba(0,0,0,0.05)); }
+/* The name must not run under it. */
+.ev-row .ev-main { padding-right: 30px; }
+
+
+/* ---- What's on: the quiet default ----
+   The form is no longer what the screen opens on, so the pieces that used to
+   live inside it need to hold their own outside it. */
+
+/* The primary action, sized to be found rather than hunted for. It used to
+   carry an inline width:100% because it only ever appeared in one place. */
+.ev-go {
+  width: 100%;
+  margin-top: var(--space-3);
+}
+
+/* "Somewhere else" moved out of the form's title row when Done took that
+   corner. On its own line it reads as the secondary choice it is. */
+.ev-ask-where {
+  display: block;
+  margin: calc(var(--space-1) * -1) 0 var(--space-3);
+}
+
+/* The disclosure for the nine prompt editors. Deliberately a link and not a
+   chip: it is a different kind of thing from the kinds above it, and looking
+   like one of them is how it got lost among them. */
+.ev-tune-toggle {
+  display: block;
+  margin-top: var(--space-2);
+}
+
+
+/* The order control, folded. A button that names the order the list is in,
+   rather than four chips and a caption saying the same thing. */
+.order-bar.folded {
+  display: flex;
+  justify-content: flex-end;
+  margin: calc(var(--space-1) * -1) 0 var(--space-2);
+}
+.order-toggle {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: var(--type-sm);
+  font-weight: 600;
+  padding: var(--space-1) var(--space-2);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  cursor: pointer;
+}
+.order-toggle:active { opacity: 0.6; }
+
+
+/* The banner's dismiss. Deliberately quieter than "Back up" - taking the
+   backup is the better answer, and this is only the way to say "not now". */
+.app-banner-dismiss {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: inherit;
+  opacity: 0.55;
+  /* 23x23 as first written, which is smaller than the thing it dismisses
+     deserves and smaller than a thumb can reliably find. */
+  padding: 0;
+  min-width: 44px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.app-banner-dismiss:active { opacity: 1; }
+
+/* A row on More that wants attention. Not colour alone - it is a shape that
+   is either there or not, so it does not depend on distinguishing hues. */
+.more-row-dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--warn);
+  margin-right: var(--space-2);
+}
+
+
+/* The line that says what the search is currently set to. It exists because
+   the old modal said nothing at all: it closed on every tap, so the only
+   record of the choice you had just made was remembering you had made it. */
+.ev-where-now {
+  margin: 0 0 var(--space-2);
+  font-size: var(--type-sm);
+  color: var(--text-muted);
+}
+.ev-where-now b { color: var(--text); }
+.ev-where-form { margin-bottom: var(--space-2); }
+
+
+/* ---- Reaching the rest ----
+   Everything below drew a box between 36px and 43px: close enough to look
+   fine and far enough under to be missed. Apple and Google both publish 44,
+   and the screens here are used one-handed in a car park. */
+.topbar-text { min-height: 44px; display: flex; flex-direction: column; justify-content: center; }
+.hero-share { min-height: 44px; }
+.plan-ai-btn { min-height: 44px; }
+#addDayForm input, #addDayForm button { min-height: 44px; }
+
+/* A checkbox renders at 13x13 whatever the stylesheet says, so the label
+   around it carries the target instead - which is also the bigger thing to
+   aim at, and the one people actually tap. */
+.packing-row, .settings-check { min-height: 44px; display: flex; align-items: center; gap: var(--space-2); }
+.packing-row input[type="checkbox"], .settings-check input[type="checkbox"] {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+}
+
+
+/* ---- The last of the small targets ----
+   These all drew between 24px and 40px. Two of them were added earlier today
+   (.order-toggle and the banner dismiss), which is the argument for having a
+   test rather than a habit. */
+
+/* The top bar's two buttons were 38px square by rule and 40px rendered. */
+.topbar-settings { width: 44px; height: 44px; }
+
+/* "Back up" in the banner, and the back link out of a sub-screen. */
+.app-banner-action { min-height: 44px; }
+.sub-back { min-height: 44px; display: inline-flex; align-items: center; }
+
+/* A link-styled button is still a button. */
+.link-btn { min-height: 44px; }
+
+/* The order control on Saved. */
+.order-toggle { min-height: 44px; }
+
+/* A section label is normally just a label - but on Saved it folds the group
+   below it, and a heading you can tap has to be tappable. Only the ones that
+   actually do something get the height. */
+.section-label[data-fold], button.section-label, .section-label.list-head {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+}
+
+
+
+
+/* The two ends of a journey, labelled, because "From" and "To" stacked
+   without labels is two identical boxes. */
+.ev-route-label {
+  display: block;
+  font-size: var(--type-2xs);
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-muted);
+  margin: var(--space-2) 0 var(--space-1);
+}
+
+.ev-detour { font-size: var(--type-xs); color: var(--text-muted); margin-top: 2px; }
+
+
+/* ---- The three questions ----
+   One row each, saying its own answer, so the form reads as a sentence you
+   can check before spending quota on it. It replaced a 34-control slab that
+   asked five things at one visual weight. */
+.ask-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  min-height: 56px;
+  padding: var(--space-2) 0;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: none;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.ask-row:last-of-type { border-bottom: none; }
+.ask-row:active { opacity: 0.6; }
+.ask-row-label {
+  flex-shrink: 0;
+  width: 62px;
+  font-size: var(--type-2xs);
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-muted);
+}
+.ask-row-answer {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--type-md);
+  font-weight: 600;
+  color: var(--text);
+}
+.ask-row-go { flex-shrink: 0; color: var(--text-muted); }
+
+/* The prompt editors, in Settings where they belong. */
+.angle-tune-list { border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.angle-tune-list .more-row { border-radius: 0; }
+
+/* The head is a label and a way out, on one line - it was stacking. */
+.ev-ask-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+.ev-ask-head .link-btn { width: auto; margin: 0; }
+
+/* A capability the chosen model does not have is worth more than a hint. */
+.warn-hint { color: var(--warn); }
+
+/* An answer nothing looked up. Warmer than an error, louder than a hint. */
+.ev-tag.doubt { background: var(--warn-bg); color: var(--warn); }
+.ev-unsourced-note { color: var(--warn); }

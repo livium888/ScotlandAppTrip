@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no" />
+<title>Wayfare</title>
+<link rel="stylesheet" href="vendor/leaflet/leaflet.css" />
+<link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-text">
+      <div class="topbar-title" id="topbarTitle">Wayfare</div>
+      <div class="topbar-sub" id="topbarSub">18–24 Aug 2026</div>
+    </div>
+    <button class="topbar-settings" id="mapBtn" aria-label="Map of all saved places"
+            data-ico="map" data-ico-size="21"></button>
+    <button class="topbar-settings" id="settingsBtn" aria-label="Settings"
+            data-ico="settings" data-ico-size="21"></button>
+  </header>
+
+  <div id="appBanner" class="app-banner" hidden></div>
+
+  <main id="view" class="view"></main>
+
+  <!-- Icons are drawn in by js/icons.js on load: one set, one grid, one
+       stroke weight. See the note at the top of that file. -->
+  <nav class="tabbar" id="tabbar">
+    <button class="tab active" data-view="today">
+      <span class="tab-icon" data-ico="today"></span><span class="tab-label">Today</span>
+    </button>
+    <button class="tab" data-view="itinerary">
+      <span class="tab-icon" data-ico="itinerary"></span><span class="tab-label">Plan</span>
+    </button>
+    <button class="tab" data-view="picks">
+      <span class="tab-icon" data-ico="picks"></span><span class="tab-label">Saved</span>
+    </button>
+    <button class="tab" data-view="events">
+      <span class="tab-icon" data-ico="events"></span><span class="tab-label">Find</span>
+    </button>
+    <button class="tab" data-view="more">
+      <span class="tab-icon" data-ico="more"></span><span class="tab-label">More</span>
+    </button>
+  </nav>
+
+  <div class="modal" id="placeModal"></div>
+  <div class="map-overlay" id="mapOverlay"></div>
+  <div class="search-overlay" id="searchOverlay"></div>
+  <div class="search-overlay idea-overlay" id="ideaOverlay"></div>
+  <div class="search-overlay idea-overlay" id="planOverlay"></div>
+  <div class="welcome-overlay" id="welcomeOverlay"></div>
+
+  <script src="vendor/leaflet/leaflet.js"></script>
+  <!-- Four small libraries, each doing a job that is genuinely hard to do
+       correctly by hand. All vendored as plain scripts because this app has no
+       build step. suncalc must come before opening_hours, which uses it to
+       answer "sunrise-sunset" opening times. -->
+  <script src="vendor/lib/suncalc.js"></script>
+  <script src="vendor/lib/opening_hours.js"></script>
+  <script src="vendor/lib/idb.js"></script>
+  <script src="vendor/lib/fuse.js"></script>
+  <script src="vendor/lib/jsonrepair.js"></script>
+  <script src="js/icons.js"></script>
+  <script src="js/data.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

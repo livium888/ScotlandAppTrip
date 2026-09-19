@@ -1,0 +1,106 @@
+apply plugin: 'com.android.application'
+
+def releaseKeystorePath = System.getenv('ANDROID_KEYSTORE_FILE')
+def releaseSigningReady = releaseKeystorePath &&
+        System.getenv('ANDROID_KEYSTORE_PASSWORD') &&
+        System.getenv('ANDROID_KEY_ALIAS') &&
+        System.getenv('ANDROID_KEY_PASSWORD')
+def buildVersionCode = (System.getenv('VERSION_CODE') ?: System.getenv('GITHUB_RUN_NUMBER') ?: '1').toInteger()
+def buildVersionName = System.getenv('VERSION_NAME') ?: "1.0.${buildVersionCode}"
+
+android {
+    // The app is called Wayfare; this string is not its name, it is how
+    // Android identifies the app. Changing it would install a second, empty
+    // app alongside the existing one rather than upgrading it, stranding
+    // every saved pick, plan and budget in the old one. It stays.
+    namespace = "com.livium888.scotlandtrip"
+    compileSdk = rootProject.ext.compileSdkVersion
+    defaultConfig {
+        applicationId "com.livium888.scotlandtrip"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        // CI supplies VERSION_CODE, falling back to the GitHub run number so
+        // every APK can be installed over the previous one without a manual
+        // Gradle edit. Local builds remain installable with version 1.
+        versionCode buildVersionCode
+        versionName buildVersionName
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        aaptOptions {
+             // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
+             // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
+            ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+        }
+    }
+    // A fixed debug keystore, committed to the repo. Without one, Gradle
+    // generates a fresh key on every machine - and CI runners start empty, so
+    // every build was signed with a different key. Android refuses to install
+    // an APK over one signed by a different key, which forced an uninstall
+    // for each update, and uninstalling wipes the app's localStorage - taking
+    // every saved pick, folder and plan with it.
+    //
+    // Debug keystores are not secrets: the one shipped in the Android SDK is
+    // identical on every developer's machine, with this same password. A
+    // release build for a store would need a real key kept private.
+    signingConfigs {
+        debug {
+            storeFile file('../keystore/debug.keystore')
+            storePassword 'android'
+            keyAlias 'androiddebugkey'
+            keyPassword 'android'
+        }
+        // Release signing is opt-in. The keystore and credentials come from
+        // CI secrets and are never stored in the repository. Without them a
+        // local assembleRelease still produces an unsigned build rather than
+        // silently using the public debug key.
+        if (releaseSigningReady) {
+            release {
+                storeFile file(releaseKeystorePath)
+                storePassword System.getenv('ANDROID_KEYSTORE_PASSWORD')
+                keyAlias System.getenv('ANDROID_KEY_ALIAS')
+                keyPassword System.getenv('ANDROID_KEY_PASSWORD')
+            }
+        }
+    }
+    buildTypes {
+        debug {
+            signingConfig signingConfigs.debug
+        }
+        release {
+            minifyEnabled false
+            if (releaseSigningReady) {
+                signingConfig signingConfigs.release
+            }
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }
+}
+
+repositories {
+    flatDir{
+        dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
+    }
+}
+
+dependencies {
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+    implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
+    implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
+    implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
+    implementation project(':capacitor-android')
+    implementation "org.jsoup:jsoup:1.17.2"
+    testImplementation "junit:junit:$junitVersion"
+    androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
+    androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
+    implementation project(':capacitor-cordova-android-plugins')
+}
+
+apply from: 'capacitor.build.gradle'
+
+try {
+    def servicesJSON = file('google-services.json')
+    if (servicesJSON.text) {
+        apply plugin: 'com.google.gms.google-services'
+    }
+} catch(Exception e) {
+    logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
+}

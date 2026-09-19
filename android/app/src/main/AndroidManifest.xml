@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Backup is off deliberately. With it on, Android auto-backup copies
+         the app's localStorage to the user's Google Drive, and that store
+         holds the Gemini/Places API keys. It also stops "adb backup" pulling
+         the same data off an unlocked handset. The app's own Export in
+         Settings is the supported way to move a trip, and that file has the
+         keys stripped out. -->
+    <application
+        android:allowBackup="false"
+        android:fullBackupContent="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/AppTheme">
+
+        <activity
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode|navigation|density"
+            android:name=".MainActivity"
+            android:label="@string/title_activity_main"
+            android:theme="@style/AppTheme.NoActionBarLaunch"
+            android:launchMode="singleTask"
+            android:exported="true">
+
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <!-- Lets the app appear in the Android share sheet - e.g. tapping
+                 Share on a place in Google Maps and picking this app. -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+
+        </activity>
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths"></meta-data>
+        </provider>
+    </application>
+
+    <!-- Permissions -->
+
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- Without this, navigator.onLine is hardcoded true in an Android
+         WebView, so isOffline() could never once return true on a real phone
+         and the banner explaining what still works with no signal - the whole
+         offline story - had never been seen by anybody. The browser suite
+         passed throughout because Chromium honours setOffline regardless. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- Reminders about the day: the morning brief, time to leave for the next
+         stop, rain on a day you'll be outdoors, somewhere closing soon. All
+         worked out on the phone from the stored plan, so they fire in a glen
+         with no signal. POST_NOTIFICATIONS is required from Android 13 on;
+         the two alarm permissions are what make a reminder land at the minute
+         it was set for rather than whenever the phone next wakes up, which
+         for "you have 45 minutes before it shuts" is the whole point. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+
+    <!-- "Where I am" in Explore needs these. Without them the browser
+         geolocation call has nothing to grant and the button silently does
+         nothing, which is exactly how it behaved before they were added.
+         Coarse is enough - we're picking a neighbourhood, not navigating. -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+</manifest>

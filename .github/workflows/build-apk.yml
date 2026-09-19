@@ -1,0 +1,69 @@
+name: Build Android APK
+
+on:
+  push:
+    branches:
+      - "**"
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+
+      - name: Install SDK platform & build-tools
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Run before building the APK so a regression fails here rather than
+      # reaching the phone. Every bug this app has had was a runtime one that
+      # only a real browser would catch.
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      # A second's check that catches what the browser suites structurally
+      # cannot: Android resource XML, which nothing validates until Gradle
+      # compiles it five minutes into the build. A stray "--" in a comment
+      # cost a build once.
+      - name: Check Android resource XML
+        run: node tests/check-android-xml.mjs
+
+      - name: Run browser tests
+        run: node tests/run-all.mjs
+
+      - name: Sync Capacitor Android project
+        run: npx cap sync android
+
+      - name: Build debug APK
+        working-directory: android
+        run: ./gradlew assembleDebug --no-daemon
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wayfare-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
