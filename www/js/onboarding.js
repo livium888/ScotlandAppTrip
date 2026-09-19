@@ -183,12 +183,9 @@
     }
   }
 
-  function start() {
-    if (!welcomeOverlay.classList.contains("open")) return;
-    render();
-  }
-
-  start();
-  const observer = new MutationObserver(start);
-  observer.observe(welcomeOverlay, { attributes: true, attributeFilter: ["class"] });
+  // app.js runs before this script and has already decided whether a new
+  // install needs the welcome sheet. Render once; observing the overlay here
+  // creates an unnecessary lifecycle that can keep browser tests alive after
+  // the user has finished onboarding.
+  if (welcomeOverlay.classList.contains("open")) render();
 })();
