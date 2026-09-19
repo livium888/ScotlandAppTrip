@@ -133,10 +133,13 @@ const server = http.createServer((req, res) => {
 // Deliberately modest. Each suite is a whole Chromium, and running fifty of
 // those at once would trade a slow suite for a thrashing one.
 const LANES = Math.max(2, Math.min(6, (cpus().length || 4) - 1));
+const SUITE_TIMEOUT_MS = 90_000;
 
 function run(suite) {
   return new Promise((resolve) => {
     const started = Date.now();
+    let timedOut = false;
+    let killTimer = null;
     // Output is captured rather than inherited: with several running at once,
     // interleaved output is unreadable, so each suite's is held and printed
     // whole when it finishes.
@@ -146,11 +149,19 @@ function run(suite) {
     let out = "";
     child.stdout.on("data", (d) => (out += d));
     child.stderr.on("data", (d) => (out += d));
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      out += `\nTIMEOUT: ${suite} exceeded ${SUITE_TIMEOUT_MS / 1000}s and was terminated.\n`;
+      child.kill("SIGTERM");
+      killTimer = setTimeout(() => child.kill("SIGKILL"), 5000);
+    }, SUITE_TIMEOUT_MS);
     child.on("exit", (code) => {
+      clearTimeout(timeout);
+      if (killTimer) clearTimeout(killTimer);
       const secs = ((Date.now() - started) / 1000).toFixed(1);
       console.log(`\n=== ${suite} (${secs}s) ===`);
       process.stdout.write(out);
-      resolve({ suite, code: code ?? 1, secs: Number(secs) });
+      resolve({ suite, code: timedOut ? 124 : code ?? 1, secs: Number(secs) });
     });
   });
 }
