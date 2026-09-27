@@ -71,7 +71,7 @@ await page.waitForTimeout(500);
 
 // ---------- A trip that is over ----------
 
-await page.evaluate(() => document.querySelector('[data-view="today"]').click());
+await page.evaluate(() => window.__tripTest.showView('today'));
 await page.waitForTimeout(400);
 const past = await viewText();
 check('a finished trip does not open on its first day', !/Day 1/.test(past), past.slice(0, 140));
@@ -105,7 +105,7 @@ await page.evaluate(() => {
 });
 await page.reload({ waitUntil: 'load' });
 await page.waitForTimeout(400);
-await page.evaluate(() => document.querySelector('[data-view="today"]').click());
+await page.evaluate(() => window.__tripTest.showView('today'));
 await page.waitForTimeout(400);
 check('a day still ahead is still "next up"', /Next up/i.test(await viewText()), (await viewText()).slice(0, 140));
 

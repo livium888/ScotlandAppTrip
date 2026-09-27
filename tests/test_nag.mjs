@@ -1,16 +1,11 @@
-// A warning you cannot dismiss is not a warning, it is furniture.
+// The backup warning, without laying it across every screen.
 //
-// The backup nudge occupied roughly 60px at the top of every screen, on every
-// screen, permanently, with no way to answer it except to take a backup. It
-// is telling the truth - everything really is only on this phone - but a
-// message that cannot be acknowledged stops being read within a day, which
-// means the one moment it matters is the moment it gets ignored.
-//
-// So: acknowledgeable, and when acknowledged it goes quiet for a week and
-// leaves a mark on the way to Settings instead. The offline banner is
-// deliberately NOT dismissible - it is a fact about right now that clears
-// itself the moment it stops being true, and hiding it would only send you
-// hunting for why search is broken.
+// It was a strip across the top of every screen, then a strip you could
+// dismiss for a week. Both were answers to the wrong question. On a phone the
+// app saves a copy of the trip every day by itself, so the warning only ever
+// means that has not happened - which is worth a mark on the settings gear,
+// on the way to the fix, and nothing more. The offline notice stays a banner:
+// it is a fact about right now, and it explains why search has stopped.
 import { chromium } from 'playwright';
 import { goTo } from './lib/screens.mjs';
 import fs from 'node:fs';
@@ -48,52 +43,38 @@ await page.waitForTimeout(600);
 
 const bannerShown = () => page.evaluate(() => {
   const b = document.getElementById('appBanner');
-  return !!b && !b.hidden && /only on this phone/i.test(b.textContent);
+  return !!b && !b.hidden && /backed up|only on this phone/i.test(b.textContent);
 });
+const gearMarked = () => page.evaluate(() => document.getElementById('settingsBtn').classList.contains('has-dot'));
 
-// Tolerant on purpose so a run against the unfixed code fails the checks
-// that name the missing control rather than throwing and reporting nothing.
-const tap = async (sel) => {
-  const hit = await page.evaluate((x) => { const el = document.querySelector(x); if (!el) return false; el.click(); return true; }, sel);
-  await page.waitForTimeout(300);
-  return hit;
-};
-
-check('the nudge appears when there is something to lose and no backup', await bannerShown());
-check('and it can be answered, not only obeyed', await page.evaluate(() =>
-  !!document.getElementById('bannerDismiss')));
-
-await tap('#bannerDismiss');
-check('dismissing it puts it away', !(await bannerShown()));
-
-// The important half: it must not come back on the next screen, or the next
-// launch, or dismissing meant nothing.
+// The nudge was a strip across the top of every screen, dismissable for a
+// week. On a phone the app backs itself up daily, so the warning only ever
+// means that has not happened - which earns a mark on the way to the fix,
+// not a strip of every screen. Nothing to dismiss, because nothing is in
+// the way.
+check('with something to lose and no backup, the settings gear is marked', await gearMarked());
+check('and says why, to a screen reader', /not backed up/i.test(await page.evaluate(() =>
+  document.getElementById('settingsBtn').getAttribute('aria-label'))));
+check('but nothing is laid across the screen', !(await bannerShown()));
 await goTo(page, 'picks', 300);
-check('and it stays away on another screen', !(await bannerShown()));
+check('on any screen', !(await bannerShown()) && await gearMarked());
+
+// A backup clears it.
+await page.evaluate(() => localStorage.setItem('last-backup-at-v1', JSON.stringify(Date.now())));
 await page.reload({ waitUntil: 'load' });
 await page.waitForTimeout(600);
-check('and after closing and reopening the app', !(await bannerShown()));
+check('once backed up the mark goes', !(await gearMarked()));
 
-// But it is not gone for ever - the data really is only on this phone.
+// And an empty trip has nothing to lose, so nothing to say.
 await page.evaluate(() => {
-  const k = 'backup-nudge-snoozed-v1';
-  localStorage.setItem(k, JSON.stringify(Date.now() - 8 * 24 * 60 * 60 * 1000));
+  localStorage.removeItem('last-backup-at-v1');
+  localStorage.setItem('board:b:picks', JSON.stringify([]));
 });
 await page.reload({ waitUntil: 'load' });
 await page.waitForTimeout(600);
-check('it comes back after a week, because the risk did not go away', await bannerShown());
-
-// Meanwhile the way to Settings carries the mark, so a dismissed warning is
-// still findable rather than forgotten.
-await tap('#bannerDismiss');
-await goTo(page, 'more', 300);
-check('a dismissed warning still shows on the way to Settings', await page.evaluate(() => {
-  const row = document.querySelector('[data-more="settings"]');
-  return !!row && !!row.querySelector('.more-row-dot');
-}));
+check('with nothing saved there is no mark', !(await gearMarked()));
 
 // ---------- Offline is a different kind of message ----------
-await page.evaluate(() => localStorage.removeItem('backup-nudge-snoozed-v1'));
 await page.context().setOffline(true);
 await page.evaluate(() => window.dispatchEvent(new Event('offline')));
 await page.waitForTimeout(300);

@@ -115,7 +115,7 @@ await page.reload({ waitUntil: 'load' });
 await page.waitForTimeout(600);
 
 // --- Everything is in miles ---
-await page.evaluate(() => document.querySelector('[data-view="itinerary"]').click());
+await page.evaluate(() => window.__tripTest.showView('itinerary'));
 await page.waitForTimeout(500);
 const itin = await page.evaluate(() => document.getElementById('view').textContent);
 check('no kilometres anywhere in the plan', !/\bkm\b/.test(itin), itin.slice(0, 300));
@@ -127,7 +127,7 @@ check('and in hours, not hundreds of minutes', /🚗\s*\d+ h/.test(itin.replace(
 check('no absurd walking time survives', !/🚶\s*\d{3,} min/.test(itin.replace(/\s+/g, ' ')), itin.slice(0, 400));
 
 // Today's "Directions" for a driven leg asks Google for driving.
-await page.evaluate(() => document.querySelector('[data-view="today"]').click());
+await page.evaluate(() => window.__tripTest.showView('today'));
 await page.waitForTimeout(500);
 const driveBtn = await page.evaluate(() => {
   const b = Array.from(document.querySelectorAll('[data-open-maps]'))

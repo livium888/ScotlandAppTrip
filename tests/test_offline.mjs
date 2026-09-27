@@ -63,7 +63,7 @@ await page.evaluate(({ todayLabel }) => {
   }));
 }, { todayLabel });
 await page.reload({ waitUntil: 'load' });
-await page.evaluate(() => document.querySelector('[data-view="today"]').click());
+await page.evaluate(() => window.__tripTest.showView('today'));
 await page.waitForTimeout(600);
 
 // ---------- The day reads in the order you walk it ----------
@@ -107,7 +107,7 @@ await page.evaluate(() => {
   localStorage.setItem('board:b-o:plan', JSON.stringify(plan));
 });
 await page.reload({ waitUntil: 'load' });
-await page.evaluate(() => document.querySelector('[data-view="today"]').click());
+await page.evaluate(() => window.__tripTest.showView('today'));
 await page.waitForTimeout(500);
 check('on another day, the first stop is the next one', await page.evaluate(() => {
   const card = document.querySelector('.today-card.next');
@@ -166,22 +166,25 @@ await page.evaluate(() => document.querySelector('.map-close, [data-map-close]')
 await page.waitForTimeout(400);
 
 // ---------- The backup nudge ----------
+// A mark on the settings gear, not a strip across every screen: on a phone
+// the app backs itself up daily, so this only ever means that has not
+// happened. The fix is one tap inside.
 
-check('an un-backed-up plan says so', await page.evaluate(() =>
-  !document.getElementById('appBanner').hidden && /Never backed up/.test(document.getElementById('appBanner').textContent)),
-  await page.evaluate(() => document.getElementById('appBanner').textContent));
-check('and offers to do it there and then', await page.evaluate(() => !!document.getElementById('bannerBackup')));
+check('an un-backed-up plan says so, on the way to the fix', await page.evaluate(() =>
+  document.getElementById('settingsBtn').classList.contains('has-dot') &&
+  /not backed up/i.test(document.getElementById('settingsBtn').getAttribute('aria-label'))));
+check('and not across the top of the screen', await page.evaluate(() =>
+  document.getElementById('appBanner').hidden || !/backed up/i.test(document.getElementById('appBanner').textContent)));
 
+await page.evaluate(() => document.getElementById('settingsBtn').click());
+await page.waitForTimeout(400);
 const download = page.waitForEvent('download', { timeout: 8000 }).catch(() => null);
-await page.evaluate(() => document.getElementById('bannerBackup').click());
+await page.evaluate(() => document.getElementById('exportBackupBtn').click());
 const file = await download;
 check('backing up produces a file', !!file, file ? file.suggestedFilename() : 'no download');
 await page.waitForTimeout(600);
-check('and the nudge goes away once it is done', await page.evaluate(() =>
-  document.getElementById('appBanner').hidden || !/Never backed up/.test(document.getElementById('appBanner').textContent)),
-  await page.evaluate(() => document.getElementById('appBanner').textContent));
-check('the date is remembered', await page.evaluate(() =>
-  !!JSON.parse(localStorage.getItem('last-backup-at-v1') || 'null')));
+check('and the mark goes away once it is done', await page.evaluate(() =>
+  !document.getElementById('settingsBtn').classList.contains('has-dot')));
 
 // ---------- Downloading the trip's area ----------
 

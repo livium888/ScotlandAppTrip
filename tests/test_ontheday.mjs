@@ -155,7 +155,7 @@ check('and it lands on the day', Object.values(withInn.items).flat().some((it) =
 
 // ---------- Which is what Today then shows ----------
 
-await page.evaluate(() => document.querySelector('[data-view="today"]').click());
+await page.evaluate(() => window.__tripTest.showView('today'));
 await page.waitForTimeout(700);
 const todayText = await page.evaluate(() => document.getElementById('view').textContent);
 check('Today shows what was put there, with no itinerary ever built',

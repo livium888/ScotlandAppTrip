@@ -8,16 +8,11 @@
 // there is not.
 export const goTo = async (page, name, settle = 250) => {
   await page.evaluate((n) => {
-    const t = document.querySelector(`[data-view="${n}"]`);
+    // A tab if there is one; Today and Plan are the two halves of Trip, and
+    // everything else is a screen reached from inside another - a suite
+    // wants the screen, not a tour of how to get there.
+    const t = document.querySelector(`.tabbar [data-view="${n}"], [data-trip-half="${n}"]`);
     if (t && !t.hidden) return t.click();
-    const more = document.querySelector('[data-view="more"]');
-    if (!more) throw new Error(`no tab for "${n}" and no More to look in`);
-    more.click();
-    const row = document.querySelector(`[data-more="${n}"]`);
-    if (row) return row.click();
-    // Places and Eats have no button anywhere - they are what a saved-list
-    // link or the hardware back history lands on, and a suite still has to
-    // be able to render them.
     if (window.__tripTest && window.__tripTest.showView) return window.__tripTest.showView(n);
     throw new Error(`no way to reach "${n}"`);
   }, name);

@@ -4092,3 +4092,117 @@ html, body {
 .mode-choice b { font-size: var(--type-lg); }
 .mode-choice span { font-size: var(--type-sm); color: var(--text-muted); }
 .mode-choice:active { background: var(--surface-2); }
+
+
+/* ---- Trip: Today and Plan as one tab ---- */
+.trip-switch {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+.seg {
+  flex: 1;
+  display: flex;
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--surface-2);
+}
+.seg-btn {
+  flex: 1;
+  min-height: 44px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: var(--type-sm);
+  font-weight: 700;
+  cursor: pointer;
+}
+.seg-btn.on { background: var(--card); color: var(--navy); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12); }
+.trip-share {
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 50%;
+  background: var(--surface-2);
+  color: var(--navy);
+  cursor: pointer;
+}
+
+/* ---- A plan stop: read first, edit on tap ---- */
+.plan-item { flex-wrap: wrap; align-items: center; }
+.plan-item-tap {
+  flex: 1;
+  min-width: 0;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.plan-item-tap .plan-item-main { display: flex; flex-direction: column; min-width: 0; }
+.plan-time-read {
+  font-size: var(--type-md);
+  flex-shrink: 0;
+  min-width: 52px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--navy);
+}
+.plan-drag {
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  cursor: grab;
+  touch-action: none;
+}
+.plan-item > .plan-warn { flex-basis: 100%; }
+.plan-item-edit {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+}
+.plan-item-edit[hidden] { display: none; }
+.plan-item.open { box-shadow: inset 0 0 0 2px var(--accent-soft); }
+.plan-item.sortable-ghost { opacity: 0.4; }
+.plan-build-link { display: flex; align-items: center; gap: var(--space-1); margin: var(--space-2) auto var(--space-4); min-height: 44px; }
+.trip-extras { margin-top: var(--space-2); }
+
+/* Settings wants attention: a mark on the gear, not a strip across every screen. */
+#settingsBtn { position: relative; }
+#settingsBtn.has-dot::after {
+  content: "";
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--warn);
+  box-shadow: 0 0 0 2px var(--surface);
+}
+.settings-link-row { width: 100%; }
+.plan-item-tap { font-size: var(--type-md); }
+
+/* The banner sets its own display, which beats the [hidden] attribute - so
+   "hidden" still drew an empty 21px strip under the top bar on every screen. */
+.app-banner[hidden] { display: none; }

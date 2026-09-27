@@ -138,7 +138,7 @@ check('Android back closes the map', await page.evaluate(() => !document.getElem
 check('and leaves the app where it was', await page.evaluate(() => !!document.getElementById('view').textContent.trim()));
 
 // --- Opening from Today starts on today, not on all forty saved places ---
-await page.evaluate(() => document.querySelector('[data-view="today"]').click());
+await page.evaluate(() => window.__tripTest.showView('today'));
 await page.waitForTimeout(300);
 await page.click('#mapBtn');
 await page.waitForSelector('#mapOverlay.open');

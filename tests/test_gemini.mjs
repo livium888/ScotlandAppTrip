@@ -136,7 +136,7 @@ const picks = await page.evaluate(() => JSON.parse(localStorage.getItem('board:'
 check('AI-found place saved with real OSM coords', picks.length === 1 && picks[0].lat != null, JSON.stringify(picks[0] || {}).slice(0, 200));
 
 // --- Auto plan ---
-await page.evaluate(() => document.querySelector('[data-view="itinerary"]').click());
+await page.evaluate(() => window.__tripTest.showView('itinerary'));
 await page.waitForTimeout(150);
 // There used to be a Suggested/My plan toggle to click past here, and seven
 // days already in the plan from the bundled trip. Both went with that trip,
@@ -147,11 +147,16 @@ await page.evaluate(() => {
   if (quick) quick.click();
 });
 await page.waitForTimeout(400);
-check('Plan my days button present', await page.evaluate(() => !!document.getElementById('autoPlanBtn')));
+check('Plan my days button present', await page.evaluate(() => {
+  document.getElementById('buildItBtn').click();
+  const ok = !!document.getElementById('autoPlanBtn');
+  document.querySelector('#placeModal .modal-close').click();
+  return ok;
+}));
 
 // The button now opens the chooser: what to plan is a question, and the answer
 // is reviewed before anything is written.
-await page.evaluate(() => document.getElementById('autoPlanBtn').click());
+await page.evaluate(() => (document.getElementById('buildItBtn').click(), document.getElementById('autoPlanBtn').click()));
 await page.waitForSelector('#planOverlay.open', { timeout: 4000 });
 await page.evaluate(() => document.querySelector('[data-plan-run]').click());
 await page.waitForSelector('.planner-day', { timeout: 8000 });

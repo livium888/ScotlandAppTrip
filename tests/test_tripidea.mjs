@@ -202,11 +202,16 @@ await seed();
 
 // ---------- It is offered where a trip would be built ----------
 
-await page.evaluate(() => document.querySelector('[data-view="itinerary"]').click());
+await page.evaluate(() => window.__tripTest.showView('itinerary'));
 await page.waitForTimeout(400);
-check('the itinerary offers to suggest a trip', await page.evaluate(() => !!document.getElementById('tripIdeaBtn')));
+check('the itinerary offers to suggest a trip', await page.evaluate(() => {
+  document.getElementById('buildItBtn').click();
+  const ok = !!document.getElementById('tripIdeaBtn');
+  document.querySelector('#placeModal .modal-close').click();
+  return ok;
+}));
 
-await page.evaluate(() => document.getElementById('tripIdeaBtn').click());
+await page.evaluate(() => (document.getElementById('buildItBtn').click(), document.getElementById('tripIdeaBtn').click()));
 await page.waitForSelector('#ideaOverlay.open', { timeout: 4000 });
 
 // ---------- One question a screen, Next under your thumb ----------
@@ -558,7 +563,7 @@ check('which is the trip you were shown', await page.evaluate(() =>
 
 // ---------- The question keeps, so it can be changed rather than retyped ----------
 
-await page.evaluate(() => document.getElementById('tripIdeaBtn').click());
+await page.evaluate(() => (document.getElementById('buildItBtn').click(), document.getElementById('tripIdeaBtn').click()));
 await page.waitForSelector('#ideaOverlay.open', { timeout: 4000 });
 check('coming back shows the routes you already have', await page.evaluate(() =>
   !!document.querySelector('.idea-option')));
@@ -571,9 +576,9 @@ check('and the question exactly as you built it',
 // ---------- Nothing to ask with ----------
 
 await seed({ geminiKey: '' });
-await page.evaluate(() => document.querySelector('[data-view="itinerary"]').click());
+await page.evaluate(() => window.__tripTest.showView('itinerary'));
 await page.waitForTimeout(400);
-await page.evaluate(() => document.getElementById('tripIdeaBtn').click());
+await page.evaluate(() => (document.getElementById('buildItBtn').click(), document.getElementById('tripIdeaBtn').click()));
 await page.waitForSelector('#ideaOverlay.open', { timeout: 4000 });
 await chip('Edinburgh');
 await page.waitForTimeout(200);
@@ -591,9 +596,9 @@ check('with no AI key it says where to put one rather than failing quietly',
 
 await page.setViewportSize({ width: 390, height: 600 });
 await seed();
-await page.evaluate(() => document.querySelector('[data-view="itinerary"]').click());
+await page.evaluate(() => window.__tripTest.showView('itinerary'));
 await page.waitForTimeout(400);
-await page.evaluate(() => document.getElementById('tripIdeaBtn').click());
+await page.evaluate(() => (document.getElementById('buildItBtn').click(), document.getElementById('tripIdeaBtn').click()));
 await page.waitForSelector('#ideaOverlay.open', { timeout: 4000 });
 await chip('Edinburgh');
 await page.waitForTimeout(200);
@@ -698,9 +703,9 @@ await page.route(/generativelanguage\.googleapis\.com/, (route) => {
 });
 
 await seed();
-await page.evaluate(() => document.querySelector('[data-view="itinerary"]').click());
+await page.evaluate(() => window.__tripTest.showView('itinerary'));
 await page.waitForTimeout(400);
-await page.evaluate(() => document.getElementById('tripIdeaBtn').click());
+await page.evaluate(() => (document.getElementById('buildItBtn').click(), document.getElementById('tripIdeaBtn').click()));
 await page.waitForSelector('#ideaOverlay.open', { timeout: 4000 });
 await chip('Edinburgh');
 await page.waitForTimeout(200);
@@ -735,9 +740,9 @@ await page.route(/generativelanguage\.googleapis\.com/, (route) => {
     }] }) }] } }] }) });
 });
 await seed();
-await page.evaluate(() => document.querySelector('[data-view="itinerary"]').click());
+await page.evaluate(() => window.__tripTest.showView('itinerary'));
 await page.waitForTimeout(400);
-await page.evaluate(() => document.getElementById('tripIdeaBtn').click());
+await page.evaluate(() => (document.getElementById('buildItBtn').click(), document.getElementById('tripIdeaBtn').click()));
 await page.waitForSelector('#ideaOverlay.open', { timeout: 4000 });
 await chip('Edinburgh');
 await page.waitForTimeout(200);
@@ -764,9 +769,9 @@ await page.route(/generativelanguage\.googleapis\.com/, (route) => {
     candidates: [{ content: { parts: [{ text: JSON.stringify([TRIP]) }] } }] }) });
 });
 await seed();
-await page.evaluate(() => document.querySelector('[data-view="itinerary"]').click());
+await page.evaluate(() => window.__tripTest.showView('itinerary'));
 await page.waitForTimeout(400);
-await page.evaluate(() => document.getElementById('tripIdeaBtn').click());
+await page.evaluate(() => (document.getElementById('buildItBtn').click(), document.getElementById('tripIdeaBtn').click()));
 await page.waitForSelector('#ideaOverlay.open', { timeout: 4000 });
 await chip('Edinburgh');
 await page.waitForTimeout(200);
@@ -790,9 +795,9 @@ await page.route(/generativelanguage\.googleapis\.com/, (route) => {
     candidates: [{ content: { parts: [{ text: 'I am sorry, I cannot help with that request.' }] } }] }) });
 });
 await seed();
-await page.evaluate(() => document.querySelector('[data-view="itinerary"]').click());
+await page.evaluate(() => window.__tripTest.showView('itinerary'));
 await page.waitForTimeout(400);
-await page.evaluate(() => document.getElementById('tripIdeaBtn').click());
+await page.evaluate(() => (document.getElementById('buildItBtn').click(), document.getElementById('tripIdeaBtn').click()));
 await page.waitForSelector('#ideaOverlay.open', { timeout: 4000 });
 await chip('Edinburgh');
 await page.waitForTimeout(200);
@@ -819,9 +824,9 @@ await page.route(/generativelanguage\.googleapis\.com/, async (route) => {
   await new Promise(() => {}); // never answers
 });
 await seed();
-await page.evaluate(() => document.querySelector('[data-view="itinerary"]').click());
+await page.evaluate(() => window.__tripTest.showView('itinerary'));
 await page.waitForTimeout(400);
-await page.evaluate(() => document.getElementById('tripIdeaBtn').click());
+await page.evaluate(() => (document.getElementById('buildItBtn').click(), document.getElementById('tripIdeaBtn').click()));
 await page.waitForSelector('#ideaOverlay.open', { timeout: 4000 });
 await chip('Edinburgh');
 await page.waitForTimeout(200);

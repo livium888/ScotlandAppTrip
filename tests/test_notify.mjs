@@ -332,7 +332,7 @@ const todayAt = async (hour) => {
   })()`);
   await page.reload({ waitUntil: 'load' });
   await page.waitForTimeout(700);
-  await page.evaluate(() => document.querySelector('[data-view="today"]').click());
+  await page.evaluate(() => window.__tripTest.showView('today'));
   await page.waitForTimeout(500);
   return page.evaluate(() => document.getElementById('view').textContent.replace(/\s+/g, ' '));
 };

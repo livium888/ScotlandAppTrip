@@ -142,8 +142,11 @@ check('and its label fits on one line like the rest', await page.evaluate(() => 
 await page.evaluate(() => document.querySelector('[data-view="events"]').click());
 await page.waitForTimeout(500);
 const screen = () => page.evaluate(() => document.getElementById('view').textContent.replace(/\s+/g, ' '));
-check('the screen explains itself before you have searched anything',
-  /Nothing saved yet/.test(await screen()), (await screen()).slice(0, 200));
+// Before any search, the screen offers the search rather than a paragraph
+// about what events are.
+check('before you have searched anything, it offers the search, not an essay',
+  /See what's on/.test(await screen()) && !/Everything else in this app is a place/.test(await screen()),
+  (await screen()).slice(0, 200));
 // The presets by name rather than by count, so adding one does not fail this.
 // The form is behind the summary bar now, so a suite that wants to read
 // the controls has to open it the way a person would.

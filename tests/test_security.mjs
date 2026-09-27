@@ -56,6 +56,7 @@ await page.evaluate(([p, q]) => {
   localStorage.clear();
   localStorage.setItem('trip-settings-v1', JSON.stringify({
     destination: 'Scotland', geminiKey: 'SECRET-GEMINI-KEY', googleKey: 'SECRET-GOOGLE-KEY',
+    aiKey: 'SECRET-OTHER-PROVIDER-KEY',
     geminiModel: 'models/gemini-3.5-flash-lite', travellers: 'family',
   }));
   localStorage.setItem('boards-v1', JSON.stringify({
@@ -161,6 +162,9 @@ const backup = await page.evaluate(() => {
 check('the export produced a file', !!backup, String(backup).slice(0, 60));
 check('the Gemini key is not in the backup file', backup && !/SECRET-GEMINI-KEY/.test(backup));
 check('the Places key is not in the backup file', backup && !/SECRET-GOOGLE-KEY/.test(backup));
+// The key for another provider was the one left out of the list, and went
+// into every backup file.
+check('nor the key for another AI provider', backup && !/SECRET-OTHER-PROVIDER-KEY/.test(backup));
 check('but the trip itself is', backup && /board:b-s:picks/.test(backup));
 
 // --- Restoring must not wipe the key already on this device ---

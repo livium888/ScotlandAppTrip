@@ -69,8 +69,8 @@ const screen = () => page.evaluate(() => document.getElementById('view').textCon
 // failing looks like one that never ran.
 const goUsage = async () => {
   await page.evaluate(() => {
-    document.querySelector('[data-view="more"]')?.click();
-    document.querySelector('[data-more="usage"]')?.click();
+    document.getElementById('settingsBtn')?.click();
+    document.getElementById('openUsageBtn')?.click();
   });
   await page.waitForTimeout(300);
 };
@@ -186,13 +186,13 @@ const backup = await page.evaluate(() => JSON.stringify(window.__tripTest.buildB
 // together and present it as one phone's - a wrong number, not a missing one.
 check('a per-device meter is not carried into a backup', !/ai-usage-v1/.test(backup));
 
-// ---------- Reachable from More ----------
+// ---------- Reachable from Settings ----------
 
-await page.evaluate(() => document.querySelector('[data-view="more"]').click());
+await page.evaluate(() => document.getElementById('settingsBtn').click());
 await page.waitForTimeout(300);
-check('More has a row for it', await page.evaluate(() => !!document.querySelector('[data-more="usage"]')));
+check('Settings has a row for it', await page.evaluate(() => !!document.getElementById('openUsageBtn')));
 const usageRow = await page.evaluate(() =>
-  (document.querySelector('[data-more="usage"]') || {}).textContent || '');
+  (document.getElementById('openUsageBtn') || {}).textContent || '');
 check('and the row carries the number, like the others do', /today/i.test(usageRow), usageRow.replace(/\s+/g, ' '));
 
 await browser.close();

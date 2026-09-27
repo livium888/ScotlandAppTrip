@@ -113,14 +113,14 @@ check('coming back to the app moves it on to the right day',
 
 // ---------- The kids list ----------
 
-// No longer a tab of its own - seven along the bottom of a phone is a menu
-// rather than a bar. It is a row in More, one tap from anywhere.
-await tab('more');
+// Not a tab of its own: a row at the foot of the plan, with the other
+// screens that belong to one trip.
+await tab('itinerary');
 check('there is a way to the kids list', await page.evaluate(() =>
-  !!document.querySelector('[data-more="kids"]')));
+  !!document.querySelector('[data-trip-extra="kids"]')));
 check('and it says how many are marked rather than just naming itself',
-  await page.evaluate(() => /marked/.test(document.querySelector('[data-more="kids"]').textContent)),
-  await page.evaluate(() => document.querySelector('[data-more="kids"]').textContent.replace(/\s+/g, ' ')));
+  await page.evaluate(() => /marked/.test(document.querySelector('[data-trip-extra="kids"]').textContent)),
+  await page.evaluate(() => document.querySelector('[data-trip-extra="kids"]').textContent.replace(/\s+/g, ' ')));
 check('and the Trip tab that counted things is gone', await page.evaluate(() =>
   !document.querySelector('[data-view="overview"]')));
 

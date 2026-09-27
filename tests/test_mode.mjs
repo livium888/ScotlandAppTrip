@@ -87,8 +87,8 @@ const seed = async (mode) => {
 const countOf = (sel) => page.evaluate((s) => document.querySelectorAll(s).length, sel);
 const bodyText = () => page.evaluate(() => document.body.textContent.replace(/\s+/g, ' '));
 const moreHasKids = async () => {
-  await goTo(page, 'more', 300);
-  return page.evaluate(() => !!document.querySelector('[data-more="kids"]'));
+  await goTo(page, 'itinerary', 300);
+  return page.evaluate(() => !!document.querySelector('[data-trip-extra="kids"]'));
 };
 const categories = () => page.evaluate(() => {
   window.__tripTest.openCategoryPicker();

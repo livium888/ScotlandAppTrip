@@ -433,8 +433,15 @@ geoResults = () => [{
   namedetails: { name: 'Moulin Inn' }, address: { town: 'Pitlochry' }, extratags: {},
 }];
 await openTab('picks');
-check('with no days, Today is not a tab', await page.evaluate(() =>
-  document.querySelector('.tab[data-view="today"]').hidden === true));
+// Today is half of the Trip tab, and with no days there is no half to show.
+const hasTodayHalf = () => page.evaluate(() => {
+  const here = document.getElementById('view').dataset.activeTab;
+  window.__tripTest.showView('itinerary');
+  const has = !!document.querySelector('[data-trip-half="today"]');
+  window.__tripTest.showView(here);
+  return has;
+});
+check('with no days, Trip has no Today', !(await hasTodayHalf()));
 
 await page.click('#pickSearchTrigger');
 await page.waitForSelector('#pickSearchInput');
@@ -450,8 +457,7 @@ await page.waitForTimeout(700);
 
 check('the first day is made', (await readPlan('b-tab')).days.length === 1,
   JSON.stringify((await readPlan('b-tab')).days));
-check('and Today appears there and then, without switching tabs first', await page.evaluate(() =>
-  document.querySelector('.tab[data-view="today"]').hidden === false));
+check('and Today appears there and then', await hasTodayHalf());
 
 await browser.close();
 console.log(failures === 0 ? '\nALL TESTS PASSED' : `\n${failures} FAILED`);

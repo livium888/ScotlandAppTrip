@@ -35,23 +35,23 @@ await page.reload({ waitUntil: 'load' });
 await page.waitForTimeout(500);
 
 // --- Back retraces the tabs you came through ---
-await page.evaluate(() => document.querySelector('[data-view="itinerary"]').click());
+await page.evaluate(() => document.querySelector('.tabbar [data-view="picks"]').click());
 await page.waitForTimeout(200);
-await page.evaluate(() => document.querySelector('[data-view="more"]').click());
+await page.evaluate(() => document.querySelector('.tabbar [data-view="trip"]').click());
 await page.waitForTimeout(200);
-// Budget is not a tab any more; it lives behind More, which makes it the
-// first screen in this app you can be two levels deep in.
-await page.evaluate(() => document.querySelector('[data-more="budget"]').click());
+// Budget is not a tab; it sits at the foot of the plan, which makes it a
+// screen you can be two levels deep in.
+await page.evaluate(() => document.querySelector('[data-trip-extra="budget"]').click());
 await page.waitForTimeout(200);
 check('a few tabs in', await tabNow() === 'budget');
 check('and the tab you came through is the one lit', await page.evaluate(() =>
-  document.querySelector('.tab.active').getAttribute('data-view') === 'more'),
+  document.querySelector('.tab.active').getAttribute('data-view') === 'trip'),
   await page.evaluate(() => document.querySelector('.tab.active')?.getAttribute('data-view')));
 
 await back();
-check('back comes out of it to the menu it was opened from', await tabNow() === 'more', await tabNow());
+check('back comes out of it to the plan it was opened from', await tabNow() === 'itinerary', await tabNow());
 await back();
-check('back goes to the tab you came from, not out of the app', await tabNow() === 'itinerary', await tabNow());
+check('back goes to the tab you came from, not out of the app', await tabNow() === 'picks', await tabNow());
 await back();
 const rootTab = await tabNow();
 check('and keeps stepping back', rootTab !== 'places', rootTab);

@@ -166,6 +166,8 @@ openaiCalls = [];
 await goTo(page, 'itinerary', 400);
 const planned = await page.evaluate(async () => {
   const before = document.body.textContent;
+  const build = document.getElementById('buildItBtn');
+  if (build) build.click();
   const b = document.getElementById('tripIdeaBtn') || document.getElementById('autoPlanBtn');
   if (!b) return 'no button';
   b.click();

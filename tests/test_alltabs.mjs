@@ -98,7 +98,10 @@ check('a manually added place can be scheduled', (plan2.items.d1 || plan2.items[
 
 const tabsNow = await page.evaluate(() => Array.from(document.querySelectorAll('.tab'))
   .filter((t) => !t.hidden).map((t) => t.getAttribute('data-view')));
-check('Today appears once the board has a day', tabsNow.includes('today'), JSON.stringify(tabsNow));
+check('Today appears once the board has a day', tabsNow.includes('trip') && await page.evaluate(() => {
+  document.querySelector('.tabbar [data-view="trip"]').click();
+  return !!document.querySelector('[data-trip-half="today"]');
+}), JSON.stringify(tabsNow));
 
 await tab('today');
 check('Today shows the plan you built', /Castlerigg/.test(await text()), (await text()).slice(0, 200));

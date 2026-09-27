@@ -106,12 +106,13 @@ check('nor wrapped onto a second line, which knocks its icon out of line',
 // and the answer was not to raise the number but to move the three screens
 // that were only worth opening once a day behind one that is.
 check('and the bar is still a bar rather than a menu', tabs.length <= 5, JSON.stringify(tabs));
-check('with one place holding everything that is not a tab',
-  tabs.includes('more'), JSON.stringify(tabs));
-check('and the screens that stopped being tabs are still one tap from it',
+check('three: the trip, finding things, and what you saved',
+  tabs.length === 3 && ['trip', 'events', 'picks'].every((n) => tabs.includes(n)), JSON.stringify(tabs));
+check('and the screens that are not tabs are one tap from the trip they belong to',
   await page.evaluate(() => {
-    document.querySelector('[data-view="more"]').click();
-    return ['kids', 'budget', 'tips'].every((n) => !!document.querySelector(`[data-more="${n}"]`));
+    document.querySelector('.tabbar [data-view="trip"]').click();
+    window.__tripTest.showView('itinerary');
+    return ['kids', 'budget', 'tips'].every((n) => !!document.querySelector(`[data-trip-extra="${n}"]`));
   }));
 check('Places and Eats are no longer separate destinations',
   !tabs.includes('places') && !tabs.includes('eats'), JSON.stringify(tabs));

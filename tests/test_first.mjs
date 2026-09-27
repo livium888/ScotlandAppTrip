@@ -68,12 +68,17 @@ await seed(true);
 await goTo(page, 'itinerary', 400);
 
 const firstDay = await topOf('.day-card');
-const aiCard = await topOf('.plan-ai-card');
+const aiCard = await topOf('#buildItBtn');
 check('your days are on the plan screen at all', firstDay >= 0, String(firstDay));
-check('and they come before the buttons that build them',
-  firstDay >= 0 && aiCard >= 0 && firstDay < aiCard, `day at ${Math.round(firstDay)}, buttons at ${Math.round(aiCard)}`);
+check('and they come before the button that builds them',
+  firstDay >= 0 && aiCard >= 0 && firstDay < aiCard, `day at ${Math.round(firstDay)}, button at ${Math.round(aiCard)}`);
 check('the first day is above the fold', firstDay >= 0 && firstDay < 600, `${Math.round(firstDay)}px`);
+// One way in, two builders behind it.
+await page.evaluate(() => document.getElementById('buildItBtn').click());
+await page.waitForTimeout(300);
 check('and the ways to build a plan are still there', aiCard >= 0 && await countOf('#autoPlanBtn') === 1 && await countOf('#tripIdeaBtn') === 1);
+await page.evaluate(() => document.querySelector('#placeModal .modal-close').click());
+await page.waitForTimeout(300);
 
 // ---------- Plan, with nothing in it ----------
 await seed(false);

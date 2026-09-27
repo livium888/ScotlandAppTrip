@@ -15,7 +15,6 @@
   const view = document.getElementById("view");
   const tabbar = document.getElementById("tabbar");
   const topbarTitle = document.getElementById("topbarTitle");
-  const topbarSub = document.getElementById("topbarSub");
 
   // ---------- A note on the names below ----------
   // The app is called Wayfare. Several storage keys, the backup format string
@@ -3102,40 +3101,27 @@
     return typeof navigator.onLine === "boolean" && !navigator.onLine;
   }
 
+  // The backup warning used to be a banner across the top of every screen.
+  // On a phone the app already saves a copy by itself every day, so the
+  // warning only ever meant that had failed - worth a mark on the way to the
+  // fix, not a strip of every screen. The offline notice stays a banner: it
+  // explains why things in front of you have stopped working.
+  function paintSettingsDot() {
+    const gear = document.getElementById("settingsBtn");
+    if (!gear) return;
+    const due = backupIsOverdue();
+    gear.classList.toggle("has-dot", due);
+    gear.setAttribute("aria-label", due ? "Settings - not backed up" : "Settings");
+  }
+
   function refreshBanner() {
+    paintSettingsDot();
     if (!appBanner) return;
     if (isOffline()) {
       appBanner.className = "app-banner offline";
       appBanner.innerHTML =
         `<span>${icon('alert', { size: 15, cls: 'ico-inline' })} No connection — your places, plan and notes all still work. Search, weather and maps need signal.</span>`;
       appBanner.hidden = false;
-      return;
-    }
-    if (backupIsOverdue() && !backupNudgeSnoozed()) {
-      appBanner.className = "app-banner nudge";
-      appBanner.innerHTML =
-        `<span>${esc(backupAgeLine())} Everything is only on this phone.</span>` +
-        `<button class="app-banner-action" id="bannerBackup">Back up</button>` +
-        `<button class="app-banner-dismiss" id="bannerDismiss" aria-label="Not now">${icon('close', { size: 15 })}</button>`;
-      appBanner.hidden = false;
-      const btn = document.getElementById("bannerBackup");
-      if (btn) {
-        btn.addEventListener("click", async () => {
-          const res = await exportBackup();
-          toast(res.message);
-          refreshBanner();
-        });
-      }
-      const off = document.getElementById("bannerDismiss");
-      if (off) {
-        off.addEventListener("click", () => {
-          snoozeBackupNudge();
-          refreshBanner();
-          // More carries the mark from now on, so a dismissed warning is
-          // still findable rather than forgotten.
-          if (view.dataset.activeTab === "more") renderMore();
-        });
-      }
       return;
     }
     appBanner.hidden = true;
@@ -3194,6 +3180,9 @@
       const s = JSON.parse(rawSettings);
       delete s.geminiKey;
       delete s.googleKey;
+      // The key for another provider is as secret as the other two, and was
+      // being written into every backup file.
+      delete s.aiKey;
       return JSON.stringify(s);
     } catch (e) {
       return rawSettings;
@@ -3246,25 +3235,6 @@
     if (loadPicks().length < 3) return false;
     const at = lastBackupAt();
     return !at || Date.now() - at > BACKUP_STALE_MS;
-  }
-
-  // A warning nobody can answer is furniture. The nudge sat at the top of
-  // every screen, permanently, with no reply available except taking a
-  // backup - and a message that cannot be acknowledged stops being read
-  // within a day, which means the one moment it matters is the moment it
-  // gets ignored. Dismissing quiets it for a week, not for ever: the data
-  // really is only on this phone, and that does not stop being true because
-  // somebody was busy.
-  const BACKUP_SNOOZE_KEY = "backup-nudge-snoozed-v1";
-  const BACKUP_SNOOZE_MS = 7 * 24 * 60 * 60 * 1000;
-
-  function backupNudgeSnoozed() {
-    const at = readJson(BACKUP_SNOOZE_KEY, 0);
-    return typeof at === "number" && at > 0 && Date.now() - at < BACKUP_SNOOZE_MS;
-  }
-
-  function snoozeBackupNudge() {
-    store(BACKUP_SNOOZE_KEY, JSON.stringify(Date.now()));
   }
 
   // ---------- The backup nobody has to remember to take ----------
@@ -4072,6 +4042,21 @@
 
             <div class="settings-divider"></div>
 
+            <button class="more-row settings-link-row" id="openUsageBtn">
+              <span class="more-row-ico">${icon("sparkle", { size: 20 })}</span>
+              <span class="more-row-main">
+                <span class="more-row-title">AI usage</span>
+                <span class="more-row-meta">${(() => {
+                  const t = loadAiUsage().days[isoDate(new Date())] || blankDay();
+                  const all = t.inTokens + t.outTokens;
+                  return all ? `${tokens(all)} tokens today` : "Nothing used today";
+                })()}</span>
+              </span>
+              ${icon("forward", { size: 16, cls: "more-row-go" })}
+            </button>
+
+            <div class="settings-divider"></div>
+
             <label class="settings-label">Backup</label>
             <p class="settings-hint">
               Everything is stored only on this phone. ${
@@ -4393,6 +4378,11 @@ ${(() => {
 
     document.getElementById("exportBackupBtn").addEventListener("click", async () => {
       showBackupResult(await exportBackup());
+      paintSettingsDot();
+    });
+    document.getElementById("openUsageBtn").addEventListener("click", () => {
+      closePlaceModal();
+      showView("usage");
     });
 
     const fileInput = document.getElementById("importBackupFile");
@@ -5109,7 +5099,7 @@ ${(() => {
         <p class="kids-sub">${
           mine.length
             ? `${mine.length} place${mine.length === 1 ? "" : "s"} they'll actually enjoy`
-            : "Nothing marked yet — anything you mark shows up here"
+            : "Nothing marked yet"
         }</p>
       </div>
 
@@ -5384,6 +5374,24 @@ ${(() => {
     }
     shown[i] = b;
     shown[j] = a;
+    plan.items[dayId] = shown;
+    savePlan(plan);
+  }
+
+  // A drag from one place in the day to another. The times stay where they
+  // were in the day and the places move through them - the same rule as the
+  // arrows, which swap times for the same reason: a list ordered by time
+  // would otherwise snap straight back to where it started.
+  function movePlanItemTo(dayId, pickId, toIndex) {
+    const plan = loadPlan();
+    const shown = itemsInDayOrder(planItems(plan, dayId));
+    const from = shown.findIndex((it) => it.pickId === pickId);
+    if (from < 0 || toIndex < 0 || toIndex >= shown.length || from === toIndex) return;
+    const times = shown.map((it) => it.time);
+    const anyTimed = times.some((t) => timeToMinutes(t) != null);
+    const [moved] = shown.splice(from, 1);
+    shown.splice(toIndex, 0, moved);
+    if (anyTimed) shown.forEach((it, i) => (it.time = times[i]));
     plan.items[dayId] = shown;
     savePlan(plan);
   }
@@ -6187,7 +6195,7 @@ ${(() => {
     const days = loadPlan().days;
     if (!picks.length) return;
     if (!days.length) {
-      toast("Add a day first — the Itinerary tab, or from any place");
+      toast("Add a day first — under Trip, or from any place");
       return;
     }
 
@@ -6650,29 +6658,16 @@ ${(() => {
     // With places saved, the question is how to arrange them. With nothing
     // saved - which is where every trip starts - there is nothing to arrange,
     // and the honest answer is to go and find some, together.
-    if (plan.days.length) {
-      html += `<button class="hero-share" id="shareTrip" style="color:var(--navy);border-color:var(--line);background:var(--card);margin-bottom:14px;">${icon('share', { size: 17, cls: 'ico-inline' })} Share this plan</button>`;
+    // One way in, where there were two big buttons with a paragraph each.
+    // On an empty plan it leads, because it is the only thing worth doing;
+    // once there are days it is a line at the foot of them, because the plan
+    // itself is the subject of the screen. Both builders are one tap inside.
+    if (!plan.days.length) {
+      html += `
+        <div class="card plan-ai-card">
+          <button class="plan-ai-btn" id="buildItBtn">${icon("sparkle", { size: 17, cls: "ico-inline" })} Build it for me</button>
+        </div>`;
     }
-
-    // Where the two builders go depends on whether there is anything to look
-    // at. With days on the board they are a tool you reach for occasionally,
-    // and putting them first pushed the plan itself - the entire subject of
-    // the screen - below the fold. With no days they are the only thing worth
-    // showing, so they lead. Same card either way; only its position moves.
-    const planBuilders = `
-      <div class="card plan-ai-card">
-        ${
-          picks.length
-            ? `<button class="plan-ai-btn" id="autoPlanBtn">${icon('sparkle', { size: 17, cls: 'ico-inline' })} Plan my days for me</button>
-               <p class="settings-hint" style="text-align:center;">Choose which places - or a whole area - and see what fits before anything changes.</p>
-`
-            : `<p class="pick-status">Nothing saved yet — so there is nothing to arrange into days.</p>`
-        }
-        <button class="plan-ai-btn plan-idea-btn" id="tripIdeaBtn">${icon('directions', { size: 17, cls: 'ico-inline' })} Suggest a trip</button>
-        <p class="settings-hint" style="text-align:center;">Say where you are and how far you'll go — you get whole routes back, with the stops already in order.</p>
-      </div>
-    `;
-    if (!plan.days.length) html += planBuilders;
 
     plan.days.forEach((day) => {
       const items = itemsInDayOrder(planItems(plan, day.id));
@@ -6690,7 +6685,7 @@ ${(() => {
           </div>
           ${weatherLine(forecast, { quiet: true })}
           ${daylightLine(dateForDayLabel(day.label), dayWeatherAnchor(day.id))}
-          <div class="plan-items">
+          <div class="plan-items" data-plan-day="${esc(day.id)}">
       `;
       if (!items.length) {
         html += `<p class="pick-status">Nothing planned for this day yet.</p>`;
@@ -6711,39 +6706,45 @@ ${(() => {
         }
 
         const mayBeClosed = closedOnDay(p.openingHours, dayCode, p);
+        const key = `${day.id}|${it.pickId}`;
+        const open = planOpenItem === key;
+        // A stop reads as its time and its name. The controls for changing
+        // it - time, order, removal - were on every row, all the time, which
+        // made a finished plan look like a form. They are one tap away now,
+        // on the stop you tap; order is also a drag on the handle.
         html += `
-          <div class="plan-item">
-            <input class="plan-time" type="text" inputmode="text" placeholder="time"
-                   value="${esc(it.time || "")}" data-plan-time="${esc(day.id)}|${esc(it.pickId)}" />
-            <div class="plan-item-main">
-              <div class="plan-item-name">${esc(p.name)}${
-                p.booked ? ` <span class="booked-badge">booked</span>` : ""
-              }</div>
-              ${p.address ? `<div class="plan-item-sub">${esc(p.address)}</div>` : ""}
-              ${
-                mayBeClosed
-                  ? `<div class="plan-warn">${icon('alert', { size: 15, cls: 'ico-inline' })} May be closed this day — hours say "${esc(p.openingHours)}". Check before going.</div>`
-                  : ""
-              }
-              ${napWarning(it.time)}
-              ${childWarning(p)}
-              ${
-                it.time
-                  ? ""
-                  : `<div class="quick-times">${["Morning", "Lunch", "Afternoon", "Evening"]
-                      .map(
-                        (t) =>
-                          `<button class="quick-time" data-plan-quicktime="${esc(day.id)}|${esc(it.pickId)}|${esc(t)}">${t}</button>`
-                      )
-                      .join("")}</div>`
-              }
-            </div>
-            <div class="plan-item-actions">
-              <button data-plan-move="${esc(day.id)}|${esc(it.pickId)}|-1" ${idx === 0 ? "disabled" : ""} aria-label="Move up">↑</button>
-              <button data-plan-move="${esc(day.id)}|${esc(it.pickId)}|1" ${
-                idx === items.length - 1 ? "disabled" : ""
-              } aria-label="Move down">↓</button>
-              <button data-plan-remove="${esc(day.id)}|${esc(it.pickId)}" aria-label="Remove">${icon('close', { size: 17, cls: 'ico-inline' })}</button>
+          <div class="plan-item${open ? " open" : ""}" data-plan-key="${esc(key)}">
+            <button class="plan-item-tap" data-plan-open="${esc(key)}" aria-expanded="${open}"
+                    aria-label="${esc(p.name)}${it.time ? ` at ${esc(it.time)}` : ""} - edit">
+              <span class="plan-time-read">${esc(it.time || "–")}</span>
+              <span class="plan-item-main">
+                <span class="plan-item-name">${esc(p.name)}${
+                  p.booked ? ` <span class="booked-badge">booked</span>` : ""
+                }</span>
+                ${p.address ? `<span class="plan-item-sub">${esc(p.address)}</span>` : ""}
+              </span>
+            </button>
+            <span class="plan-drag" aria-hidden="true">${icon("grip", { size: 18 })}</span>
+            ${
+              mayBeClosed
+                ? `<div class="plan-warn">${icon('alert', { size: 15, cls: 'ico-inline' })} May be closed this day — hours say "${esc(p.openingHours)}". Check before going.</div>`
+                : ""
+            }
+            ${napWarning(it.time)}
+            ${childWarning(p)}
+            <div class="plan-item-edit"${open ? "" : " hidden"}>
+              <input class="plan-time" type="text" inputmode="text" placeholder="time" aria-label="Time"
+                     value="${esc(it.time || "")}" data-plan-time="${esc(key)}" />
+              <div class="quick-times">${["Morning", "Lunch", "Afternoon", "Evening"]
+                .map((t) => `<button class="quick-time" data-plan-quicktime="${esc(key)}|${esc(t)}">${t}</button>`)
+                .join("")}</div>
+              <div class="plan-item-actions">
+                <button data-plan-move="${esc(key)}|-1" ${idx === 0 ? "disabled" : ""} aria-label="Move up">↑</button>
+                <button data-plan-move="${esc(key)}|1" ${
+                  idx === items.length - 1 ? "disabled" : ""
+                } aria-label="Move down">↓</button>
+                <button data-plan-remove="${esc(key)}" aria-label="Remove">${icon('close', { size: 17, cls: 'ico-inline' })}</button>
+              </div>
             </div>
           </div>
         `;
@@ -6779,7 +6780,6 @@ ${(() => {
       html += `
         <div class="card">
           <h2 style="margin:0 0 6px;font-size:16px;">No days yet</h2>
-          <p class="pick-status">Add a day, then drop your saved places onto it. Name them however you like — "Sat 22 Aug", "Day 1", or "Sunday".</p>
           <div class="plan-add-chips" style="margin-top:10px;">
             <button class="add-chip" data-quick-day="Day 1">+ Day 1</button>
             <button class="add-chip" data-quick-day="Day 2">+ Day 2</button>
@@ -6796,21 +6796,47 @@ ${(() => {
       </form>
     `;
 
-    // Below the plan, under a heading that says what they are for. Above it
-    // they read as the first step even when the plan is finished.
     if (plan.days.length) {
-      html += `<div class="section-label">Build it for me</div>` + planBuilders;
+      html += `<button class="link-btn plan-build-link" id="buildItBtn">${icon("sparkle", { size: 16, cls: "ico-inline" })} Build it for me</button>`;
     }
+    html += renderTripExtras();
     return html;
   }
 
   function wireMyPlan() {
-    const share = document.getElementById("shareTrip");
-    if (share) share.addEventListener("click", () => shareText(activeBoard().name, formatBoardShareText()));
-    const autoBtn = document.getElementById("autoPlanBtn");
-    if (autoBtn) autoBtn.addEventListener("click", openPlanner);
-    const ideaBtn = document.getElementById("tripIdeaBtn");
-    if (ideaBtn) ideaBtn.addEventListener("click", openTripIdea);
+    const build = document.getElementById("buildItBtn");
+    if (build) build.addEventListener("click", openBuildChooser);
+    wireTripExtras();
+
+    // Tap a stop to open it; tap it again, or another, to move on.
+    view.querySelectorAll("[data-plan-open]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const key = btn.getAttribute("data-plan-open");
+        planOpenItem = planOpenItem === key ? null : key;
+        renderItinerary();
+      });
+    });
+
+    // Drag to reorder, by the handle, so a scroll that starts on a stop is
+    // still a scroll. The arrows stay inside an opened stop for anyone who
+    // cannot drag.
+    if (window.Sortable) {
+      view.querySelectorAll("[data-plan-day]").forEach((list) => {
+        window.Sortable.create(list, {
+          handle: ".plan-drag",
+          draggable: ".plan-item",
+          animation: 150,
+          onEnd: (e) => {
+            if (e.oldIndex === e.newIndex) return;
+            const moved = e.item.getAttribute("data-plan-key");
+            const order = [...list.querySelectorAll(".plan-item")].map((el) => el.getAttribute("data-plan-key"));
+            const [dayId, pickId] = moved.split("|");
+            movePlanItemTo(dayId, pickId, order.indexOf(moved));
+            renderItinerary();
+          },
+        });
+      });
+    }
 
     view.querySelectorAll("[data-plan-add]").forEach((btn) => {
       btn.addEventListener("click", () => {
@@ -6887,6 +6913,7 @@ ${(() => {
   function renderItinerary() {
     view.innerHTML = renderMyPlan();
     wireMyPlan();
+    addTripSwitch("itinerary");
   }
 
   // ---------- Places & Eats ----------
@@ -10600,9 +10627,7 @@ ${(() => {
       <div class="kids-head">
         <h1 class="kids-title">What's on</h1>
         <p class="kids-sub">${
-          upcoming.length
-            ? `${upcoming.length} coming up`
-            : "Things with a date on them — gigs, markets, shows, one-offs"
+          upcoming.length ? `${upcoming.length} coming up` : ""
         }</p>
       </div>
     `;
@@ -10767,14 +10792,6 @@ ${(() => {
       });
     }
 
-    if (!upcoming.length && !past.length && eventSearch.status === "idle") {
-      html += `
-        <div class="card">
-          <p class="pick-status">Nothing saved yet. Everything else in this app is a place, which is there whether you
-             go on Tuesday or in March — this is the part that is only on while you're here.</p>
-        </div>
-      `;
-    }
 
     // The other two ways of finding something you have not already saved.
     // They used to live in other tabs entirely - Explore folded inside Saved,
@@ -10789,7 +10806,7 @@ ${(() => {
           <span class="more-row-ico">${icon("directions", { size: 20 })}</span>
           <span class="more-row-main">
             <span class="more-row-title">Places nearby</span>
-            <span class="more-row-meta">Cafés, playgrounds, museums around a point</span>
+            <span class="more-row-meta">Cafés, ${showsKids() ? "playgrounds" : "pubs"}, museums around a point</span>
           </span>
           ${icon("forward", { size: 16, cls: "more-row-go" })}
         </button>
@@ -11951,7 +11968,6 @@ ${(() => {
     view.innerHTML = `
       <div class="kids-head">
         <h1 class="kids-title">Places nearby</h1>
-        <p class="kids-sub">Cafés, playgrounds, museums — anything around a point you choose</p>
       </div>
       ${renderExplore({ bare: true })}
     `;
@@ -13657,6 +13673,45 @@ ${(() => {
     ideaScreenId = screenId;
   }
 
+  // The two builders behind one door. Which one you want depends on whether
+  // you already have places saved, so that is what the sheet asks about.
+  function openBuildChooser() {
+    const hasPicks = loadPicks().length > 0;
+    placeModal.innerHTML = `
+      <div class="modal-backdrop" data-close="1">
+        <div class="modal-sheet" role="dialog" aria-label="Build it for me">
+          <div class="modal-handle"></div>
+          <button class="modal-close" data-close="1" aria-label="Close">${icon("close", { size: 17, cls: "ico-inline" })}</button>
+          <div class="modal-body">
+            <h2 class="modal-title">Build it for me</h2>
+            ${
+              hasPicks
+                ? `<button class="mode-choice" id="autoPlanBtn">
+                     <b>${icon("sparkle", { size: 18, cls: "ico-inline" })} From what I've saved</b>
+                     <span>Arrange your places into days.</span>
+                   </button>`
+                : ""
+            }
+            <button class="mode-choice" id="tripIdeaBtn">
+              <b>${icon("directions", { size: 18, cls: "ico-inline" })} Suggest a trip</b>
+              <span>Whole routes from where you are.</span>
+            </button>
+          </div>
+        </div>
+      </div>`;
+    placeModal.classList.add("open");
+    makeSheetDraggable(placeModal, closePlaceModal);
+    placeModal.querySelectorAll("[data-close]").forEach((el) =>
+      el.addEventListener("click", (e) => {
+        if (el.classList.contains("modal-backdrop") && e.target !== el) return;
+        closePlaceModal();
+      })
+    );
+    const auto = document.getElementById("autoPlanBtn");
+    if (auto) auto.addEventListener("click", () => { closePlaceModal(); openPlanner(); });
+    document.getElementById("tripIdeaBtn").addEventListener("click", () => { closePlaceModal(); openTripIdea(); });
+  }
+
   function openTripIdea() {
     // It can be reached from the search screen, and two full-screen overlays
     // stacked on each other is one back press too many.
@@ -15058,6 +15113,8 @@ ${(() => {
   // before - map, description, hours, website - so the decision happens
   // before the list fills up with things you then have to weed out.
   let previewIndex = null;
+  // Which plan stop is open for editing, as "dayId|pickId". One at a time.
+  let planOpenItem = null;
   let previewList = null; // whichever list of results is being previewed
   // Deliberately per-candidate (r.enriching) rather than one global flag: the
   // flag meant "some preview is loading", so a second one opened meanwhile was
@@ -18583,7 +18640,15 @@ ${(() => {
   });
   window.addEventListener("focus", checkTheClock);
 
+  // Redrawn from several places as the day moves on, so the Today/Plan
+  // switch is added here rather than by showView - otherwise the first
+  // redraw would take it away.
   function renderToday() {
+    renderTodayBody();
+    addTripSwitch("today");
+  }
+
+  function renderTodayBody() {
     todayShown = todaySignature();
     const current = currentPlanDay();
     const picks = loadPicks();
@@ -18595,7 +18660,7 @@ ${(() => {
         <div class="card empty-state">
           <div class="empty-icon">🗓️</div>
           <h2>No days planned yet</h2>
-          <p>Add days in the Itinerary tab, then schedule your saved places into them.</p>
+          <p>Add days under Plan, then put your saved places into them.</p>
         </div>
       `;
       return;
@@ -18794,42 +18859,44 @@ ${(() => {
     )}&travelmode=${mode}`;
   }
 
-  // Subtitles are computed, not fixed strings: "Edinburgh · Stirling ·
-  // Glasgow" over a board about Cumbria was the kind of small wrongness that
-  // makes an app feel like it isn't listening.
+  // Three tabs: Trip, Find, Saved. There were five, and before that seven;
+  // Today and Plan were the same thing at different times, and More was a
+  // drawer. The screens have no subtitles either - the top bar repeated the
+  // name of the tab you had just pressed.
   //
-  // `parent` is what stops a screen reached from More from leaving the whole
-  // tab bar unlit. Kids, Budget and Notes are no longer tabs of their own -
-  // seven along the bottom of a phone is a menu, not a bar, and three of the
-  // seven were places you visit once a day at most. They live behind More,
-  // and while you are on one, More is the tab that is lit.
+  // `tab` is the tab a screen lights. `parent` is also that, plus a back bar
+  // to it, for the screens you reach from inside another one.
   const VIEWS = {
-    today: { render: renderToday, sub: () => "What's on now" },
-    kids: { render: renderKids, sub: () => "Things they'll actually enjoy", parent: "more", label: "For the kids" },
-    itinerary: { render: renderItinerary, sub: () => "Your day-by-day plan" },
+    // Not a screen: the Trip tab, which opens on whichever of the two below
+    // fits the date. showView resolves it before anything renders.
+    trip: { render: () => {} },
+    today: { render: renderToday, tab: "trip" },
+    itinerary: { render: renderItinerary, tab: "trip" },
+    kids: { render: renderKids, parent: "trip" },
     // places/eats are no longer destinations of their own, but anything still
     // asking for them - the hardware-back history, a "＋ Add a place" button
     // saved in someone's muscle memory - lands on the same list with that
     // filter applied, rather than on an error.
-    places: { render: () => renderPicksFiltered("place"), sub: () => `${picksOfKind("place").length} places to go` },
-    eats: { render: () => renderPicksFiltered("eat"), sub: () => `${picksOfKind("eat").length} places to eat` },
-    picks: { render: renderPicks, sub: () => "Everything you've saved" },
-    events: { render: renderEvents, sub: () => "Things with a date on them" },
-    // Explore was a fold inside Saved, which meant "find me a cafe near here"
-    // lived under "things I have already saved" - two different questions on
-    // one screen. It is its own screen under Find now, with Find lit while
-    // you are on it, the same way Kids and Budget sit under More.
-    explore: {
-      render: renderExploreScreen,
-      sub: () => "Around a place you choose",
-      parent: "events",
-      label: "Places nearby",
-    },
-    budget: { render: renderBudget, sub: () => "What this is costing", parent: "more", label: "Budget" },
-    tips: { render: renderTips, sub: () => "Notes & packing", parent: "more", label: "Notes & packing" },
-    usage: { render: renderUsage, sub: () => "What the AI is costing", parent: "more", label: "AI usage" },
-    more: { render: renderMore, sub: () => "Everything else" },
+    places: { render: () => renderPicksFiltered("place"), tab: "picks" },
+    eats: { render: () => renderPicksFiltered("eat"), tab: "picks" },
+    picks: { render: renderPicks },
+    events: { render: renderEvents },
+    // Its own screen under Find, with Find lit while you are on it.
+    explore: { render: renderExploreScreen, parent: "events" },
+    budget: { render: renderBudget, parent: "trip" },
+    tips: { render: renderTips, parent: "trip" },
+    // Reached from Settings, so its way out is wherever you came from.
+    usage: { render: renderUsage, parent: "back" },
   };
+
+  // Which half of Trip to open on. On a day of the trip it is that day's
+  // stops; any other time it is the plan, because before you go the job is
+  // arranging and afterwards there is nothing "next". The switch at the top
+  // of the tab reaches the other half whenever you want it.
+  function tripHome() {
+    const current = loadPlan().days.length ? currentPlanDay() : null;
+    return current && current.isToday ? "today" : "itinerary";
+  }
 
   // Every tool works on every board: the places you save yourself are what
   // fill Trip, Places, Eats, the Itinerary, the Budget and the packing list.
@@ -18837,21 +18904,17 @@ ${(() => {
   // with no days in it is an empty screen rather than a feature.
   function applyBoardTabs() {
     const visible = {
+      trip: true,
       today: loadPlan().days.length > 0,
       itinerary: true,
       picks: true,
       events: true,
-      more: true,
-      // Reachable as views from the More hub, which is where their buttons
-      // are now. Listed here so showView does not bounce them to a tab.
       // Only in kids mode, or when no mode has been chosen. showView sends a
       // hidden screen to the first visible tab, so a switch while you are on
       // it lands somewhere sensible rather than on an empty page.
       kids: showsKids(),
       usage: true,
       explore: true,
-      // Reachable as views, but no longer tabs - there are no buttons for
-      // these to hide or show.
       places: true,
       eats: true,
       budget: true,
@@ -18864,8 +18927,8 @@ ${(() => {
   }
 
   function firstVisibleTab() {
-    const visible = applyBoardTabs();
-    return ["today", "picks", "itinerary", "kids"].find((n) => visible[n]) || "picks";
+    applyBoardTabs();
+    return tripHome();
   }
 
   // Where back should return to. Capped because this is a breadcrumb, not an
@@ -18876,6 +18939,10 @@ ${(() => {
   function showView(name, opts) {
     const options = opts || {};
     const visible = applyBoardTabs();
+    // "more" is where Kids, Budget and the rest used to live; anything still
+    // asking for it - a back history from before the update - goes to Trip,
+    // which is where they are now.
+    if (name === "trip" || name === "more") name = tripHome();
     if (visible[name] === false) name = firstVisibleTab();
     const v = VIEWS[name];
     if (!v) return;
@@ -18934,11 +19001,13 @@ ${(() => {
         });
       }
     }
-    topbarSub.textContent = typeof v.sub === "function" ? v.sub() : v.sub;
-    // A screen opened from More lights More, not nothing. Landing on a screen
-    // with no tab lit is the small disorientation that makes an app feel like
-    // it has lost track of where you are.
-    const lit = v.parent || name;
+    // A screen opened from inside another lights that one's tab, not
+    // nothing. Landing on a screen with no tab lit is the small
+    // disorientation that makes an app feel like it has lost track of where
+    // you are.
+    // A screen reached with "back" as its parent lights whatever you came from.
+    const cameFrom = previous && ((VIEWS[previous] || {}).tab || previous);
+    const lit = v.tab || (v.parent === "back" ? cameFrom : v.parent) || name;
     tabbar.querySelectorAll(".tab").forEach((t) => {
       t.classList.toggle("active", t.getAttribute("data-view") === lit);
     });
@@ -18952,27 +19021,47 @@ ${(() => {
   }
 
   // The way back out of a screen that is no longer a tab. Added after the
-  // render rather than inside each one, so the three screens behind More did
-  // not each have to learn about it.
-  function addParentBackBar(parentName, name) {
-    const parent = VIEWS[parentName];
-    if (!parent) return;
+  // render rather than inside each one, so the screens reached from inside
+  // another did not each have to learn about it.
+  function addParentBackBar(parentName) {
+    const back = parentName === "back";
+    if (!back && !VIEWS[parentName]) return;
     const bar = document.createElement("button");
     bar.className = "sub-back";
     bar.type = "button";
     // The label comes off the tab itself rather than being spelled here, so
-    // it can never disagree with what the bar says. Hardcoding "More" was
-    // fine while More was the only parent; the moment Find became one too,
-    // the back link read "events" - a raw view key, on screen, to a user.
-    const tabLabel = document.querySelector(`[data-view="${parentName}"] .tab-label`);
-    const parentLabel = tabLabel ? tabLabel.textContent.trim() : parentName;
+    // it can never disagree with what the bar says.
+    const tabLabel = !back && document.querySelector(`.tabbar [data-view="${parentName}"] .tab-label`);
+    const parentLabel = back ? "Back" : tabLabel ? tabLabel.textContent.trim() : parentName;
     bar.innerHTML = `${icon("back", { size: 16, cls: "ico-inline" })}<span>${esc(parentLabel)}</span>`;
-    bar.addEventListener("click", () => showView(parentName));
+    bar.addEventListener("click", () => (back ? goBack() : showView(parentName)));
     view.insertBefore(bar, view.firstChild);
-    // Re-titled so the topbar says which screen this is, not just what More
-    // is - the subtitle is the only thing naming it now that the tab is gone.
-    const own = VIEWS[name];
-    if (own && own.label) topbarSub.textContent = own.label;
+  }
+
+  // Today and Plan are one tab. The switch is only there when there is a
+  // "today" to switch to - a plan with no days has one half.
+  function addTripSwitch(name) {
+    if (!loadPlan().days.length) return;
+    const bar = document.createElement("div");
+    bar.className = "trip-switch";
+    bar.innerHTML = `
+      <div class="seg" role="tablist" aria-label="Trip">
+        <button class="seg-btn${name === "today" ? " on" : ""}" data-trip-half="today" role="tab"
+                aria-selected="${name === "today"}">Today</button>
+        <button class="seg-btn${name === "itinerary" ? " on" : ""}" data-trip-half="itinerary" role="tab"
+                aria-selected="${name === "itinerary"}">Plan</button>
+      </div>
+      <button class="trip-share" id="shareTrip" aria-label="Share this plan">${icon("share", { size: 19 })}</button>`;
+    bar.querySelectorAll("[data-trip-half]").forEach((b) =>
+      b.addEventListener("click", () => {
+        const to = b.getAttribute("data-trip-half");
+        if (to !== view.dataset.activeTab) showView(to);
+      })
+    );
+    bar.querySelector("#shareTrip").addEventListener("click", () =>
+      shareText(activeBoard().name, formatBoardShareText())
+    );
+    view.insertBefore(bar, view.firstChild);
   }
 
   function tokens(n) {
@@ -19004,7 +19093,6 @@ ${(() => {
     let html = `
       <div class="kids-head">
         <h1 class="kids-title">AI usage</h1>
-        <p class="kids-sub">What this phone has spent on the Gemini key</p>
       </div>
       <div class="section-label">Tokens</div>
       <div class="card usage-grid">
@@ -19117,13 +19205,15 @@ ${(() => {
   // remembered and nothing needs its own tab. Each row carries the number that
   // makes it worth opening - "8 marked", "3 of 9 packed" - because a menu of
   // bare names tells you nothing about whether to tap it.
-  function renderMore() {
+  // What used to be the More tab's "This trip" half: the three screens that
+  // belong to one trip. They sit at the foot of the plan now, which is the
+  // screen they are about. The rest of More was already in the top bar (the
+  // map, the trip switcher, settings) or is a detail of settings (AI usage).
+  function renderTripExtras() {
     const picks = loadPicks().filter((p) => !p.major);
     const kidCount = picks.filter(isForKids).length;
     const packing = loadPacking();
     const packed = packing.filter((i) => i.done).length;
-    const boards = loadBoards().boards || [];
-    const pinned = picks.filter((p) => p.lat != null).length;
 
     let budgetLine = "Nothing costed yet";
     try {
@@ -19138,64 +19228,27 @@ ${(() => {
       // fail; the row still opens the screen that can explain itself.
     }
 
-    // `dot` marks a row that wants attention. It is how a dismissed warning
-    // stays findable: the banner goes quiet, the way to fix it does not.
-    const row = (target, ico, title, meta, dot) => `
-      <button class="more-row" data-more="${esc(target)}">
+    const row = (target, ico, title, meta) => `
+      <button class="more-row" data-trip-extra="${esc(target)}">
         <span class="more-row-ico">${icon(ico, { size: 20 })}</span>
         <span class="more-row-main">
           <span class="more-row-title">${esc(title)}</span>
           <span class="more-row-meta">${esc(meta)}</span>
         </span>
-        ${dot ? `<span class="more-row-dot" aria-label="Needs attention"></span>` : ""}
         ${icon("forward", { size: 16, cls: "more-row-go" })}
       </button>`;
 
-    view.innerHTML = `
-      <div class="kids-head">
-        <h1 class="kids-title">More</h1>
-        <p class="kids-sub">The rest of it, in one place rather than spread along the bottom</p>
-      </div>
-
-      <div class="section-label">This trip</div>
-      <div class="card more-list">
+    return `
+      <div class="card more-list trip-extras">
         ${showsKids() ? row("kids", "kids", kidsTitle(), kidCount ? `${kidCount} marked` : "Nothing marked yet") : ""}
         ${row("budget", "budget", "Budget", budgetLine)}
         ${row("tips", "tips", "Notes & packing", packing.length ? `${packed} of ${packing.length} packed` : "Nothing on the list yet")}
-      </div>
+      </div>`;
+  }
 
-      <div class="section-label">Everything</div>
-      <div class="card more-list">
-        ${row("map", "map", "Map of everything", pinned ? `${pinned} on the map` : "Nothing placed yet")}
-        ${row("boards", "folder", "Your trips", `${boards.length} saved`)}
-        ${row(
-          "usage",
-          "sparkle",
-          "AI usage",
-          (() => {
-            const t = loadAiUsage().days[isoDate(new Date())] || blankDay();
-            const all = t.inTokens + t.outTokens;
-            return all ? `${tokens(all)} tokens today` : "Nothing used today";
-          })()
-        )}
-        ${row(
-          "settings",
-          "settings",
-          "Settings",
-          backupIsOverdue() ? "Not backed up — everything is on this phone" : "Keys, units, backup",
-          backupIsOverdue()
-        )}
-      </div>
-    `;
-
-    view.querySelectorAll("[data-more]").forEach((b) =>
-      b.addEventListener("click", () => {
-        const target = b.getAttribute("data-more");
-        if (target === "map") return openAllMap(defaultMapFilter());
-        if (target === "boards") return openBoardSwitcher();
-        if (target === "settings") return openSettings();
-        showView(target);
-      })
+  function wireTripExtras() {
+    view.querySelectorAll("[data-trip-extra]").forEach((b) =>
+      b.addEventListener("click", () => showView(b.getAttribute("data-trip-extra")))
     );
   }
 
@@ -19243,6 +19296,11 @@ ${(() => {
   // accident, but the better answer is that back should have somewhere to go
   // first: close what's open, then walk back through the tabs you came
   // through, and only ask about leaving when there is genuinely nothing left.
+  function goBack() {
+    if (tabHistory.length) showView(tabHistory.pop(), { fromBack: true });
+    else showView("trip", { fromBack: true });
+  }
+
   function handleBackIntent() {
     if (planOverlay.classList.contains("open")) {
       closePlanner();
@@ -19741,6 +19799,8 @@ ${(() => {
   // anything.
   window.__tripTest = {
     ASSISTANTS,
+    movePlanItemTo,
+    openBuildChooser,
     setMode,
     openCategoryPicker,
     walkKmh,

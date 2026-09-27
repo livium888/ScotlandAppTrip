@@ -82,18 +82,18 @@ const tabs = await page.evaluate(() => Array.from(document.querySelectorAll('.ta
 // fill them. Today is the one exception: with no days planned it would be an
 // empty screen rather than a feature.
 check('a new board gets the saved list and what\'s on', ['picks', 'events'].every((t) => tabs.includes(t)), JSON.stringify(tabs));
-// Budget and Notes are not tabs any more, but "every tool works on every
-// board" is still the rule - they are one tap away in More, on a brand new
-// board as much as on the first one.
-check('and the budget and notes, one tap away in More', await page.evaluate(() => {
-  document.querySelector('[data-view="more"]').click();
-  return ['budget', 'tips', 'kids'].every((n) => !!document.querySelector(`[data-more="${n}"]`));
+// Budget and Notes are not tabs, but "every tool works on every board" is
+// still the rule - they are at the foot of the plan, on a brand new board as
+// much as on the first one.
+check('and the budget and notes, one tap away under Trip', await page.evaluate(() => {
+  window.__tripTest.showView('itinerary');
+  return ['budget', 'tips', 'kids'].every((n) => !!document.querySelector(`[data-trip-extra="${n}"]`));
 }));
 // Places and Eats were folded into Picks as a filter - three destinations for
 // one collection was three of eight tab slots saying the same thing.
 check('Places and Eats are no longer tabs of their own', !tabs.includes('places') && !tabs.includes('eats'), JSON.stringify(tabs));
 check('the tab bar stays within the five it can show properly', tabs.length <= 5, JSON.stringify(tabs));
-check('a new board can be planned', tabs.includes('itinerary'), JSON.stringify(tabs));
+check('a new board can be planned', tabs.includes('trip'), JSON.stringify(tabs));
 check('Today stays hidden until there are days', !tabs.includes('today'), JSON.stringify(tabs));
 check('undated board still has Picks', tabs.includes('picks'), JSON.stringify(tabs));
 
@@ -120,7 +120,10 @@ const backText = await page.evaluate(() => document.getElementById('view').textC
 check('switching back shows the original places', /Edinburgh Castle/.test(backText), backText.slice(0, 150));
 const tabsBack = await page.evaluate(() => Array.from(document.querySelectorAll('.tab'))
   .filter((t) => !t.hidden).map((t) => t.getAttribute('data-view')));
-check('dated board gets Today and Itinerary back', tabsBack.includes('today') && tabsBack.includes('itinerary'), JSON.stringify(tabsBack));
+check('dated board gets its trip back, today and plan both', tabsBack.includes('trip') && await page.evaluate(() => {
+  window.__tripTest.showView('itinerary');
+  return !!document.querySelector('[data-trip-half="today"]') && !!document.querySelector('[data-trip-half="itinerary"]');
+}), JSON.stringify(tabsBack));
 
 // --- Backup must cover every board, not just the open one ---
 const backup = await page.evaluate(() => {

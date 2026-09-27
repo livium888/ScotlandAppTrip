@@ -172,7 +172,7 @@ check('midwinter is a short one', sun.dec < 8, JSON.stringify(sun));
 check('which is a seven-hour difference nobody works out in their head',
   sun.june - sun.dec > 8, JSON.stringify(sun));
 
-await page.evaluate(() => document.querySelector('[data-view="today"]').click());
+await page.evaluate(() => window.__tripTest.showView('today'));
 await page.waitForTimeout(600);
 check('and the day says so', await page.evaluate(() =>
   /daylight left|Light from|doesn't (set|rise)/.test(document.getElementById('view').textContent)),

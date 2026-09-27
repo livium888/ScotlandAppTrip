@@ -72,12 +72,12 @@ async function seed(items) {
   }, [PICKS, items]);
   await page.reload({ waitUntil: 'load' });
   await page.waitForTimeout(300);
-  await page.evaluate(() => document.querySelector('[data-view="itinerary"]').click());
+  await page.evaluate(() => window.__tripTest.showView('itinerary'));
   await page.waitForTimeout(400);
 }
 
 const openPicker = async () => {
-  await page.evaluate(() => document.getElementById('autoPlanBtn').click());
+  await page.evaluate(() => (document.getElementById('buildItBtn').click(), document.getElementById('autoPlanBtn').click()));
   await page.waitForSelector('#planOverlay.open', { timeout: 4000 });
 };
 const tapArea = (name) => page.evaluate((n) => {

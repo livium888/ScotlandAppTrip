@@ -45,7 +45,7 @@ await page.route(/nominatim|wikidata|wikipedia|overpass|tile\.|open-meteo|photon
 
 const text = () => page.evaluate(() => document.getElementById('view').textContent.replace(/\s+/g, ' ').trim());
 const budget = async () => {
-  await page.evaluate(() => { document.querySelector('[data-view="more"]').click(); document.querySelector('[data-more="budget"]').click(); });
+  await page.evaluate(() => { window.__tripTest.showView('itinerary'); document.querySelector('[data-trip-extra="budget"]').click(); });
   await page.waitForTimeout(350);
 };
 

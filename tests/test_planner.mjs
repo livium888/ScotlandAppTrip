@@ -127,7 +127,7 @@ const cardText = await page.evaluate(() => document.getElementById('view').textC
 check('rating shown on card', cardText.includes('4.6'), cardText.slice(0, 200));
 
 // ---- Planner ----
-await page.evaluate(() => document.querySelector('[data-view="itinerary"]').click());
+await page.evaluate(() => window.__tripTest.showView('itinerary'));
 await page.waitForTimeout(200);
 // The toggle went with the bundled itinerary it switched to. There is one
 // plan now, which is yours, so the check is that it is simply there.

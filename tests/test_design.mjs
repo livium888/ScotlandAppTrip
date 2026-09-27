@@ -53,17 +53,21 @@ await page.waitForTimeout(600);
 // rather than something a person typed.
 const EMOJI = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}]/u;
 
-// Three screens are rows in More rather than tabs of their own now. This
-// reaches any of them the way a person would.
+// Kids, Budget and Notes are rows at the foot of the plan, and Today and
+// Plan are the two halves of Trip. This reaches any of them the way a
+// person would.
 await page.addInitScript(() => {
   window.goToScreen = (name) => {
-    const t = document.querySelector(`[data-view="${name}"]`);
+    const t = document.querySelector(`.tabbar [data-view="${name}"]`);
     if (t) return t.click();
-    const more = document.querySelector('[data-view="more"]');
-    if (!more) return;
-    more.click();
-    const row = document.querySelector(`[data-more="${name}"]`);
-    if (row) row.click();
+    document.querySelector('.tabbar [data-view="trip"]').click();
+    const half = document.querySelector(`[data-trip-half="${name}"]`);
+    if (half) return half.click();
+    const plan = document.querySelector('[data-trip-half="itinerary"]');
+    if (plan) plan.click();
+    const row = document.querySelector(`[data-trip-extra="${name}"]`);
+    if (row) return row.click();
+    window.__tripTest.showView(name);
   };
 });
 await page.reload({ waitUntil: 'load' });
@@ -78,7 +82,7 @@ const tabs = await page.evaluate(() => Array.from(document.querySelectorAll('.ta
 })));
 // The count was incidental - this check is about icons being drawn rather
 // than typed, and how many tabs there are is test_heuristics' business.
-check('every tab is drawn, not typed', tabs.length >= 4 && tabs.every((t) => t.svgs === 1),
+check('every tab is drawn, not typed', tabs.length >= 3 && tabs.every((t) => t.svgs === 1),
   JSON.stringify(tabs));
 check('and no emoji survives in it', !tabs.some((t) => EMOJI.test(t.text)), JSON.stringify(tabs.map((t) => t.text)));
 check('the tab you are on is marked', await page.evaluate(() =>
@@ -209,7 +213,7 @@ await page.evaluate(() => {
 });
 // A genuine change of screen - re-selecting the tab you are on is not one,
 // and correctly does not replay anything.
-await page.evaluate(() => document.querySelector('[data-view="today"]').click());
+await page.evaluate(() => window.__tripTest.showView('today'));
 await page.waitForTimeout(250);
 check('a screen animates when you arrive on it', await page.evaluate(() => window.__anims > 0),
   await page.evaluate(() => String(window.__anims)));
@@ -277,7 +281,7 @@ await page.evaluate(() => { document.getElementById('view').scrollTop = 500; });
 await page.waitForTimeout(300);
 check('and still reachable with a long list scrolled under it', await barIsOnTop());
 check('a tap there really lands on the tab', await page.evaluate(() => {
-  const t = document.querySelector('[data-view="more"]');
+  const t = document.querySelector('.tabbar [data-view="picks"]');
   const r = t.getBoundingClientRect();
   const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
   // Whatever is topmost there may be the icon inside the button; what matters
@@ -285,7 +289,7 @@ check('a tap there really lands on the tab', await page.evaluate(() => {
   const tab = hit && hit.closest ? hit.closest('.tab') : null;
   if (!tab) return false;
   tab.click();
-  return document.getElementById('view').dataset.activeTab === 'more';
+  return document.getElementById('view').dataset.activeTab === 'picks';
 }));
 
 // Nothing inside a screen can reach past the scroller, however it is styled -
@@ -296,7 +300,7 @@ check('a screen cannot paint over the bar however its contents are stacked',
     const probe = document.createElement('div');
     probe.style.cssText = 'position:fixed;inset:0;z-index:99999;';
     view.appendChild(probe);
-    const t = document.querySelector('[data-view="today"]').getBoundingClientRect();
+    const t = document.querySelector('.tabbar [data-view="trip"]').getBoundingClientRect();
     const hit = document.elementFromPoint(t.x + t.width / 2, t.y + t.height / 2);
     const contained = !!(hit && hit.closest('#tabbar'));
     probe.remove();

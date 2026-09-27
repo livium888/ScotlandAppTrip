@@ -83,7 +83,7 @@ await page.reload({ waitUntil: 'load' });
 await page.waitForTimeout(1500);
 
 // --- Today carries the forecast for the day in view ---
-await page.evaluate(() => document.querySelector('[data-view="today"]').click());
+await page.evaluate(() => window.__tripTest.showView('today'));
 await page.waitForTimeout(1200);
 const todayText = await page.evaluate(() => document.getElementById('view').textContent);
 check('a forecast reaches the Today screen', /Rain/.test(todayText), todayText.slice(0, 200));
@@ -102,7 +102,7 @@ check('it opens Explore already asking for indoor places', await page.evaluate((
   await page.evaluate(() => (document.getElementById('exploreCatBtn') || {}).textContent));
 
 // --- Every planned day gets its own, on the right dates ---
-await page.evaluate(() => document.querySelector('[data-view="itinerary"]').click());
+await page.evaluate(() => window.__tripTest.showView('itinerary'));
 await page.waitForTimeout(1000);
 const itinText = await page.evaluate(() => document.getElementById('view').textContent);
 check('the wet day and the clear day differ', /Rain/.test(itinText) && /Clear/.test(itinText), itinText.slice(0, 300));
@@ -114,13 +114,13 @@ check('the clear day shows its own temperature', /21°\/12°/.test(itinText), it
 check('near days show their weather', /🌧️|☀️|21°|14°/.test(itinText), itinText.slice(0, 300));
 check('a day 30 days out claims no forecast', !/30 days.*(Rain|Clear)/.test(itinText), itinText.slice(0, 300));
 
-await page.evaluate(() => document.querySelector('[data-view="today"]').click());
+await page.evaluate(() => window.__tripTest.showView('today'));
 await page.waitForTimeout(400);
 
 // --- One request per town, not per place ---
 const before = weatherCalls.length;
 weatherCalls = [];
-await page.evaluate(() => document.querySelector('[data-view="itinerary"]').click());
+await page.evaluate(() => window.__tripTest.showView('itinerary'));
 await page.waitForTimeout(800);
 check('cached between screens rather than refetched', weatherCalls.length === 0, JSON.stringify(weatherCalls));
 check('nearby places shared one request', before <= 2, String(before));
@@ -144,7 +144,7 @@ await page.evaluate(() => {
   Object.keys(c).forEach((k) => { c[k].fetchedAt = Date.now() - 5 * 60 * 60 * 1000; });
   localStorage.setItem('weather-cache-v1', JSON.stringify(c));
 });
-await page.evaluate(() => document.querySelector('[data-view="today"]').click());
+await page.evaluate(() => window.__tripTest.showView('today'));
 await page.waitForTimeout(1200);
 const offlineText = await page.evaluate(() => document.getElementById('view').textContent);
 check('an old forecast is still shown when offline', /Rain/.test(offlineText), offlineText.slice(0, 200));

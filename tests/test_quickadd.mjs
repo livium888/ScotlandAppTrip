@@ -181,7 +181,7 @@ check('tapping again removes it', Object.values(plan2.items || {}).flat().length
 // --- Planner uses tappable chips, not a native select ---
 await page.evaluate(() => document.querySelector('#placeModal .modal-close').click());
 await page.waitForTimeout(200);
-await page.evaluate(() => document.querySelector('[data-view="itinerary"]').click());
+await page.evaluate(() => window.__tripTest.showView('itinerary'));
 await page.waitForTimeout(150);
 await page.waitForTimeout(300);
 

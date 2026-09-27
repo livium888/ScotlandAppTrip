@@ -11,6 +11,7 @@ uses it to answer `sunrise-sunset` opening times.
 | `idb.js` | idb | 8.0.3 | ISC | Promises over IndexedDB, for the tile/photo/geocode caches |
 | `fuse.js` | fuse.js | 7.5.0 | Apache-2.0 | Fuzzy search over the places you have already saved |
 | `jsonrepair.js` | jsonrepair | 3.15.0 | ISC | Reads the JSON a model actually produces, rather than the JSON it was asked for |
+| `sortable.js` | sortablejs | 1.15.7 | MIT | Drag to reorder the stops in a day, touch included; `Sortable.min.js` from the tarball, unmodified (UMD, so it sets `window.Sortable` and nothing else) |
 
 **`jsonrepair` earns its 7 KB on the paste path.** The hand-rolled repair it
 sits in front of only ever closed brackets on a truncated answer. Everything
