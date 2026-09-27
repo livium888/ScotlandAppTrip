@@ -232,7 +232,8 @@ check('a search that came back with nothing is marked, not hidden',
   await page.evaluate(() => document.querySelectorAll('.ev-angle-failed').length === 1),
   await page.evaluate(() => document.querySelector('.ev-progress')?.textContent.replace(/\s+/g, ' ')));
 check('it says which one, so a dead search does not look like a quiet week',
-  /Music & nightlife came back with nothing/.test(await screen()), (await screen()).slice(0, 700));
+  /Music & nightlife( found nothing listed|: the search didn't work)/.test(await screen()),
+  await page.evaluate(() => document.querySelector('.ev-progress')?.textContent.replace(/\s+/g, ' ')));
 check('and offers to try that one again', await page.evaluate(() =>
   !!document.querySelector('[data-ev-retry="music"]')));
 

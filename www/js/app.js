@@ -1046,7 +1046,8 @@
   // Groq, OpenRouter, Together, LM Studio, Ollama's compatibility endpoint -
   // they all speak this, which is why it is one implementation rather than
   // one per host.
-  async function callOpenAICompatible(prompt, { json = false, maxTokens = 0, grounded = false } = {}) {
+  async function callOpenAICompatible(prompt, { json = false, maxTokens = 0, grounded = false, timeoutMs = 0 } = {}) {
+    const limit = timeoutMs || AI_TIMEOUT_MS;
     lastAiPrompt = prompt;
     const s = loadTripSettings();
     const base = aiBaseUrl();
@@ -1069,7 +1070,7 @@
     if (json && !grounded) body.response_format = { type: "json_object" };
 
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), AI_TIMEOUT_MS);
+    const timer = setTimeout(() => controller.abort(), limit);
     const headers = { "Content-Type": "application/json" };
     const key = (s.aiKey || "").trim();
     if (key) headers.Authorization = `Bearer ${key}`;
@@ -1084,7 +1085,7 @@
     } catch (e) {
       if (e && e.name === "AbortError") {
         throw new Error(
-          `The model didn't answer within ${Math.round(AI_TIMEOUT_MS / 1000)} seconds. ` +
+          `The model didn't answer within ${Math.round(limit / 1000)} seconds. ` +
             `If it is running on your own machine, a large model on a small box can simply be slower than this.`,
           { cause: e }
         );
@@ -1160,7 +1161,8 @@
     return out;
   }
 
-  async function callGemini(key, prompt, { grounded = false, json = false, maxTokens = 0 } = {}) {
+  async function callGemini(key, prompt, { grounded = false, json = false, maxTokens = 0, timeoutMs = 0 } = {}) {
+    const limit = timeoutMs || AI_TIMEOUT_MS;
     lastAiPrompt = prompt;
     const model = await resolveGeminiModel(key);
     // Discovered names already include the "models/" prefix.
@@ -1184,7 +1186,7 @@
     // routes…", which has nothing on it to press, and stays that way. A phone
     // that has wandered off signal mid-request does exactly this.
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), AI_TIMEOUT_MS);
+    const timer = setTimeout(() => controller.abort(), limit);
     let res;
     try {
       res = await fetch(`${GEMINI_BASE}/${path}:generateContent?key=${encodeURIComponent(key)}`, {
@@ -1198,7 +1200,7 @@
         // The abort is kept as the cause: the message above is for the person
         // reading it, the original is for whoever is reading a diagnostic.
         throw new Error(
-          `The AI didn't answer within ${Math.round(AI_TIMEOUT_MS / 1000)} seconds. That is usually signal rather than anything you did - worth trying again.`,
+          `The AI didn't answer within ${Math.round(limit / 1000)} seconds. That is usually signal rather than anything you did - worth trying again.`,
           { cause: e }
         );
       }
@@ -1251,7 +1253,15 @@
     // about it. These are its numbers, not an estimate of ours.
     recordAiUsage(data.usageMetadata, { grounded, model: path });
 
-    return { text, sources };
+    // Whether a search actually ran. Gemini sometimes searches and cites no
+    // page it can attribute - queries, no chunks - which is looked up, just
+    // without a link, and not the same as an answer from memory.
+    const searched = !!(
+      gm &&
+      ((Array.isArray(gm.webSearchQueries) && gm.webSearchQueries.length) || sources.length)
+    );
+
+    return { text, sources, searched };
   }
 
   // ---------- What the AI is costing ----------
@@ -9254,23 +9264,62 @@ ${(() => {
     return townA === townB || townA.includes(townB) || townB.includes(townA);
   }
 
+  // How long one event search may take. A searching model reading listings
+  // for a whole week - every film at every cinema, with times - regularly
+  // takes longer than the 45 seconds everything else gets, and hitting that
+  // limit used to hand the question to a model with search switched off.
+  const EVENT_SEARCH_TIMEOUT_MS = 110000;
+
+  // One kind of event, looked up. Only ever answered by a search.
+  //
+  // The second attempt used to ask the same question again with search off
+  // whenever the first reply was late or unreadable, and show what came back
+  // as results: films with no rating, a show with no times, a stage Frozen
+  // "performed by local theatre talent" - what a model believes is on,
+  // presented next to what was found. On a phone with patchy signal that
+  // was most searches. Now a reply that searched but cannot be read is
+  // rewritten into the list format - the same facts, reformatted, with the
+  // search's own sources kept - and a search that failed says it failed.
   async function askOneAngle(key, centre, window, radiusMetres, angle, towns, route) {
     const prompt = eventPrompt(centre, window, radiusMetres, angle, towns, route);
-    // Grounded first, because grounding is what makes an event real rather
-    // than plausible; JSON mode as the fallback, because a grounded reply
-    // comes back as prose often enough to fail outright.
-    for (const attempt of [{ grounded: true, maxTokens: 8192 }, { json: true, maxTokens: 8192 }]) {
+    let answer = null;
+    let error = "";
+    try {
+      answer = await callModel(prompt, { grounded: true, maxTokens: 8192, timeoutMs: EVENT_SEARCH_TIMEOUT_MS });
+    } catch (e) {
+      error = (e && e.message) || String(e);
+    }
+    if (!answer) return { list: [], sources: [], angle: angle.key, error };
+
+    let list = extractJson(answer.text);
+    if (!(Array.isArray(list) && list.length) && (answer.text || "").trim().length > 40) {
       try {
-        const answer = await callModel(prompt, attempt);
-        const list = extractJson(answer.text);
-        if (Array.isArray(list) && list.length) {
-          return { list, sources: answer.sources || [], angle: angle.key };
-        }
+        const tidy = await callModel(reformatEventsPrompt(answer.text, angle), { json: true, maxTokens: 8192 });
+        list = extractJson(tidy.text);
       } catch (e) {
-        // One angle failing is not the search failing. Five others are running.
+        error = (e && e.message) || String(e);
       }
     }
-    return { list: [], sources: [], angle: angle.key };
+    if (Array.isArray(list) && list.length) {
+      return { list, sources: answer.sources || [], searched: !!answer.searched, angle: angle.key };
+    }
+    return {
+      list: [],
+      sources: [],
+      angle: angle.key,
+      error: error || (Array.isArray(list) ? "" : "The search answered, but not in a form that could be read."),
+    };
+  }
+
+  // The rescue for a searched reply that came back as prose: rewrite it,
+  // never re-answer it. Nothing is added - a field the text does not state
+  // stays empty.
+  function reformatEventsPrompt(text, angle) {
+    return (
+      `Below is what a web search found. Rewrite it as data. Use ONLY what the text says: ` +
+      `do not add events, do not correct anything, and leave a field empty rather than ` +
+      `guessing.${filmClause(angle)}\n\n${EVENT_JSON_CONTRACT}\n\nText:\n${String(text).slice(0, 24000)}`
+    );
   }
 
   // Placing an event is a different problem from placing a café, and treating
@@ -9545,7 +9594,7 @@ ${(() => {
       // Same name, same day, different town: two events, not one.
       const dedupeKey = existing ? `${id}|${String(event.area || "").toLowerCase()}` : id;
       if (ctx.seen.has(dedupeKey)) return;
-      const entry = { event, sources: answer.sources || [], angles: [answer.angle] };
+      const entry = { event, sources: answer.sources || [], searched: !!answer.searched, angles: [answer.angle] };
       ctx.seen.set(dedupeKey, entry);
       fresh.push(entry);
     });
@@ -9554,7 +9603,7 @@ ${(() => {
 
   // Placing one event: unchanged in what it decides, only in when it runs.
   async function placeOne(entry, ctx) {
-    const { event, sources, angles: found } = entry;
+    const { event, sources, searched, angles: found } = entry;
     const spot = await placeEvent(event, ctx.centre, ctx.anchor);
     // Neither of these is a reason to pretend the listing does not exist. It
     // has a name, a date, usually a venue and often a ticket link; the only
@@ -9588,14 +9637,10 @@ ${(() => {
       // nothing was looked up at all, so there is not even a page to check
       // against.
       //
-      // It matters because askOneAngle asks grounded first and then retries
-      // as plain JSON when the grounded reply will not parse. That retry is a
-      // real fix for a real problem - grounded answers come back as prose
-      // with citations and sometimes are not valid JSON - but it is
-      // ungrounded, so whenever the first attempt fails the app was quietly
-      // accepting an answer nothing had looked up and showing it exactly like
-      // one that had. The sources array already knew; nothing was reading it.
-      unsourced: !sources.length,
+      // askOneAngle no longer accepts an answer from memory, so this is now
+      // rare: a search that ran but reported neither a page nor a query.
+      // A search that ran without citing a page ("searched") is not this.
+      unsourced: !sources.length && !searched,
       sources,
     });
   }
@@ -10801,11 +10846,17 @@ ${(() => {
       // A search that died and a town with nothing on look identical unless
       // this is said out loud - and the answer to one is to try again, while
       // the answer to the other is to look somewhere else.
-      html += `<p class="settings-hint">${failed
-        .map((a) => esc(a.label))
-        .join(" and ")} came back with nothing. ${
-        failed.length === 1 ? "That may be the search failing rather than a quiet week." : ""
-      }</p>`;
+      // With the reason when there is one: "didn't answer within 110
+      // seconds" and "nothing listed" want different answers from you.
+      const errs = eventSearch.angleErrors || {};
+      const broken = failed.filter((a) => errs[a.key]);
+      const quiet = failed.filter((a) => !errs[a.key]);
+      if (quiet.length) {
+        html += `<p class="settings-hint">${quiet.map((a) => esc(a.label)).join(" and ")} found nothing listed.</p>`;
+      }
+      broken.forEach((a) => {
+        html += `<p class="settings-hint ev-angle-error">${esc(a.label)}: the search didn't work — ${esc(errs[a.key])}</p>`;
+      });
       html += failed
         .map((a) => `<button class="link-btn" data-ev-retry="${esc(a.key)}">Try ${esc(a.label)} again</button>`)
         .join(" ");
@@ -11400,6 +11451,7 @@ ${(() => {
       .map((key) => {
         const hit = cache[key];
         if (!hit || Date.now() - hit.at > EVENT_CACHE_MS) return null;
+        if (cachedFromMemory(hit)) return null;
         const upcoming = (hit.results || []).filter((e) => !eventIsPast(e));
         // A search whose events have all been and gone is not worth offering.
         // It stays in the cache until its week is up - so re-running it is
@@ -11445,7 +11497,16 @@ ${(() => {
   function readEventCache(key) {
     const hit = loadEventCache()[key];
     if (!hit || Date.now() - hit.at > EVENT_CACHE_MS) return null;
+    if (cachedFromMemory(hit)) return null;
     return hit;
+  }
+
+  // A search remembered from before search-off answers were stopped, where
+  // nothing at all was looked up. Serving it for the rest of its week would
+  // keep showing exactly what was wrong; asking again costs one search.
+  function cachedFromMemory(hit) {
+    const all = (hit.results || []).filter((e) => !e.pastedIn);
+    return all.length > 0 && all.every((e) => e.unsourced);
   }
 
   function writeEventCache(key, results, dropped, held, meta) {
@@ -11639,6 +11700,8 @@ ${(() => {
     // 90 seconds of silence to get there - callGemini waits AI_TIMEOUT_MS
     // twice - so it is worth saying which of the two happened.
     eventSearch.angles[angle.key] = answer.list && answer.list.length ? "done" : "failed";
+    eventSearch.angleErrors = eventSearch.angleErrors || {};
+    eventSearch.angleErrors[angle.key] = answer.error || "";
 
     const fresh = absorbAngle(answer, ctx);
     scheduleEventsRedraw();
@@ -20196,6 +20259,7 @@ ${(() => {
   // anything.
   window.__tripTest = {
     ASSISTANTS,
+    askOneAngle,
     chosenFilmRatings,
     defaultAngles,
     anglesForSearch,
