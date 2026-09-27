@@ -235,6 +235,9 @@
       // Film ratings chosen per mode ("kids", "adults", "any"). Empty means
       // each mode's own default.
       filmRatings: stored.filmRatings && typeof stored.filmRatings === "object" ? stored.filmRatings : {},
+      // The model event searches fall back to when the everyday one answers
+      // without searching. Discovered from the key, like the other.
+      geminiSearchModel: typeof stored.geminiSearchModel === "string" ? stored.geminiSearchModel : "",
       aiProvider: stored.aiProvider || "gemini",
       aiBaseUrl: stored.aiBaseUrl || "",
       aiModel: stored.aiModel || "",
@@ -909,6 +912,37 @@
     return names.slice().sort((a, b) => scoreGeminiModel(b) - scoreGeminiModel(a))[0];
   }
 
+  // The model to hand an event search to when the everyday one - usually a
+  // lite tier, chosen for cost - answers without searching. Google leaves the
+  // search to the model's judgement, and the lite tiers often judge that
+  // they already know what is on this weekend. A full flash model searches
+  // far more reliably. Only real text models: the list also carries image,
+  // speech and live-audio models whose names score just as well.
+  function scoreSearchModel(name) {
+    const n = name.replace(/^models\//, "");
+    if (/(image|tts|audio|live|embed|robotics|computer|learnlm|gemma|aqa)/i.test(n)) return -Infinity;
+    const version = parseFloat((n.match(/gemini-(\d+(?:\.\d+)?)/) || [])[1] || "0");
+    let score = version * 100;
+    if (/flash-lite/.test(n)) score += 0;
+    else if (/flash/.test(n)) score += 40;
+    else if (/pro/.test(n)) score += 20;
+    if (/-\d{3}$/.test(n)) score -= 25;
+    if (/(exp|preview)/.test(n)) score -= 30;
+    return score;
+  }
+
+  async function resolveSearchModel(key) {
+    const cached = loadTripSettings().geminiSearchModel;
+    if (cached) return cached;
+    const models = await geminiListModels(key);
+    const best = models
+      .map((m) => m.name)
+      .filter((n) => scoreSearchModel(n) > -Infinity)
+      .sort((a, b) => scoreSearchModel(b) - scoreSearchModel(a))[0];
+    if (best) saveTripSettings({ geminiSearchModel: best });
+    return best || "";
+  }
+
   // Returns the cached model, discovering one if this key hasn't been used
   // yet, so a first run works without the user having to press "Test key".
   async function resolveGeminiModel(key) {
@@ -1161,10 +1195,10 @@
     return out;
   }
 
-  async function callGemini(key, prompt, { grounded = false, json = false, maxTokens = 0, timeoutMs = 0 } = {}) {
+  async function callGemini(key, prompt, { grounded = false, json = false, maxTokens = 0, timeoutMs = 0, model: only = "" } = {}) {
     const limit = timeoutMs || AI_TIMEOUT_MS;
     lastAiPrompt = prompt;
-    const model = await resolveGeminiModel(key);
+    const model = only || (await resolveGeminiModel(key));
     // Discovered names already include the "models/" prefix.
     const path = model.indexOf("models/") === 0 ? model : `models/${model}`;
     const body = {
@@ -1221,7 +1255,8 @@
       // Clear the cached model so the next call rediscovers - but never a
       // pinned one, or the user's choice silently reverts to the guess that
       // just failed, and they can never get out of it.
-      if (res.status === 404 && !loadTripSettings().geminiModelPinned) {
+      if (res.status === 404 && only) saveTripSettings({ geminiSearchModel: "" });
+      else if (res.status === 404 && !loadTripSettings().geminiModelPinned) {
         saveTripSettings({ geminiModel: "" });
       }
       const err = new Error(describeGeminiError(res.status, data, rawText));
@@ -1258,10 +1293,12 @@
     // without a link, and not the same as an answer from memory.
     const searched = !!(
       gm &&
-      ((Array.isArray(gm.webSearchQueries) && gm.webSearchQueries.length) || sources.length)
+      ((Array.isArray(gm.webSearchQueries) && gm.webSearchQueries.length) ||
+        sources.length ||
+        gm.searchEntryPoint)
     );
 
-    return { text, sources, searched };
+    return { text, sources, searched, model: path };
   }
 
   // ---------- What the AI is costing ----------
@@ -3239,7 +3276,7 @@
     // one device, and it says so on its own screen; restoring it onto a second
     // phone would add two devices' spending together and present the result as
     // one phone's, which is a wrong number rather than a missing one.
-    const keys = [BOARDS_KEY, TRIP_KEY, STORAGE_KEY, RECENT_KEY, PEOPLE_KEY, NOTIFY_KEY, LEGACY.picks, LEGACY.folders, LEGACY.plan];
+    const keys = [BOARDS_KEY, TRIP_KEY, STORAGE_KEY, RECENT_KEY, PEOPLE_KEY, NOTIFY_KEY, WEEKLY_KEY, LEGACY.picks, LEGACY.folders, LEGACY.plan];
     loadBoards().boards.forEach((b) => {
       BOARD_PARTS.forEach((part) => keys.push(boardKey(b.id, part)));
     });
@@ -3688,6 +3725,7 @@
         k === STORAGE_KEY ||
         k === PEOPLE_KEY ||
         k === NOTIFY_KEY ||
+        k === WEEKLY_KEY ||
         k === RECENT_KEY ||
         /^board:/.test(k) ||
         /^scotland-trip-|^trip-plan-/.test(k)
@@ -8821,6 +8859,8 @@ ${(() => {
       : `between ${humanDate(window.from)} and ${humanDate(window.to)} ${window.from.getFullYear()}`;
 
     return (
+      `Search the web for current listings before answering - do not answer from memory. ` +
+      `Anything you have not found listed must not be included.\n\n` +
       `List events happening ${when}, ${where}.` +
       (window.fromTime
         ? ` On ${humanDate(window.from)} only things still going at ${window.fromTime} or later - ` +
@@ -9290,6 +9330,37 @@ ${(() => {
       error = (e && e.message) || String(e);
     }
     if (!answer) return { list: [], sources: [], angle: angle.key, error };
+
+    // Gemini says whether it searched. When it did not, it answered from
+    // memory with the search tool sitting unused - which is what "nothing
+    // here was looked up" was reporting after the search-off retry had gone.
+    // Once more on the stronger model, then refuse.
+    if (answer.searched === false) {
+      try {
+        const strong = await resolveSearchModel(loadTripSettings().geminiKey.trim());
+        if (strong && strong !== answer.model) {
+          const again = await callModel(prompt, {
+            grounded: true,
+            maxTokens: 8192,
+            timeoutMs: EVENT_SEARCH_TIMEOUT_MS,
+            model: strong,
+          });
+          if (again && again.searched) answer = again;
+        }
+      } catch (e) {
+        error = (e && e.message) || String(e);
+      }
+      if (!answer.searched) {
+        return {
+          list: [],
+          sources: [],
+          angle: angle.key,
+          error:
+            error ||
+            "Gemini answered from memory instead of searching the web, so nothing it said was used. Trying again usually works.",
+        };
+      }
+    }
 
     let list = extractJson(answer.text);
     if (!(Array.isArray(list) && list.length) && (answer.text || "").trim().length > 40) {
@@ -11061,7 +11132,16 @@ ${(() => {
           unsaved.length ? "Nothing left once the outdoor ones are hidden." : "Everything found is already saved."
         }</p></div>`;
       }
-      groupEventsByDay(shown).forEach((day) => {
+      // From a weekly check, the point is booking in time: those go first,
+      // under their own heading, and the rest by day as usual.
+      const toBook = eventSearch.bookingFirst ? shown.filter((e) => e.booking) : [];
+      if (toBook.length) {
+        html += `<div class="ev-day ev-book-ahead">Book ahead <span class="ev-day-date">${toBook.length}</span></div>`;
+        toBook.forEach((e) => {
+          html += eventRow(e, eventSearch.results.indexOf(e), false);
+        });
+      }
+      groupEventsByDay(shown.filter((e) => !toBook.includes(e))).forEach((day) => {
         html += `<div class="ev-day">${esc(eventDayHeading(day.when))} <span class="ev-day-date">${esc(
           humanDate(day.when)
         )}</span></div>`;
@@ -11152,6 +11232,19 @@ ${(() => {
           </span>
           ${icon("forward", { size: 16, cls: "more-row-go" })}
         </button>
+        <button class="more-row" data-find="weekly">
+          <span class="more-row-ico">${icon("clock", { size: 20 })}</span>
+          <span class="more-row-main">
+            <span class="more-row-title">Weekly check</span>
+            <span class="more-row-meta">${esc(
+              (() => {
+                const c = loadWeeklyChecks();
+                return c.length ? c.map(weeklyDaysLabel).join(" · ") : "A reminder to look before the weekend";
+              })()
+            )}</span>
+          </span>
+          ${icon("forward", { size: 16, cls: "more-row-go" })}
+        </button>
         <button class="more-row" data-find="idea">
           <span class="more-row-ico">${icon("sparkle", { size: 20 })}</span>
           <span class="more-row-main">
@@ -11180,6 +11273,7 @@ ${(() => {
       b.addEventListener("click", () => {
         const to = b.getAttribute("data-find");
         if (to === "explore") showView("explore");
+        else if (to === "weekly") openWeeklyChecks();
         else if (to === "films" || to === "theatre") {
           // That kind only, on the same sheet as its choices (the ratings,
           // for films): one tap to get here, one to search.
@@ -11243,7 +11337,14 @@ ${(() => {
 
 
     const go = document.getElementById("evSearch");
-    if (go) go.addEventListener("click", () => runEventSearch());
+    if (go) {
+      go.addEventListener("click", () => {
+        // An ordinary search is ordered by day; only the weekly check puts
+        // bookings first.
+        eventSearch.bookingFirst = false;
+        runEventSearch();
+      });
+    }
 
     const edit = document.getElementById("evEdit");
     if (edit) {
@@ -18943,7 +19044,9 @@ ${(() => {
       // Clear what this app scheduled, and only that.
       try {
         const pending = await plugin.getPending();
-        const mine = ((pending && pending.notifications) || []).filter((n) => Number(n.id) >= 1000);
+        const mine = ((pending && pending.notifications) || []).filter(
+          (n) => Number(n.id) >= 1000 && !isWeeklyCheckId(n.id)
+        );
         if (mine.length) await plugin.cancel({ notifications: mine.map((n) => ({ id: n.id })) });
       } catch (e) {
         /* nothing pending, or an older plugin - scheduling still works */
@@ -18974,12 +19077,268 @@ ${(() => {
     if (!plugin) return;
     try {
       const pending = await plugin.getPending();
-      const mine = ((pending && pending.notifications) || []).filter((n) => Number(n.id) >= 1000);
+      const mine = ((pending && pending.notifications) || []).filter(
+        (n) => Number(n.id) >= 1000 && !isWeeklyCheckId(n.id)
+      );
       if (mine.length) await plugin.cancel({ notifications: mine.map((n) => ({ id: n.id })) });
     } catch (e) {
       /* nothing to cancel */
     }
     store(NOTIFY_FINGERPRINT_KEY, "");
+  }
+
+  // ---------- The weekly check ----------
+  // "Make an automatic query once a week at a set time, or multiple ones, so
+  // you can tell me what's on at the weekend and I can book tickets."
+  //
+  // A phone will ring an alarm at an exact time; it will not reliably run a
+  // web search while the app is closed - Android runs background work when
+  // it chooses, hours late or not at all on a low battery. So the alarm is
+  // exact and the search runs the moment it is tapped: this weekend, where
+  // and what you chose, with anything that has to be booked at the top.
+  //
+  // Repeating alarms, set once: they keep firing whether or not the app is
+  // opened in between.
+  const WEEKLY_KEY = "weekly-checks-v1";
+  const WEEKLY_FINGERPRINT_KEY = "weekly-checks-fingerprint-v1";
+  const WEEKLY_IDS = 6000;
+  const WEEKLY_MAX = 20;
+  const WEEKDAYS = [
+    [1, "Mon"], [2, "Tue"], [3, "Wed"], [4, "Thu"], [5, "Fri"], [6, "Sat"], [0, "Sun"],
+  ];
+
+  function isWeeklyCheckId(id) {
+    const n = Number(id);
+    return n >= WEEKLY_IDS && n < WEEKLY_IDS + WEEKLY_MAX * 7;
+  }
+
+  function loadWeeklyChecks() {
+    const list = readJson(WEEKLY_KEY, []);
+    return (Array.isArray(list) ? list : [])
+      .filter((c) => c && typeof c === "object" && c.id)
+      .map((c) => ({
+        id: String(c.id),
+        days: (Array.isArray(c.days) ? c.days : []).filter((d) => Number.isInteger(d) && d >= 0 && d <= 6),
+        time: /^\d{2}:\d{2}$/.test(c.time || "") ? c.time : "18:00",
+        where: c.where && typeof c.where.lat === "number" ? c.where : null,
+        kinds: Array.isArray(c.kinds) ? c.kinds.filter((k) => typeof k === "string") : [],
+      }))
+      .slice(0, WEEKLY_MAX);
+  }
+
+  function saveWeeklyChecks(list) {
+    store(WEEKLY_KEY, JSON.stringify(list.slice(0, WEEKLY_MAX)));
+    scheduleWeeklyChecks();
+  }
+
+  // What a check covers, in words: where, and which kinds.
+  function weeklyCheckSummary(c) {
+    const where = c.where ? `${c.where.name}, within ${c.where.miles || anchorMiles(c.where)} miles` : "the trip's own area";
+    const kinds = c.kinds.length
+      ? EVENT_ANGLES.filter((a) => c.kinds.includes(a.key)).map((a) => a.label).join(", ")
+      : "everything";
+    return `${where} · ${kinds}`;
+  }
+
+  function weeklyDaysLabel(c) {
+    const names = WEEKDAYS.filter(([d]) => c.days.includes(d)).map(([, n]) => n);
+    return names.length ? `${names.join(", ")} ${c.time}` : "No day chosen";
+  }
+
+  // The alarms that should exist: one repeating alarm per chosen weekday per
+  // check. Capacitor numbers weekdays from Sunday = 1.
+  function weeklyNotifications() {
+    const out = [];
+    loadWeeklyChecks().forEach((c, i) => {
+      const [hour, minute] = c.time.split(":").map(Number);
+      c.days.forEach((d) => {
+        out.push({
+          id: WEEKLY_IDS + i * 7 + d,
+          title: "What's on this weekend",
+          body: `Tap to look now — ${weeklyCheckSummary(c)}. Anything to book ahead goes first.`,
+          schedule: { on: { weekday: d + 1, hour, minute }, allowWhileIdle: true },
+          extra: { weeklyCheck: c.id },
+        });
+      });
+    });
+    return out;
+  }
+
+  let weeklyScheduling = false;
+
+  async function scheduleWeeklyChecks() {
+    const plugin = notifyPlugin();
+    if (!plugin || weeklyScheduling) return;
+    const wanted = weeklyNotifications();
+    const print = JSON.stringify(wanted.map((n) => [n.id, n.schedule.on, n.body]));
+    if (print === (localStorage.getItem(WEEKLY_FINGERPRINT_KEY) || "")) return;
+    weeklyScheduling = true;
+    try {
+      try {
+        const pending = await plugin.getPending();
+        const mine = ((pending && pending.notifications) || []).filter((n) => isWeeklyCheckId(n.id));
+        if (mine.length) await plugin.cancel({ notifications: mine.map((n) => ({ id: n.id })) });
+      } catch (e) {
+        /* nothing pending */
+      }
+      if (wanted.length) await plugin.schedule({ notifications: wanted });
+      store(WEEKLY_FINGERPRINT_KEY, print);
+    } catch (e) {
+      // The checks are still saved; the next change or launch tries again.
+    } finally {
+      weeklyScheduling = false;
+    }
+  }
+
+  // The tap. This weekend, the check's own place and kinds, looked up fresh
+  // rather than served from a search remembered earlier in the week.
+  function runWeeklyCheck(id) {
+    const c = loadWeeklyChecks().find((x) => x.id === String(id));
+    if (!c) {
+      showView("events");
+      return;
+    }
+    if (c.where) eventSearch.centre = Object.assign({}, c.where);
+    eventSearch.route = null;
+    // "This weekend" on a Sunday is today and nothing more - the right
+    // answer to "what's on", the wrong one for a reminder that rang on a
+    // Sunday evening to plan ahead. Then it is the coming Friday to Sunday.
+    const today = startOfDay(new Date());
+    if (today.getDay() === 0) {
+      const fri = new Date(today);
+      fri.setDate(fri.getDate() + 5);
+      const sun = new Date(today);
+      sun.setDate(sun.getDate() + 7);
+      customWindow.from = isoDate(fri);
+      customWindow.to = isoDate(sun);
+      customWindow.fromTime = "";
+      eventSearch.when = "custom";
+    } else {
+      eventSearch.when = "weekend";
+    }
+    eventSearch.kinds = c.kinds.slice();
+    eventSearch.showKind = null;
+    eventSearch.bookingFirst = true;
+    closePlaceModal();
+    showView("events");
+    runEventSearch({ fresh: true });
+  }
+
+  function newWeeklyCheck() {
+    const centre = eventSearch.centre || loadAnchor() || derivedAnchor();
+    return {
+      id: `w${Date.now().toString(36)}`,
+      days: [5],
+      time: "18:00",
+      where: centre && typeof centre.lat === "number"
+        ? { name: centre.name, lat: centre.lat, lon: centre.lon, miles: centre.miles || anchorMiles(centre) }
+        : null,
+      kinds: eventSearch.kinds.slice(),
+    };
+  }
+
+  function openWeeklyChecks(note) {
+    const checks = loadWeeklyChecks();
+    const phone = notificationsPossible();
+    placeModal.innerHTML = `
+      <div class="modal-backdrop" data-close="1">
+        <div class="modal-sheet" role="dialog" aria-label="Weekly check">
+          <div class="modal-handle"></div>
+          <button class="modal-close" data-close="1" aria-label="Close">${icon("close", { size: 17, cls: "ico-inline" })}</button>
+          <div class="modal-body">
+            <h2 class="modal-title">Weekly check</h2>
+            <p class="settings-hint">A reminder at the time you choose. Tap it and this weekend is looked up, with anything to book ahead first.</p>
+            ${phone ? "" : `<p class="settings-hint backup-overdue">Reminders only ring in the app on your phone.</p>`}
+            ${note ? `<p class="settings-hint backup-overdue">${esc(note)}</p>` : ""}
+            ${checks
+              .map(
+                (c) => `
+              <div class="card weekly-check" data-weekly="${esc(c.id)}">
+                <div class="search-chips weekly-days">
+                  ${WEEKDAYS.map(
+                    ([d, n]) =>
+                      `<button class="search-chip${c.days.includes(d) ? " on" : ""}" data-weekly-day="${esc(c.id)}|${d}"
+                               aria-pressed="${c.days.includes(d)}">${n}</button>`
+                  ).join("")}
+                </div>
+                <label class="weekly-time">At
+                  <input type="time" value="${esc(c.time)}" data-weekly-time="${esc(c.id)}" />
+                </label>
+                <p class="settings-hint">${esc(weeklyCheckSummary(c))}</p>
+                <div class="settings-btn-row">
+                  <button class="modal-btn" data-weekly-use="${esc(c.id)}">Use what's on Find now</button>
+                  <button class="modal-btn" data-weekly-remove="${esc(c.id)}">Remove</button>
+                </div>
+              </div>`
+              )
+              .join("")}
+            <button class="modal-btn modal-btn-primary" id="weeklyAdd" style="width:100%;margin-top:12px;">
+              ${icon("plus", { size: 16, cls: "ico-inline" })} ${checks.length ? "Add another" : "Add a weekly check"}
+            </button>
+          </div>
+        </div>
+      </div>`;
+    placeModal.classList.add("open");
+    makeSheetDraggable(placeModal, closePlaceModal);
+    placeModal.querySelectorAll("[data-close]").forEach((el) =>
+      el.addEventListener("click", (e) => {
+        if (el.classList.contains("modal-backdrop") && e.target !== el) return;
+        closePlaceModal();
+        if (view.dataset.activeTab === "events") renderEvents();
+      })
+    );
+    const update = (id, fn) => {
+      const list = loadWeeklyChecks();
+      const c = list.find((x) => x.id === id);
+      if (!c) return;
+      fn(c);
+      saveWeeklyChecks(list);
+      openWeeklyChecks();
+    };
+    placeModal.querySelectorAll("[data-weekly-day]").forEach((b) =>
+      b.addEventListener("click", () => {
+        const [id, day] = b.getAttribute("data-weekly-day").split("|");
+        update(id, (c) => {
+          const d = Number(day);
+          c.days = c.days.includes(d) ? c.days.filter((x) => x !== d) : c.days.concat(d);
+        });
+      })
+    );
+    placeModal.querySelectorAll("[data-weekly-time]").forEach((input) =>
+      input.addEventListener("change", () => {
+        if (!/^\d{2}:\d{2}$/.test(input.value)) return;
+        update(input.getAttribute("data-weekly-time"), (c) => (c.time = input.value));
+      })
+    );
+    placeModal.querySelectorAll("[data-weekly-use]").forEach((b) =>
+      b.addEventListener("click", () =>
+        update(b.getAttribute("data-weekly-use"), (c) => {
+          const fresh = newWeeklyCheck();
+          c.where = fresh.where;
+          c.kinds = fresh.kinds;
+        })
+      )
+    );
+    placeModal.querySelectorAll("[data-weekly-remove]").forEach((b) =>
+      b.addEventListener("click", () => {
+        saveWeeklyChecks(loadWeeklyChecks().filter((x) => x.id !== b.getAttribute("data-weekly-remove")));
+        openWeeklyChecks();
+      })
+    );
+    const add = document.getElementById("weeklyAdd");
+    if (add) {
+      add.addEventListener("click", async () => {
+        // Permission is asked for here, when it is plainly needed, not on
+        // launch.
+        const granted = phone ? await askForNotificationPermission() : true;
+        const list = loadWeeklyChecks();
+        list.push(newWeeklyCheck());
+        saveWeeklyChecks(list);
+        openWeeklyChecks(
+          granted ? "" : "Notifications are off for this app, so the reminder can't ring. Android's settings for the app can turn them on."
+        );
+      });
+    }
   }
 
   // Tapping one has to land somewhere that answers it, or it is just a buzz.
@@ -18989,6 +19348,10 @@ ${(() => {
     try {
       plugin.addListener("localNotificationActionPerformed", (event) => {
         const extra = (event && event.notification && event.notification.extra) || {};
+        if (extra.weeklyCheck) {
+          runWeeklyCheck(extra.weeklyCheck);
+          return;
+        }
         if (extra.rainy) {
           const current = currentPlanDay();
           const anchor = current ? dayWeatherAnchor(current.day.id) : null;
@@ -20259,6 +20622,8 @@ ${(() => {
   // anything.
   window.__tripTest = {
     ASSISTANTS,
+    runWeeklyCheck,
+    weeklyNotifications,
     askOneAngle,
     chosenFilmRatings,
     defaultAngles,
@@ -20377,6 +20742,7 @@ ${(() => {
   // The plan can be a fortnight long and the forecast changes daily, so what
   // was scheduled last week is not what should fire tomorrow.
   scheduleReschedule();
+  scheduleWeeklyChecks();
   window.addEventListener("focus", scheduleReschedule);
 
   refreshForBoard();

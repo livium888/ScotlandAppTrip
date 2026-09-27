@@ -36,14 +36,22 @@ let requests = [];
 await page.route(/generativelanguage\.googleapis\.com/, async (route) => {
   if (/\/models\?/.test(route.request().url())) {
     return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
-      models: [{ name: 'models/gemini-3.5-flash-lite', supportedGenerationMethods: ['generateContent'] }] }) });
+      // What a real key lists: the cheap lite model the app uses day to
+      // day, a full flash model, and ones that are not text models at all.
+      models: [
+        { name: 'models/gemini-3.5-flash-lite', supportedGenerationMethods: ['generateContent'] },
+        { name: 'models/gemini-3.5-flash', supportedGenerationMethods: ['generateContent'] },
+        { name: 'models/gemini-3.5-flash-image', supportedGenerationMethods: ['generateContent'] },
+        { name: 'models/gemini-3.5-flash-preview-tts', supportedGenerationMethods: ['generateContent'] },
+      ] }) });
   }
+  const model = (route.request().url().match(/models\/([^:]+):generateContent/) || [])[1] || '';
   const body = JSON.parse(route.request().postData() || '{}');
   const prompt = body.contents[0].parts[0].text;
   const grounded = !!(body.tools && body.tools.length);
   const json = !!(body.generationConfig && body.generationConfig.responseMimeType);
-  requests.push({ grounded, json, prompt, angle: angleFromPrompt(prompt) });
-  const r = await behaviour({ grounded, json, prompt });
+  requests.push({ grounded, json, prompt, model, angle: angleFromPrompt(prompt) });
+  const r = await behaviour({ grounded, json, prompt, model });
   if (r.delay) await new Promise((res) => setTimeout(res, r.delay));
   if (r.status) return route.fulfill({ status: r.status, contentType: 'application/json', body: JSON.stringify({ error: { message: 'boom' } }) });
   return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
@@ -143,6 +151,35 @@ behaviour = ({ grounded }) => grounded
 await searchOne('hall', 90000);
 check('a search that takes fifty seconds is still waited for, not replaced with a guess',
   JSON.stringify(await names()) === JSON.stringify(['Late Folk Evening']), JSON.stringify(await names()));
+
+// ---------- 6. Gemini skipped the search: the stronger model is asked ----------
+// What the phone showed after the first fix: search on, offered, unused.
+// Google leaves the search to the model, and the lite tier often decides it
+// already knows what is on.
+await seed();
+behaviour = ({ grounded, model }) => !grounded
+  ? { text: '[]' }
+  : /lite/.test(model)
+    ? { text: JSON.stringify([listing('Remembered Gala')]) } // no grounding metadata: did not search
+    : { text: JSON.stringify([listing('Folk Evening')]), gm: GM };
+await searchOne('hall');
+check('every event question tells the model to search, not answer from memory',
+  requests.every((r) => !r.grounded || /Search the web for current listings before answering - do not answer from memory/.test(r.prompt)));
+check('an answer given without searching is not used', !(await names()).includes('Remembered Gala'), JSON.stringify(await names()));
+check('the same question goes to the full flash model', requests.some((r) => r.grounded && r.model === 'gemini-3.5-flash'),
+  JSON.stringify(requests.map((r) => r.model)));
+check('never to an image or speech model', !requests.some((r) => /image|tts/.test(r.model)));
+check('and what that one searched for is shown', JSON.stringify(await names()) === JSON.stringify(['Folk Evening']),
+  JSON.stringify(await names()));
+
+// ---------- 7. Neither searched: nothing shown, and said plainly ----------
+await seed();
+behaviour = ({ grounded }) => grounded ? { text: JSON.stringify([listing('Remembered Gala')]) } : { text: '[]' };
+await searchOne('hall');
+check('when no model will search, nothing is shown', (await names()).length === 0, JSON.stringify(await names()));
+check('and the screen says it answered from memory, so nothing was used', /answered from memory/.test(await view()),
+  (await view()).slice(0, 300));
+check('with the retry button', await page.evaluate(() => !!document.querySelector('[data-ev-retry="hall"]')));
 
 // ---------- 5. A remembered search of guesses is not served ----------
 const cached = {

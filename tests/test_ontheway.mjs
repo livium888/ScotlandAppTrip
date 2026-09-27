@@ -59,7 +59,7 @@ await page.route(/generativelanguage\.googleapis\.com/, (route) => {
       ]
     : [];
   return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
-    candidates: [{ content: { parts: [{ text: JSON.stringify(list) }] } }] }) });
+    candidates: [{ content: { parts: [{ text: JSON.stringify(list) }] }, groundingMetadata: { webSearchQueries: ['events'] } }] }) });
 });
 
 // Geocoding: every place resolves to its real coordinates.

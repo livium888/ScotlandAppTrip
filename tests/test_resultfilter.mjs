@@ -44,7 +44,7 @@ await page.route(/generativelanguage\.googleapis\.com/, (route) => {
     ? [{ name: 'Folk Night', date: day, time: '20:00', venue: 'The Castle', area: 'Bakewell', what: 'Music.', price: '£' }]
     : [];
   return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
-    candidates: [{ content: { parts: [{ text: JSON.stringify(list) }] } }] }) });
+    candidates: [{ content: { parts: [{ text: JSON.stringify(list) }] }, groundingMetadata: { webSearchQueries: ['events'] } }] }) });
 });
 await page.route(/nominatim/, (route) => route.fulfill({ status: 200, contentType: 'application/json',
   body: JSON.stringify([{ lat: '53.2129', lon: '-1.6753', display_name: 'Bakewell', type: 'town',

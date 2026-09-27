@@ -57,6 +57,17 @@ await page.route(/generativelanguage\.googleapis\.com/, (route) => {
   if (cite) cand.groundingMetadata = { groundingChunks: [{ web: { uri: 'https://bakewell.example/whats-on', title: 'Bakewell what’s on' } }] };
   route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ candidates: [cand] }) });
 });
+// A host that says it can search but cites nothing. Gemini reports whether
+// it searched; these do not, so for them "no page" is all there is to go on.
+await page.route(/llm\.example\.test/, (route) => {
+  const p = JSON.parse(route.request().postData() || '{}').messages[0].content;
+  const list = angleFromPrompt(p) === 'market'
+    ? [{ name: 'Bakewell Farmers Market', date: day, time: '09:00', venue: 'Market Place',
+        area: 'Bakewell', what: 'Stalls.', price: 'free' }]
+    : [];
+  route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+    choices: [{ message: { content: JSON.stringify(list) } }] }) });
+});
 await page.route(/nominatim/, (route) => route.fulfill({ status: 200, contentType: 'application/json',
   body: JSON.stringify([{ lat: '53.2129', lon: '-1.6753', display_name: 'Bakewell', type: 'town',
     namedetails: { name: 'Bakewell' }, address: { town: 'Bakewell' }, extratags: {} }]) }));
@@ -64,9 +75,10 @@ await page.route(/overpass/, (route) => route.fulfill({ status: 200, contentType
   body: JSON.stringify({ elements: [] }) }));
 await page.route(/wikidata|wikipedia|googleapis\.com\/maps|tile\.|photon/, (r) => r.abort());
 
+let settings = { geminiKey: 'k' };
 const run = async () => {
   await page.goto(BASE, { waitUntil: 'load' });
-  await page.evaluate(() => {
+  await page.evaluate((st) => {
     localStorage.clear();
     localStorage.setItem('boards-v1', JSON.stringify({
       activeId: 'b', boards: [{ id: 'b', name: 'Peak', destination: 'Bakewell', dated: true, createdAt: 1 }],
@@ -75,8 +87,8 @@ const run = async () => {
       { id: 'a:1', name: 'Bakewell', city: 'Bakewell', category: 'Town', lat: 53.2129, lon: -1.6753, major: true },
     ]));
     localStorage.setItem('board:b:folders', JSON.stringify(['Bakewell']));
-    localStorage.setItem('trip-settings-v1', JSON.stringify({ geminiKey: 'k' }));
-  });
+    localStorage.setItem('trip-settings-v1', JSON.stringify(st));
+  }, settings);
   await page.reload({ waitUntil: 'load' });
   await page.waitForTimeout(700);
   await goTo(page, 'events', 400);
@@ -115,11 +127,21 @@ check('and they are not marked unsourced', r.every((x) => !x.unsourced), JSON.st
 check('and nothing warns about checking', !/couldn.t be checked|nothing was looked up/i.test(await txt()),
   (await txt()).slice(0, 200));
 
-// ---------- Without citations: the same answer, a different claim ----------
+// ---------- Gemini that did not search: refused ----------
+// With no search metadata at all, Gemini answered from memory with the
+// search tool unused. That is not a weaker result, it is not a result.
 cite = false;
 await run();
+await page.waitForTimeout(1500);
 r = await results();
-check('an uncited answer still shows what it found', r.length >= 1, JSON.stringify(r));
+check('an answer Gemini gave without searching is not shown', r.length === 0, JSON.stringify(r));
+check('and the screen says why', /answered from memory/.test(await txt()), (await txt()).slice(0, 400));
+
+// ---------- A host that searches without citing: shown, and marked ----------
+settings = { aiProvider: 'openai', aiBaseUrl: 'https://llm.example.test/v1', aiModel: 'm', aiKey: 'x', aiGrounded: true };
+await run();
+r = await results();
+check('an uncited answer from a searching host still shows what it found', r.length >= 1, JSON.stringify(r));
 check('but every one of them is marked unsourced', r.length >= 1 && r.every((x) => x.unsourced),
   JSON.stringify(r));
 check('the screen says so, rather than leaving it to be noticed',

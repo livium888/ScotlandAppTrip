@@ -4263,3 +4263,10 @@ html, body {
 /* The caveat is a flex row (icon, then text). The link inside it was a
    flex item of its own, and split the sentence into three columns. */
 .ev-caveat .link-btn { display: inline; width: auto; margin: 0; padding: 0; font-size: inherit; }
+
+/* ---- Weekly check ---- */
+.weekly-check { margin-top: var(--space-3); }
+.weekly-days .search-chip { min-width: 44px; }
+.weekly-time { display: flex; align-items: center; gap: var(--space-2); margin-top: var(--space-2); font-weight: 600; }
+.weekly-time input { min-height: 44px; padding: 0 var(--space-2); border: 1px solid var(--border); border-radius: 10px; background: var(--card); color: var(--text); font-family: inherit; font-size: var(--type-md); }
+.ev-book-ahead { color: var(--warn); }
