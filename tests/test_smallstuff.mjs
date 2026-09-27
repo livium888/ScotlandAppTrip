@@ -46,6 +46,9 @@ const day = iso(new Date(Date.now() + 3 * 86400000));
 const VILLAGES = [
   ['Bakewell', 'town'], ['Ashford-in-the-Water', 'village'], ['Great Longstone', 'village'],
   ['Baslow', 'village'], ['Hassop', 'hamlet'], ['Youlgreave', 'village'], ['Monyash', 'village'],
+  // Further out than every village above, and a town: towns carry the
+  // cinemas and the listings pages, so they come first however far.
+  ['Matlock', 'town'],
 ];
 let overpassCalls = 0;
 let overpassDown = false;
@@ -127,6 +130,11 @@ check('including the village hall, the clubs and the fetes',
 check('the villages are looked up rather than guessed at', overpassCalls >= 1, String(overpassCalls));
 check('and named in the prompt, not left as a radius',
   prompts.every((p) => /Ashford-in-the-Water/.test(p) && /Great Longstone/.test(p)),
+  (prompts[0] || '').slice(0, 400));
+// A search round Burridge named Hursley and Itchen Stoke, not Fareham or
+// Southampton: Overpass capped the list before any sort. Towns first now.
+check('towns are named before villages, even further out ones',
+  prompts.every((p) => p.indexOf('Matlock') >= 0 && p.indexOf('Matlock') < p.indexOf('Ashford-in-the-Water')),
   (prompts[0] || '').slice(0, 400));
 check('the radius is still there, because it is what bounds the answer',
   prompts.every((p) => /\b15 miles\b/.test(p)), (prompts[0] || '').slice(0, 300));

@@ -58,6 +58,7 @@ await page.route(/generativelanguage\.googleapis\.com/, (route) => {
         film('Alien: Romulus', '15', 'Vue Omni', ['21:00']),
         film('The Substance', '18', 'Cameo', ['21:30']),
         film('Mystery Screening', '', 'Cameo', ['19:00']),
+        film('The Gruffalo Screening', 'U', 'Odeon Port Solent', []),
       ]
     : [];
   route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
@@ -67,8 +68,19 @@ await page.route(/generativelanguage\.googleapis\.com/, (route) => {
 await page.route(/nominatim/, (route) => route.fulfill({ status: 200, contentType: 'application/json',
   body: JSON.stringify([{ lat: '55.9533', lon: '-3.1883', display_name: 'Edinburgh', type: 'city',
     namedetails: { name: 'Edinburgh' }, address: { city: 'Edinburgh' }, extratags: {} }]) }));
-await page.route(/overpass/, (route) => route.fulfill({ status: 200, contentType: 'application/json',
-  body: JSON.stringify({ elements: [] }) }));
+// The cinemas and theatres in the area, as OpenStreetMap has them.
+let overpassBodies = [];
+await page.route(/overpass/, (route) => {
+  const q = decodeURIComponent(route.request().postData() || '');
+  overpassBodies.push(q);
+  const el = (name, lat, lon, city) => ({ type: 'way', center: { lat, lon }, tags: Object.assign({ name }, city ? { 'addr:city': city } : {}) });
+  const elements = /amenity"="cinema"/.test(q)
+    ? [el('Cineworld Whiteley', 55.96, -3.19, 'Whiteley'), el('Odeon Port Solent', 55.97, -3.2), el('Far Away Cinema', 57.5, -4.2)]
+    : /theatre\|arts_centre/.test(q)
+      ? [el('Church Hill Theatre', 55.94, -3.21)]
+      : [];
+  route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ elements }) });
+});
 await page.route(/wikidata|wikipedia|googleapis\.com\/maps|tile\.|photon|open-meteo/, (r) => r.abort());
 
 const seed = async (mode, people) => {
@@ -147,6 +159,13 @@ check('with every showing time, one row per film per cinema', /times \(/.test(fi
 // asking for JSON silently switches Google Search off.
 check('asked for as lines of text, not JSON', /one listing per line/.test(filmPrompt) && !/JSON/.test(filmPrompt));
 check('and never R18', /Nothing rated R18/.test(filmPrompt));
+// "Films within 25 miles" left the model to decide whether to look; named
+// cinemas can only be answered by looking.
+check('the nearby cinemas are named in the question, nearest first',
+  /Cinemas in this area include: Cineworld Whiteley, Odeon Port Solent, Far Away Cinema\./.test(filmPrompt), filmPrompt.slice(0, 700));
+// UK chains publish the next week's times on Monday or Tuesday.
+check('and when times are not published yet, the films on release are still wanted',
+  /has not published times for these dates yet, still list the films it has on release/.test(filmPrompt));
 // A question about cinema times is about cinema times: none of the
 // four-thousand-character small-events brief, which cost tokens and pulled
 // the answers off the subject.
@@ -183,8 +202,13 @@ await closeAskSheet(page);
 found = await runSearch();
 check('the family films come back, both cinemas showing Paddington as two rows',
   JSON.stringify(found) === JSON.stringify([
-    'Paddington in Peru @ Cineworld Fountainpark', 'Paddington in Peru @ Vue Omni', 'The Wild Robot @ Odeon Lothian Road']),
+    'Paddington in Peru @ Cineworld Fountainpark', 'Paddington in Peru @ Vue Omni',
+    'The Gruffalo Screening @ Odeon Port Solent', 'The Wild Robot @ Odeon Lothian Road']),
   JSON.stringify(found));
+check('a film whose times are not out yet is listed, and says so', await page.evaluate(() =>
+  /times not out yet/.test([...document.querySelectorAll('.ev-row')].find((r) => /Gruffalo Screening/.test(r.textContent))?.textContent || '')));
+check('a "nothing found" line is not taken for a film', await page.evaluate(() =>
+  window.__tripTest.parseListingLines('- name: No qualifying screenings found; what: nothing listed yet').length === 0));
 check('a film with no rating is not shown to a family', !found.some((f) => /Mystery/.test(f)));
 check('the kids-mode film request asks for family films', /films for children and families/.test(
   prompts.find((p) => angleFromPrompt(p) === 'films') || ''));

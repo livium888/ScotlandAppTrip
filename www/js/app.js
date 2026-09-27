@@ -8988,15 +8988,23 @@ ${(() => {
     if (prefs) who.push(`What matters to us: ${prefs}`);
 
     const film = angle.key === "films";
+    const named = ((eventSearch.ctx && eventSearch.ctx.venues) || {})[angle.key] || [];
+    const venuesLine = named.length
+      ? `${film ? "Cinemas" : "Theatres and arts centres"} in this area include: ${named.join(", ")}. Check each one's own listings.\n`
+      : "";
     const rules = film
-      ? `Only films rated ${chosenFilmRatings().join(" or ")} by the BBFC. Nothing rated R18. List each film once per cinema.`
+      ? `Only films rated ${chosenFilmRatings().join(" or ")} by the BBFC. Nothing rated R18. List each film once per cinema. ` +
+        // UK chains publish the coming week's times on Monday or Tuesday, so
+        // a Saturday more than a few days off often has no times anywhere
+        // yet - which is not the same as nothing being on.
+        `If a cinema has not published times for these dates yet, still list the films it has on release then, and leave the times out.`
       : angle.key === "theatre"
         ? "List each show once per venue."
         : "List each session once per venue, with its session times.";
     return (
       `Search the web for current listings before answering - do not answer from memory. ` +
       `Anything you have not found listed must not be included.\n\n` +
-      `Find ${anglePrompt(angle.key)} ${when}, ${where}.\n${rules}\n` +
+      `Find ${anglePrompt(angle.key)} ${when}, ${where}.\n${venuesLine}${rules}\n` +
       (who.length ? `${who.join("\n")}\n` : "") +
       `\n${sessionContract(angle)}`
     );
@@ -9681,6 +9689,9 @@ ${(() => {
         item[key] = value;
       });
       if (!item.name) return;
+      // "name: No qualifying screenings found" is the model saying nothing
+      // was found, not a listing called that.
+      if (!item.date && /^(no\b|none\b|nothing\b|n\/a\b)/i.test(item.name)) return;
       if (item.times) item.times = item.times.split(/[,/]|\band\b/).map((t) => t.trim()).filter(Boolean);
       if (item.ages) {
         const a = /(\d+)\s*(?:-|–|to)\s*(\d+)/.exec(item.ages);
@@ -10223,7 +10234,9 @@ ${(() => {
       ? `<span class="ev-time">${esc(e.time)}${
           e.endTime ? `<span class="ev-until">–${esc(e.endTime)}</span>` : ""
         }</span>`
-      : `<span class="ev-time ev-time-none">all day</span>`;
+      : e.film
+        ? `<span class="ev-time ev-time-none">times not out yet</span>`
+        : `<span class="ev-time ev-time-none">all day</span>`;
     const where = [e.venue, e.area].filter(Boolean).join(", ");
     const runs = e.endsAt
       ? ` <span class="ev-runs">until ${esc(humanDate(new Date(e.endsAt)))}</span>`
@@ -12566,6 +12579,18 @@ ${(() => {
     }
     if (generation !== eventGeneration) return;
 
+    ctx.venues = {};
+    const kindsNow = anglesForSearch().map((a) => a.key);
+    for (const [kindKey, osm] of [["films", "cinema"], ["theatre", "theatre"]]) {
+      if (!kindsNow.includes(kindKey) || route) continue;
+      try {
+        ctx.venues[kindKey] = await venuesNear(centre.lat, centre.lon, radius, osm);
+      } catch (e) {
+        ctx.venues[kindKey] = [];
+      }
+    }
+    if (generation !== eventGeneration) return;
+
     if (eventQueue) eventQueue.stop();
     eventQueue = makePlaceQueue(scheduleEventsRedraw);
 
@@ -12576,6 +12601,7 @@ ${(() => {
       mode: tripMode(),
       ratings: angles.some((a) => a.key === "films") ? chosenFilmRatings().join(", ") : "",
       towns: (ctx.towns || []).join(", "),
+      venues: Object.keys(ctx.venues || {}).map((k) => `${k}: ${(ctx.venues[k] || []).join(", ") || "none found"}`).join("   "),
       cache: "a new search",
     });
     // The key's models, once, for the trace: which one a search used only
@@ -13427,8 +13453,17 @@ ${(() => {
   // the geocoder already use.
   async function settlementsNear(lat, lon, radiusMetres) {
     const radius = Math.min(radiusMetres || OVERPASS_PLACES_RADIUS_M, OVERPASS_PLACES_RADIUS_M);
-    const filter = `["place"~"^(city|town|village|hamlet)$"]["name"]`;
-    const q = `[out:json][timeout:25];(node${filter}(around:${radius},${lat},${lon}););out ${SETTLEMENT_LIMIT * 3};`;
+    // Towns and cities across the whole area, villages only nearer in. The
+    // old query took one capped handful of every kind, and Overpass applies
+    // the cap before any sort, so the "nearest eighteen" were really eighteen
+    // arbitrary ones: a search round Burridge named Hursley, Cheriton and
+    // Itchen Stoke, and not Fareham, Whiteley, Southampton or Portsmouth.
+    const near = Math.min(radius, Math.round((8 / MILES_PER_KM) * 1000));
+    const q =
+      `[out:json][timeout:25];(` +
+      `node["place"~"^(city|town)$"]["name"](around:${radius},${lat},${lon});` +
+      `node["place"~"^(village|suburb)$"]["name"](around:${near},${lat},${lon});` +
+      `);out 400;`;
 
     let data = null;
     for (const endpoint of OVERPASS_ENDPOINTS) {
@@ -13449,7 +13484,7 @@ ${(() => {
     // slightly worse; it must never make the search fail.
     if (!data || !Array.isArray(data.elements)) return [];
 
-    const rank = { city: 0, town: 1, village: 2, hamlet: 3 };
+    const rank = { city: 0, town: 1, suburb: 2, village: 2, hamlet: 3 };
     return data.elements
       .filter((el) => el.tags && el.tags.name && el.lat != null)
       .map((el) => ({
@@ -13457,10 +13492,10 @@ ${(() => {
         place: el.tags.place,
         km: haversineKm(lat, lon, el.lat, el.lon),
       }))
-      // Nearest first, but a town ahead of a hamlet at the same distance: the
-      // bigger places carry the listings pages, the smaller ones carry the
-      // village hall.
-      .sort((a, b) => a.km - b.km || rank[a.place] - rank[b.place])
+      // Towns and cities first, nearest first - they carry the cinemas,
+      // theatres and listings pages - then the villages close by, which
+      // carry the village hall.
+      .sort((a, b) => (rank[a.place] > 1) - (rank[b.place] > 1) || a.km - b.km)
       .filter((x, i, all) => all.findIndex((y) => y.name === x.name) === i)
       .slice(0, SETTLEMENT_LIMIT)
       .map((x) => x.name);
@@ -13469,6 +13504,52 @@ ${(() => {
   // Enough to be concrete, few enough that the prompt does not become a list
   // of places instead of a question.
   const SETTLEMENT_LIMIT = 18;
+
+  // The cinemas or theatres in the area, by name, from OpenStreetMap - free,
+  // no key. "Films within 25 miles of Burridge" left the model to decide
+  // whether to look at all, and it often decided not to; "what's on at
+  // Cineworld Whiteley, Odeon Port Solent..." is a question that can only be
+  // answered by looking.
+  const venueCache = {};
+  const VENUE_LIMIT = 12;
+  async function venuesNear(lat, lon, radiusMetres, kind) {
+    const key = `${kind}|${lat.toFixed(2)},${lon.toFixed(2)},${Math.round(radiusMetres / 1609)}`;
+    if (venueCache[key]) return venueCache[key];
+    const radius = Math.min(radiusMetres, OVERPASS_PLACES_RADIUS_M);
+    const tag = kind === "cinema" ? `["amenity"="cinema"]` : `["amenity"~"^(theatre|arts_centre)$"]`;
+    const q = `[out:json][timeout:25];(nwr${tag}["name"](around:${radius},${lat},${lon}););out center 120;`;
+    let data = null;
+    for (const endpoint of OVERPASS_ENDPOINTS) {
+      try {
+        const res = await fetchWithTimeout(
+          endpoint,
+          { method: "POST", body: q, headers: { "Content-Type": "text/plain" } },
+          NET_TIMEOUT_SLOW_MS
+        );
+        if (!res.ok) continue;
+        data = await res.json();
+        break;
+      } catch (e) {
+        // Try the next mirror.
+      }
+    }
+    if (!data || !Array.isArray(data.elements)) return [];
+    const out = data.elements
+      .map((el) => {
+        const la = el.lat != null ? el.lat : el.center && el.center.lat;
+        const lo = el.lon != null ? el.lon : el.center && el.center.lon;
+        if (la == null || !el.tags || !el.tags.name) return null;
+        const town = el.tags["addr:city"] || el.tags["addr:town"] || "";
+        return { label: town && !el.tags.name.includes(town) ? `${el.tags.name} (${town})` : el.tags.name, km: haversineKm(lat, lon, la, lo) };
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.km - b.km)
+      .filter((x, i, all) => all.findIndex((y) => y.label === x.label) === i)
+      .slice(0, VENUE_LIMIT)
+      .map((x) => x.label);
+    if (out.length) venueCache[key] = out;
+    return out;
+  }
 
   async function overpassNearby(lat, lon, cat, radius) {
     radius = Math.min(radius || 1200, OVERPASS_MAX_RADIUS_M);
@@ -19697,6 +19778,7 @@ ${(() => {
     if (t.cache) out.push(`Answered from: ${t.cache}`);
     if (t.towns) out.push(`Towns named: ${t.towns}`);
     if (t.keyModels) out.push(`Models on this key: ${t.keyModels}`);
+    if (t.venues) out.push(`Venues named: ${t.venues}`);
     Object.keys(t.kinds || {}).forEach((key) => {
       const k = t.kinds[key];
       out.push("");
