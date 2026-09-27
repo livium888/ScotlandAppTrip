@@ -588,12 +588,64 @@
   // block that every prompt builder uses - so a preference set once applies
   // to searching, exploring and planning without being typed three times.
   function aiContextBlock() {
-    const s = loadTripSettings();
     const lines = [];
     const who = whoDescription();
     if (who) lines.push(`Travellers: ${who}`);
-    if (s.preferences.trim()) lines.push(`What matters to us: ${s.preferences.trim()}`);
+    const prefs = preferencesForMode();
+    if (prefs) lines.push(`What matters to us: ${prefs}`);
+    const audience = audienceLine();
+    if (audience) lines.push(audience);
     return lines.length ? `\n${lines.join("\n")}` : "";
+  }
+
+  // Who the outing is for, said to the model in so many words. The mode used
+  // to change only which menus showed: nothing told the model, so a kids-mode
+  // search with no travellers list came back with lectures and coffee
+  // mornings, and adults mode got puppet shows. "Adults" means grown-ups
+  // without children - a couple, friends, someone on their own - and never
+  // adult content.
+  function audienceLine() {
+    const m = tripMode();
+    if (m === "kids") {
+      const ages = childrenOnTrip()
+        .map((c) => c.age)
+        .filter((a) => a != null)
+        .sort((a, b) => a - b);
+      const aged = ages.length ? ` (aged ${ages.join(", ")})` : "";
+      return (
+        `Who this is for: a day out WITH CHILDREN${aged}. Every suggestion must be something ` +
+        `the children will enjoy - put on for children, or a family activity they would ` +
+        `genuinely love - not merely somewhere children are allowed in. Leave out pubs, bars, ` +
+        `nightlife, talks and lectures, tastings, anything late at night, and anything ` +
+        `adults-only or aimed at grown-ups.`
+      );
+    }
+    if (m === "adults") {
+      return (
+        `Who this is for: grown-ups on their own, WITHOUT children - a couple, friends or ` +
+        `someone solo, not necessarily parents. Suggest what adults choose to do when there ` +
+        `are no children with them: good food and drink, pubs and bars, gigs, comedy, ` +
+        `theatre, talks, galleries and exhibitions, tastings, spas, proper walks. Leave out ` +
+        `anything made for children or families - children's shows, soft play, playgrounds, ` +
+        `family fun days, toddler groups, kids' clubs. "Adults" means grown-up, not adult ` +
+        `content: nothing sexual or explicit.`
+      );
+    }
+    return "";
+  }
+
+  // Saved preferences, minus the ones about a child when no child is coming.
+  // "Somewhere a young child is welcome" is one of the ready-made phrasings,
+  // and it was going into every adults-mode prompt.
+  const CHILD_WORDS = /\b(child|children|kid|kids|toddler|toddlers|baby|babies|buggy|pram|pushchair|family|families|high chairs?|nappy|baby.changing)\b/i;
+  function preferencesForMode() {
+    const text = loadTripSettings().preferences.trim();
+    if (!text || tripMode() !== "adults") return text;
+    return text
+      .split(/\n+/)
+      .filter((line) => !CHILD_WORDS.test(line))
+      .join("\n")
+      .trim();
   }
 
   // An angle's question, with the user's rewrite winning if there is one.
@@ -604,7 +656,13 @@
     const custom = loadTripSettings().anglePrompts[key];
     if (custom && custom.trim()) return custom.trim();
     const angle = EVENT_ANGLES.find((a) => a.key === key);
-    return angle ? angle.ask : String(key);
+    if (!angle) return String(key);
+    // The same kind of event means different things with and without a
+    // child: "arts" is a puppet show or a comedy night.
+    const m = tripMode();
+    if (m === "kids" && angle.kidsAsk) return angle.kidsAsk;
+    if (m === "adults" && angle.adultsAsk) return angle.adultsAsk;
+    return angle.ask;
   }
 
   // A category's question, with the user's rewrite winning if there is one.
@@ -616,7 +674,11 @@
     // same three places for ever.
     if (key === "surprise") return `${aSurprise()} - and say why it is worth the time`;
     const cat = findCategory(key);
-    return cat ? cat.prompt : String(key);
+    if (!cat) return String(key);
+    const m = tripMode();
+    if (m === "kids" && cat.kidsPrompt) return cat.kidsPrompt;
+    if (m === "adults" && cat.adultsPrompt) return cat.adultsPrompt;
+    return cat.prompt;
   }
 
   // Ready-made phrasings, so the box isn't a blank page. Tapping one adds or
@@ -7565,7 +7627,7 @@ ${(() => {
     { key: "restaurant", label: "Restaurants", icon: "🍽️", group: "Food & drink", tag: "amenity", value: "restaurant",
       prompt: "well-regarded independent restaurants" },
     { key: "pub", label: "Pubs", icon: "🍺", group: "Food & drink", tag: "amenity", value: "pub",
-      prompt: "pubs that serve food and allow children" },
+      prompt: "proper pubs - good beer, good food, a good room to sit in" },
 
     // The asks that never occur to anyone. Every category above names a kind
     // of place, which is the only thing a map can be asked for - but it is not
@@ -7624,7 +7686,9 @@ ${(() => {
     { key: "park", label: "Parks", icon: "🌳", group: "Outdoors", tag: "leisure", value: "park",
       prompt: "parks and green spaces" },
     { key: "walk", label: "Easy walks", icon: "🚶", group: "Outdoors", tag: "leisure", value: "park", approx: true,
-      prompt: "short, easy, mostly flat walks a four-year-old could manage" },
+      prompt: "walks worth doing, with something to see on the way",
+      kidsPrompt: "short, easy, mostly flat walks a young child could manage, ideally with something to find on the way",
+      adultsPrompt: "walks worth doing - a proper few miles, with a view, a ruin or a pub on the way" },
     { key: "garden", label: "Gardens", icon: "🌷", group: "Outdoors", tag: "leisure", value: "garden",
       prompt: "botanic gardens and gardens open to the public" },
     { key: "beach", label: "Beaches", icon: "🏖️", group: "Outdoors", tag: "natural", value: "beach",
@@ -7634,7 +7698,8 @@ ${(() => {
     { key: "parking", label: "Car parks", icon: "🅿️", group: "Practical", tag: "amenity", value: "parking",
       prompt: "car parks" },
     { key: "toilets", label: "Toilets", icon: "🚻", group: "Practical", tag: "amenity", value: "toilets",
-      prompt: "public toilets, noting any with baby-changing facilities" },
+      prompt: "public toilets",
+      kidsPrompt: "public toilets, noting any with baby-changing facilities" },
     { key: "pharmacy", label: "Pharmacies", icon: "💊", group: "Practical", tag: "amenity", value: "pharmacy",
       prompt: "pharmacies" },
     { key: "supermarket", label: "Supermarkets", icon: "🛒", group: "Practical", tag: "shop", value: "supermarket",
@@ -8450,7 +8515,13 @@ ${(() => {
     { key: "market", label: "Markets & food",
       ask: "farmers' markets, street food, food and drink festivals, craft and makers' markets, " +
            "car boot sales, table top sales, night markets, tastings and tap takeovers, " +
-           "produce shows, cake sales, pop-up kitchens, supper clubs, foraging walks" },
+           "produce shows, cake sales, pop-up kitchens, supper clubs, foraging walks",
+      kidsAsk: "food and market events with something for children - family food festivals, " +
+               "markets with children's activities, pick-your-own, cake and bake days, chocolate " +
+               "and ice cream events, children's cookery sessions, farm shop open days",
+      adultsAsk: "farmers' markets, street food, food and drink festivals, beer, gin and wine " +
+                 "festivals, tastings and tap takeovers, supper clubs, pop-up kitchens, cookery " +
+                 "classes, night markets, craft and makers' markets, foraging walks" },
     { key: "family", label: "For children",
       ask: "things on for children and families - storytime and rhyme time, stay and play, " +
            "toddler groups, holiday clubs, craft workshops, kids' theatre and puppet shows, " +
@@ -8459,12 +8530,26 @@ ${(() => {
     { key: "arts", label: "Arts & theatre",
       ask: "theatre and am-dram, comedy nights, cinema and film club screenings, exhibitions with " +
            "an end date, artist talks, author and book events, open studios and art trails, " +
-           "poetry nights, craft classes, life drawing, museum lates" },
+           "poetry nights, craft classes, life drawing, museum lates",
+      kidsAsk: "children's theatre and puppet shows, family film screenings, children's author " +
+               "events and storytelling, kids' craft and art workshops, family days at museums " +
+               "and galleries, magic shows, circus skills, pantomimes, children's dance and music sessions",
+      adultsAsk: "theatre and am-dram, comedy nights, cinema and film club screenings, exhibitions " +
+                 "with an end date, artist talks, author and book events, open studios and art " +
+                 "trails, poetry nights, life drawing, museum lates" },
     { key: "outdoors", label: "Outdoors & sport",
       ask: "guided and heritage walks, races and fun runs, parkrun, local matches and fixtures, " +
            "agricultural and county shows, ploughing matches, sheepdog trials, regattas, " +
            "steam and vintage rallies, wildlife and birdwatching events, open gardens, " +
-           "conservation work days, cycling sportives, orienteering" },
+           "conservation work days, cycling sportives, orienteering",
+      kidsAsk: "outdoor things for children and families - family nature walks and trails, " +
+               "junior parkrun, children's fun runs, bug hunts and pond dipping, family wildlife " +
+               "events, agricultural shows with animals, lambing days, family bike rides, " +
+               "den building, outdoor family activity days",
+      adultsAsk: "guided and heritage walks, hill walks, races and runs, parkrun, local matches " +
+                 "and fixtures, agricultural and county shows, sheepdog trials, regattas, steam " +
+                 "and vintage rallies, wildlife and birdwatching events, open gardens, cycling " +
+                 "sportives, orienteering" },
     // The three that replaced one catch-all called "Local & one-off". That
     // single angle was doing the work of four, and it was the one covering the
     // smallest events - which is to say the ones this whole screen is for.
@@ -8472,17 +8557,36 @@ ${(() => {
       ask: "village hall, community centre, church and chapel events - coffee mornings, " +
            "jumble sales, bring and buy, table top sales, beetle drives, whist drives, bingo, " +
            "quiz nights, harvest suppers, community lunches, messy church, parish notices, " +
-           "flower festivals, bell ringing, hall AGMs and open days, warm spaces" },
+           "flower festivals, bell ringing, hall AGMs and open days, warm spaces",
+      kidsAsk: "what village halls, community centres and churches put on for children - " +
+               "toddler groups, stay and play, messy church, children's discos, holiday clubs, " +
+               "family film nights, kids' craft sessions, family fun days",
+      adultsAsk: "village hall, community centre and church events for grown-ups - quiz nights, " +
+                 "concerts, talks, film nights, harvest suppers, community dinners, dances and " +
+                 "ceilidhs, flower festivals, bell ringing open days, bingo" },
     { key: "clubs", label: "Clubs & societies",
       ask: "what the local clubs and societies have on - WI, horticultural and gardening " +
            "societies, allotment associations, camera clubs, history and heritage societies, " +
            "u3a, model railway and modelling clubs, bell ringers, bowls and cricket club " +
-           "socials, angling clubs, open rehearsals, talks to members that visitors may attend" },
+           "socials, angling clubs, open rehearsals, talks to members that visitors may attend",
+      kidsAsk: "junior clubs and children's sessions visitors can join - junior sports taster " +
+               "sessions, Scouts and Guides open days, children's coding and science clubs, " +
+               "model railway open days, junior angling, children's gardening sessions",
+      adultsAsk: "what the local clubs and societies have on - horticultural and gardening " +
+                 "societies, camera clubs, history and heritage societies, u3a, model railway " +
+                 "clubs, bowls and cricket club socials, angling clubs, open rehearsals, talks " +
+                 "to members that visitors may attend" },
     { key: "fetes", label: "Fetes & fundraisers",
       ask: "fetes, gala days, carnivals and processions, school fairs and PTA events, " +
            "summer and Christmas fairs, duck races, sponsored walks and runs, tombolas, " +
            "charity coffee mornings, macmillan mornings, scout and guide fundraisers, " +
-           "raffles, village weekends" },
+           "raffles, village weekends",
+      kidsAsk: "fetes, gala days, carnivals and processions, school fairs, summer and Christmas " +
+               "fairs, duck races, fun days with bouncy castles, face painting and rides, " +
+               "Santa's grottos, Easter egg hunts",
+      adultsAsk: "beer festivals, charity dinners and auctions, sponsored walks and runs, " +
+                 "carnivals and processions, summer and Christmas fairs, village weekends, " +
+                 "charity quiz nights and race nights" },
     // The ninth, and deliberately the vaguest: the things that fit nowhere
     // else are exactly the ones a tidy set of categories loses. The old
     // catch-all was doing this job badly while also covering halls, clubs and
@@ -8492,7 +8596,14 @@ ${(() => {
            "beating the bounds, lantern parades, bonfire and firework nights, light switch-ons, " +
            "remembrance and anniversary events, open days at places usually closed, " +
            "behind-the-scenes tours, pop-ups, repair cafes, community litter picks, " +
-           "swap shops, seed swaps, apple days, and anything unusual happening once" },
+           "swap shops, seed swaps, apple days, and anything unusual happening once",
+      kidsAsk: "seasonal and one-off things for children - lantern parades, bonfire and " +
+               "firework nights, light switch-ons, Easter egg hunts, Halloween trails, Santa " +
+               "events, pumpkin picking, open days with children's activities, family pop-ups",
+      adultsAsk: "the odd one-off things that fit no category - wassails, well dressings, " +
+                 "bonfire and firework nights, open days at places usually closed, " +
+                 "behind-the-scenes tours, pop-ups, apple days, late openings, and anything " +
+                 "unusual happening once" },
   ];
 
   // Said once, to every angle, so nine prompts cannot drift apart. This is the
@@ -8514,6 +8625,33 @@ ${(() => {
     `sites that tiny organisers actually use - TicketSource, Ticket Tailor, Eventbrite. ` +
     `Public Facebook Pages for venues and community groups are worth reading where they are ` +
     `reachable.`;
+
+  // The appetite for small listings, in the words of whoever is going. The
+  // original named coffee mornings, jumble sales and beetle drives as exactly
+  // what was wanted - and said it to kids-mode searches too.
+  function smallEventAppetite() {
+    const m = tripMode();
+    if (m === "kids") {
+      return (
+        `Be exhaustive, and prefer the local and small. A toddler group in a church hall, ` +
+        `a storytime at the library, a teddy bears' picnic, a lambing day at a farm, a ` +
+        `family fun day on the village green - that is exactly what is wanted. Something ` +
+        `with no website, mentioned once in a parish newsletter, is worth listing. But every ` +
+        `one must be something a child would enjoy: leave out anything for grown-ups. ` +
+        `Thirty real listings is a better answer than five.`
+      );
+    }
+    if (m === "adults") {
+      return (
+        `Be exhaustive, and prefer the small. A folk session in the back room of a pub, a ` +
+        `talk to the local history society, a supper club, a quiz night, a tasting at a ` +
+        `small brewery - that is exactly what is wanted. Something with no website, mentioned ` +
+        `once in a local newsletter, is worth listing. Leave out anything made for children ` +
+        `or families. Thirty real listings is a better answer than five.`
+      );
+    }
+    return SMALL_EVENT_APPETITE;
+  }
 
   const SMALL_EVENT_APPETITE =
     `Be exhaustive, and prefer the small. A coffee morning in a village hall with six people ` +
@@ -8564,9 +8702,9 @@ ${(() => {
       // All nine at once. The app asks these separately because it can afford
       // to; by hand, one question that names every kind is the whole point.
       `Cover all of these:\n` +
-      EVENT_ANGLES.map((a) => `- ${a.label}: ${anglePrompt(a.key)}`).join("\n") +
+      modeAngles().map((a) => `- ${a.label}: ${anglePrompt(a.key)}`).join("\n") +
       `${aiContextBlock()}\n\n` +
-      `${SMALL_EVENT_APPETITE}\n\n` +
+      `${smallEventAppetite()}\n\n` +
       `${SMALL_EVENT_SOURCES}\n\n` +
       `Include something only if you have seen it listed with a date. Do not invent ` +
       `plausible-sounding events, and do not pad the list with permanent attractions - ` +
@@ -8598,7 +8736,7 @@ ${(() => {
     `"setting": "indoor", "outdoor", "both" if there is a sheltered part, or "" if the listing doesn't say, ` +
     `"minAge": the youngest age it is meant for as a number, or null, ` +
     `"maxAge": the oldest age it is meant for as a number, or null, ` +
-    `"childFocus": "aimed" if it is put on for children, "allowed" if children may come ` +
+    `"childFocus": "aimed" if it is put on for children or for families with children, "allowed" if children may come ` +
     `but it is not aimed at them, "adults" if it is adults-only, or "" if the listing doesn't say, ` +
     `"booking": "required" if you must book ahead, "advised" if it sells out, ` +
     `"none" if you can turn up, or "" if the listing doesn't say}. ` +
@@ -8644,7 +8782,7 @@ ${(() => {
       // ones are worth more than twelve guesses", and the model did as it was
       // told. Breadth is the job here - the app filters afterwards, and an
       // event nobody lists is one nobody can go to.
-      `${SMALL_EVENT_APPETITE}\n\n` +
+      `${smallEventAppetite()}\n\n` +
       `${SMALL_EVENT_SOURCES}\n\n` +
       `Include something only if you have seen it listed with a date. Do not invent ` +
       `plausible-sounding events, and do not pad the list with permanent attractions - ` +
@@ -8653,9 +8791,14 @@ ${(() => {
       // model does the deciding - and the thing you would have got a sitter
       // for, or sent one parent to, never reaches you at all. The app can
       // say "past bedtime" on a row; it cannot un-hide what was never listed.
-      `Where two listings are equally good, prefer the one that suits the people above. ` +
-      `Do not leave anything out on those grounds though - something at an awkward ` +
-      `hour is still worth listing, and we will decide.\n\n` +
+      // Once a mode is chosen the opposite is wanted: the owner asked for
+      // kids mode to be kid-directed and adults mode adult-directed, and a
+      // list padded with the other kind was the complaint.
+      (tripMode()
+        ? `Leave out anything that does not suit who this is for.\n\n`
+        : `Where two listings are equally good, prefer the one that suits the people above. ` +
+          `Do not leave anything out on those grounds though - something at an awkward ` +
+          `hour is still worth listing, and we will decide.\n\n`) +
       // Four facts that decide whether a parent can actually go. An honest
       // blank is wanted where the listing does not say - a guess here is
       // worse than a gap, because the app prints these as findings.
@@ -8671,7 +8814,39 @@ ${(() => {
   // says so whether or not anything survived, which is the whole point. A
   // count that only appears when the search fails completely is no use to
   // somebody looking at six results wondering where the other thirty went.
-  const NO_DROPS = { unplaced: 0, undated: 0, outside: 0, tooFar: 0, finished: 0, merged: 0, offRoute: 0, adultsOnly: 0 };
+  const NO_DROPS = {
+    unplaced: 0, undated: 0, outside: 0, tooFar: 0, finished: 0, merged: 0, offRoute: 0,
+    adultsOnly: 0, notForChildren: 0, forChildren: 0,
+  };
+
+  // Whether an event belongs in this mode, and if not, which count it goes
+  // in. Kids mode keeps only what is for children: "aimed" (the contract
+  // counts family events as aimed), or a listing that did not say but shows
+  // it by its ages or its words. A lecture that merely allows children is
+  // not a kids' outing. Adults mode drops what is put on for children.
+  // No mode: only adults-only things go, and only when a child is coming.
+  const CHILD_EVENT_WORDS =
+    /\b(child|children|children's|kids?|kids'|family|families|toddlers?|bab(y|ies)|junior|puppet|storytime|story time|rhyme time|stay and play|messy play|soft play|teddy|pantomime|panto|half.term|fun day|santa|grotto|easter egg|nature tots|forest school|bouncy)\b/i;
+  function eventLooksForChildren(event) {
+    if (event.maxAge != null && event.maxAge <= 12) return true;
+    return CHILD_EVENT_WORDS.test(`${event.name || ""} ${event.what || ""}`);
+  }
+  function eventFitsMode(event) {
+    const m = tripMode();
+    const focus = event.childFocus || "";
+    if (m === "kids") {
+      if (focus === "adults") return "adultsOnly";
+      if (focus === "aimed") return "";
+      if (!focus && eventLooksForChildren(event)) return "";
+      return "notForChildren";
+    }
+    if (m === "adults") {
+      if (focus === "aimed") return "forChildren";
+      if (!focus && eventLooksForChildren(event)) return "forChildren";
+      return "";
+    }
+    return !showsAdults() && focus === "adults" ? "adultsOnly" : "";
+  }
   let eventsDropped = Object.assign({}, NO_DROPS);
   // The ones that can be shown anyway, with the reason attached. Something we
   // could not place is still a real listing with a name, a date and a link.
@@ -8993,6 +9168,8 @@ ${(() => {
         ? `${d.offRoute} turned out to be too far off the route`
         : "",
       d.adultsOnly ? `${d.adultsOnly} ${d.adultsOnly === 1 ? "was" : "were"} adults-only` : "",
+      d.notForChildren ? `${d.notForChildren} ${d.notForChildren === 1 ? "wasn't" : "weren't"} for children` : "",
+      d.forChildren ? `${d.forChildren} ${d.forChildren === 1 ? "was" : "were"} for children` : "",
       // Deliberately not counted here. A listing found by two angles and
       // merged into one row was not left out of anything - it is on the
       // screen. Saying "left out: 3 were the same thing found twice" reads
@@ -9276,8 +9453,9 @@ ${(() => {
         eventsDropped.finished++;
         return;
       }
-      if (!showsAdults() && event.childFocus === "adults") {
-        eventsDropped.adultsOnly = (eventsDropped.adultsOnly || 0) + 1;
+      const fit = eventFitsMode(event);
+      if (fit) {
+        eventsDropped[fit] = (eventsDropped[fit] || 0) + 1;
         return;
       }
       const id = eventFingerprint(event);
@@ -14035,7 +14213,10 @@ ${(() => {
     facts.push(days ? `Time available: ${days === 1 ? "one day" : `${days} days`}` : "Time available: a day out");
     const who = (b.who || whoDescription() || "").trim();
     if (who) facts.push(`Travellers: ${who}`);
-    if (settings.preferences.trim()) facts.push(`What matters to us: ${settings.preferences.trim()}`);
+    const prefs = preferencesForMode();
+    if (prefs) facts.push(`What matters to us: ${prefs}`);
+    const audience = audienceLine();
+    if (audience) facts.push(audience);
     if (b.interests.length) {
       // The category's own long phrasing is right for a single-category search
       // and wrong here: twelve of them turned the request into pages of
@@ -19799,6 +19980,10 @@ ${(() => {
   // anything.
   window.__tripTest = {
     ASSISTANTS,
+    audienceLine,
+    eventFitsMode,
+    anglePrompt,
+    categoryPrompt,
     movePlanItemTo,
     openBuildChooser,
     setMode,

@@ -10,16 +10,18 @@
 // word that only that search would ever use. If a rewrite does remove one,
 // this file is the single place it has to be fixed, and the assertion below
 // says so loudly rather than a suite quietly matching the wrong angle.
+// Each search is worded three ways - for everyone, for kids mode and for
+// adults mode - so each has a marker per wording it can be sent in.
 export const ANGLE_MARKERS = {
-  music: 'live music',
-  market: "farmers' markets",
-  family: 'things on for children',
-  arts: 'am-dram',
-  outdoors: 'sheepdog trials',
-  hall: 'beetle drives',
-  clubs: 'horticultural',
-  fetes: 'duck races',
-  oneoff: 'well dressings',
+  music: ['live music'],
+  market: ["farmers' markets", 'family food festivals'],
+  family: ['things on for children'],
+  arts: ['am-dram', 'magic shows'],
+  outdoors: ['sheepdog trials', 'pond dipping'],
+  hall: ['beetle drives', "children's discos", 'harvest suppers'],
+  clubs: ['horticultural', 'coding and science clubs'],
+  fetes: ['duck races', 'race nights'],
+  oneoff: ['well dressings', 'pumpkin picking'],
 };
 
 export const ANGLE_KEYS = Object.keys(ANGLE_MARKERS);
@@ -29,7 +31,7 @@ export const ANGLE_KEYS = Object.keys(ANGLE_MARKERS);
 // markers have stopped being distinctive, and silently picking the first would
 // hide that until a suite failed for an unrelated-looking reason.
 export function angleFromPrompt(prompt) {
-  const hits = ANGLE_KEYS.filter((k) => prompt.includes(ANGLE_MARKERS[k]));
+  const hits = ANGLE_KEYS.filter((k) => ANGLE_MARKERS[k].some((m) => prompt.includes(m)));
   if (hits.length > 1) throw new Error(`ambiguous angle markers: ${hits.join(', ')}`);
   return hits[0] || null;
 }
