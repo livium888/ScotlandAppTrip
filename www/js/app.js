@@ -8998,12 +8998,46 @@ ${(() => {
       `Anything you have not found listed must not be included.\n\n` +
       `Find ${anglePrompt(angle.key)} ${when}, ${where}.\n${rules}\n` +
       (who.length ? `${who.join("\n")}\n` : "") +
-      `\nLeave a field empty rather than guessing. ${sessionContract(angle)}`
+      `\n${sessionContract(angle)}`
     );
   }
 
   // The fields a session kind answers with, said once.
-  function sessionContract(angle) {
+  // Why the answer is asked for as lines of text rather than JSON. On the
+  // Gemini 3 flash models, asking for JSON - even only in the wording of the
+  // question - silently switches Google Search off: the request succeeds,
+  // there is no error, and the model answers from memory
+  // (google-gemini/cookbook#1274: JSON grounded 0 of 5 times, prose 5 of 5).
+  // A trace from a real phone showed exactly that: gemini-3.8-flash, twenty
+  // seconds, "searched the web: NO". So the search is asked for in plain
+  // text, one listing per line with labelled fields, and the phone reads the
+  // lines itself - no second request to turn them into data.
+  function lineFormat(fields) {
+    return (
+      `Answer as a plain list, one listing per line, each line starting with "- " and ` +
+      `giving these as "label: value" separated by "; " - ${fields}. Leave out a label ` +
+      `the listing does not state rather than guessing. No other text before or after the list.`
+    );
+  }
+
+  const EVENT_LINE_FIELDS =
+    `name; venue; town; date (YYYY-MM-DD); end date (YYYY-MM-DD, if it runs over several days); ` +
+    `time (HH:MM start); end time (HH:MM); setting (indoor, outdoor or both); ages (e.g. 2-4, 8+); ` +
+    `for children (aimed if put on for children or families, allowed, or adults if adults-only); ` +
+    `price (free, £, ££ or £££); booking (required, advised or none); tickets (booking URL); ` +
+    `link (the page it is listed on); weekly (yes if it happens every week); what (a few words, last)`;
+
+  function sessionContract(angle, asJson) {
+    if (!asJson) {
+      return lineFormat(
+        `name; venue; town; date (YYYY-MM-DD, the first day in these dates it is on there); ` +
+          `end date (the last such day); times (that first day's times, HH:MM, comma-separated); ` +
+          (angle.key === "films" ? `rating (U, PG, 12A, 15 or 18); ` : `ages (e.g. 2-4, 8+); `) +
+          (angle.key === "theatre" ? `setting (indoor or outdoor); ` : "") +
+          `for children (aimed, allowed or adults); price (free, £, ££ or £££); ` +
+          `booking (required, advised or none); tickets (booking URL); link (the page it is listed on); what (a few words, last)`
+      );
+    }
     const film = angle.key === "films";
     const fields =
       `{"name", "venue", "area": the town, "date": "YYYY-MM-DD" the first day in these dates it is on there, ` +
@@ -9085,7 +9119,7 @@ ${(() => {
       `rather than guessing: whether it is indoors or outdoors, what ages it is for, ` +
       `whether it is aimed at children, merely allows them or is adults-only, and whether it has to be ` +
       `booked in advance.\n\n` +
-      EVENT_JSON_CONTRACT
+      lineFormat(EVENT_LINE_FIELDS)
     );
   }
 
@@ -9522,7 +9556,10 @@ ${(() => {
     let answer = null;
     let error = "";
     const watch = (text) => {
-      const names = partialListings(text).map((x) => String((x && x.name) || "").trim()).filter(Boolean);
+      const fromLines = parseListingLines(text, true);
+      const names = (fromLines.length ? fromLines : partialListings(text))
+        .map((x) => String((x && x.name) || "").trim())
+        .filter(Boolean);
       const live = (eventSearch.live || {})[angle.key];
       if (!live || names.length !== live.names.length) liveStage(angle.key, "writing", { names });
     };
@@ -9586,7 +9623,8 @@ ${(() => {
       };
     }
 
-    let list = extractJson(answer.text);
+    let list = parseListingLines(answer.text);
+    if (!list.length) list = extractJson(answer.text);
     if (!(Array.isArray(list) && list.length) && (answer.text || "").trim().length > 40) {
       liveStage(angle.key, "tidying");
       traceKind(angle.key, { rewritten: true });
@@ -9607,6 +9645,60 @@ ${(() => {
       angle: angle.key,
       error: error || (Array.isArray(list) ? "" : "The search answered, but not in a form that could be read."),
     };
+  }
+
+  // One listing per line, "label: value; label: value", read into the same
+  // shape the JSON answers had, so everything after this is unchanged.
+  // Only whole lines are read: a line still being written is left for later.
+  const LINE_LABELS = {
+    name: "name", title: "name", film: "name", show: "name",
+    venue: "venue", cinema: "venue", place: "venue",
+    town: "area", area: "area", village: "area",
+    date: "date", "first date": "date", "start date": "date",
+    "end date": "endDate", "last date": "endDate", until: "endDate",
+    time: "time", "start time": "time", "end time": "endTime", times: "times", "showing times": "times",
+    setting: "setting", ages: "ages", age: "ages", rating: "rating", "bbfc rating": "rating",
+    "for children": "childFocus", children: "childFocus",
+    price: "price", booking: "booking", tickets: "tickets", link: "link", source: "link",
+    weekly: "weekly", what: "what", description: "what",
+  };
+
+  function parseListingLines(text, wholeOnly) {
+    const lines = String(text || "").split(/\r?\n/);
+    if (wholeOnly && !/\n$/.test(String(text || ""))) lines.pop();
+    const out = [];
+    lines.forEach((raw) => {
+      const line = raw.replace(/^\s*(?:[-*•]|\d+[.)])\s+/, "");
+      if (line === raw && !/^\s*name\s*:/i.test(raw)) return;
+      const item = {};
+      // Split on "; " only where a known label follows, so a semicolon inside
+      // a description does not break the line apart.
+      line.split(/;\s*(?=[A-Za-z][A-Za-z ]{1,20}:)/).forEach((part) => {
+        const m = /^\s*\**([A-Za-z][A-Za-z ]{0,20}?)\**\s*:\s*(.*)$/.exec(part);
+        if (!m) return;
+        const key = LINE_LABELS[m[1].toLowerCase().trim()];
+        const value = m[2].replace(/\**$/, "").trim();
+        if (!key || !value || /^(n\/?a|none given|unknown|not stated|-)$/i.test(value)) return;
+        item[key] = value;
+      });
+      if (!item.name) return;
+      if (item.times) item.times = item.times.split(/[,/]|\band\b/).map((t) => t.trim()).filter(Boolean);
+      if (item.ages) {
+        const a = /(\d+)\s*(?:-|–|to)\s*(\d+)/.exec(item.ages);
+        const plus = /(\d+)\s*\+/.exec(item.ages);
+        const under = /under\s*(\d+)/i.exec(item.ages);
+        if (a) { item.minAge = Number(a[1]); item.maxAge = Number(a[2]); }
+        else if (plus) item.minAge = Number(plus[1]);
+        else if (under) item.maxAge = Number(under[1]) - 1;
+        delete item.ages;
+      }
+      if (item.childFocus) item.childFocus = (/aimed|allowed|adults/i.exec(item.childFocus) || [""])[0].toLowerCase();
+      if (item.booking) item.booking = (/required|advised|none/i.exec(item.booking) || [""])[0].toLowerCase();
+      if (item.weekly) item.recurring = /^y/i.test(item.weekly);
+      if (item.link && /^https?:/i.test(item.link) && !item.tickets) item.tickets = "";
+      out.push(item);
+    });
+    return out;
   }
 
   // The listings finished so far in an answer still being written: every
@@ -9664,7 +9756,7 @@ ${(() => {
     return (
       `Below is what a web search found. Rewrite it as data. Use ONLY what the text says: ` +
       `do not add events, do not correct anything, and leave a field empty rather than ` +
-      `guessing.\n\n${angle.session ? sessionContract(angle) : EVENT_JSON_CONTRACT}\n\nText:\n${String(text).slice(0, 24000)}`
+      `guessing.\n\n${angle.session ? sessionContract(angle, true) : EVENT_JSON_CONTRACT}\n\nText:\n${String(text).slice(0, 24000)}`
     );
   }
 
@@ -21196,6 +21288,7 @@ ${(() => {
   // anything.
   window.__tripTest = {
     ASSISTANTS,
+    parseListingLines,
     scoreSearchModel,
     traceText: () => traceText(loadTrace()),
     recentEventSearches,

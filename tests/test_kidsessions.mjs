@@ -122,7 +122,7 @@ await page.waitForTimeout(1200);
 const found = await page.evaluate(() => (window.__tripTest.eventResults || []).map((e) => e.name).sort());
 check('one request, for swimming sessions', prompts.length === 1 && angleFromPrompt(prompts[0]) === 'swim', `${prompts.length}`);
 check('asking for session times and the ages each is for', /session times/.test(prompts[0] || '') &&
-  /"minAge" and "maxAge"/.test(prompts[0] || ''));
+  /ages \(e\.g\./.test(prompts[0] || '') && !/JSON/.test(prompts[0] || ''));
 check('for a five-year-old: the family swim, and the unlabelled fun session it was asked for',
   JSON.stringify(found) === JSON.stringify(['Family Swim', 'Inflatable Fun Session']), JSON.stringify(found));
 check('not the squad taster for eights and up, the toddler splash, or the adult lanes',

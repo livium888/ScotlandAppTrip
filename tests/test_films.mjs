@@ -142,7 +142,10 @@ let found = await runSearch();
 const filmPrompt = prompts.find((p) => angleFromPrompt(p) === 'films') || '';
 check('only the films request is made', prompts.length === 1 && !!filmPrompt, `${prompts.length} prompts`);
 check('and it asks for the chosen ratings', /Only films rated 12A or 15 by the BBFC/.test(filmPrompt), filmPrompt.slice(0, 300));
-check('with every showing time, one row per film per cinema', /"times"/.test(filmPrompt) && /once per cinema/.test(filmPrompt));
+check('with every showing time, one row per film per cinema', /times \(/.test(filmPrompt) && /once per cinema/.test(filmPrompt));
+// Asked for as lines of text, never JSON: on the Gemini 3 flash models,
+// asking for JSON silently switches Google Search off.
+check('asked for as lines of text, not JSON', /one listing per line/.test(filmPrompt) && !/JSON/.test(filmPrompt));
 check('and never R18', /Nothing rated R18/.test(filmPrompt));
 // A question about cinema times is about cinema times: none of the
 // four-thousand-character small-events brief, which cost tokens and pulled
@@ -226,7 +229,7 @@ check('including children\'s plays, and drama sessions a child can join',
 check('which the way in says too', /Children's plays/.test(await page.evaluate(() =>
   document.querySelector('[data-find="theatre"]')?.textContent || '')),
   await page.evaluate(() => document.querySelector('[data-find="theatre"]')?.textContent.replace(/\s+/g, ' ') || 'no row'));
-check('with performance times and age guidance', /"times"/.test(theatrePrompt) && /"minAge"/.test(theatrePrompt));
+check('with performance times and age guidance', /times \(/.test(theatrePrompt) && /ages \(/.test(theatrePrompt));
 check('a five-year-old gets The Gruffalo, not Matilda (8+) or Macbeth',
   JSON.stringify(found) === JSON.stringify(['The Gruffalo @ Church Hill Theatre']), JSON.stringify(found));
 check('and the screen says a show was for older children', /for older children/.test(await view()), (await view()).slice(-300));

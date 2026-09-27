@@ -219,6 +219,35 @@ check('and why this one was used, lite in Settings included', /Why this model: t
   (tr.match(/Why this model:.*/) || [''])[0]);
 await page.evaluate(() => document.querySelector('#placeModal .modal-close')?.click());
 
+// ---------- 6c. Lines of text, read on the phone ----------
+// Asking for JSON switches Google Search off on the Gemini 3 flash models
+// (google-gemini/cookbook#1274), which is what the second trace from the
+// phone showed. The search is asked for as labelled lines instead, and the
+// phone reads them itself: one request, no second one to reformat.
+await seed();
+const LINES = [
+  `- name: Mini Music Makers; venue: Emsworth Community Centre; town: Emsworth; date: ${day}; time: 09:40; ages: 2-4; for children: aimed; price: £; booking: required; link: https://educationthroughmusic.net; what: Early years music; movement and song`,
+  `- name: Folk Evening; venue: Town Hall; town: Bakewell; date: ${day}; time: 19:30; price: ££; weekly: yes`,
+  '- name: Half-written line; venue: Somewh',
+].join('\n');
+behaviour = ({ grounded }) => grounded ? { text: LINES, gm: GM } : { text: '[]' };
+await searchOne('hall');
+check('no event question asks for JSON', requests.every((r) => !r.grounded || !/JSON/.test(r.prompt)),
+  (requests[0] || {}).prompt?.slice(-300));
+check('the lines are read on the phone, with no second request', requests.length === 1, `${requests.length} requests`);
+const parsed = await page.evaluate((t) => window.__tripTest.parseListingLines(t, true), LINES);
+check('while it streams, every complete line becomes a listing and the half-written one waits',
+  JSON.stringify(parsed.map((x) => x.name)) === JSON.stringify(['Mini Music Makers', 'Folk Evening']), JSON.stringify(parsed.map((x) => x.name)));
+const mm = parsed[0] || {};
+check('with its time, ages and booking read correctly', mm.time === '09:40' && mm.minAge === 2 && mm.maxAge === 4 && mm.booking === 'required' && mm.childFocus === 'aimed',
+  JSON.stringify(mm));
+check('a semicolon inside the description does not break the line', /movement and song/.test(mm.what || ''), mm.what);
+check('and "weekly: yes" is a weekly event', (parsed[1] || {}).recurring === true);
+// This search is in adults mode, so the children's class is filtered out
+// and the evening is shown - the lines feed the same filters as before.
+check('and they go through the same filters: in adults mode, the evening is shown and the toddler class is not',
+  JSON.stringify(await names()) === JSON.stringify(['Folk Evening']), JSON.stringify(await names()));
+
 // ---------- 7. Neither searched: nothing shown, and said plainly ----------
 await seed();
 behaviour = ({ grounded }) => grounded ? { text: JSON.stringify([listing('Remembered Gala')]) } : { text: '[]' };

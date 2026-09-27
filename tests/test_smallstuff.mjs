@@ -218,7 +218,7 @@ check('but the app still adds where to look',
   prompts.some((p) => /parish magazines and community newsletters/.test(p) &&
     /Bakewell Bugle/.test(p)));
 check('and the formatting rules survive the edit',
-  prompts.every((p) => /ONLY a JSON array/.test(p)));
+  prompts.every((p) => /one listing per line/.test(p) && !/JSON/.test(p)));
 check('and the villages do too', prompts.some((p) => /Ashford-in-the-Water/.test(p)));
 await openWhatSheet(page);
 check('an edited search is marked in the list', await page.evaluate(() =>
