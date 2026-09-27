@@ -15,7 +15,7 @@
 // mixed into a list of permanent places where the one thing that matters
 // about them — when — had nowhere to sit.
 import { chromium } from 'playwright';
-import { ANGLE_MARKERS, angleFromPrompt, ANGLE_KEYS } from './lib/angles.mjs';
+import { ANGLE_MARKERS, angleFromPrompt, ANGLE_KEYS, EVERYTHING_KEYS } from './lib/angles.mjs';
 import { chooseKind, chooseWhen, closeAskSheet, openAnglePencils, openEventForm, openWhatSheet, openWhenSheet } from './lib/screens.mjs';
 import fs from 'node:fs';
 const SANDBOX_CHROMIUM = '/opt/pw-browsers/chromium';
@@ -168,8 +168,8 @@ await searchDone();
 
 const anglesAsked = new Set(promptsSeen.map(angleFromPrompt).filter(Boolean));
 check('it asks one question per kind rather than one general one',
-  anglesAsked.size === ANGLE_KEYS.length,
-  `${anglesAsked.size} of ${ANGLE_KEYS.length}: ${[...anglesAsked].join(',')}`);
+  anglesAsked.size === EVERYTHING_KEYS.length && !anglesAsked.has('films'),
+  `${anglesAsked.size} of ${EVERYTHING_KEYS.length}: ${[...anglesAsked].join(',')}`);
 check('and no longer tells the model to hold back',
   promptsSeen.every((p) => !/worth more than twelve guesses|Leave out anything/.test(p)));
 check('it asks for breadth instead', promptsSeen.every((p) => /better answer than five/.test(p)));

@@ -13,7 +13,7 @@
 // deduped identically. Pasting is a different way in, not a lower standard -
 // but it arrives with no page to click through to, so it says so.
 import { chromium } from 'playwright';
-import { ANGLE_KEYS } from './lib/angles.mjs';
+import { EVERYTHING_KEYS } from './lib/angles.mjs';
 import fs from 'node:fs';
 const SANDBOX_CHROMIUM = '/opt/pw-browsers/chromium';
 const LAUNCH_OPTS = fs.existsSync(SANDBOX_CHROMIUM) ? { executablePath: SANDBOX_CHROMIUM } : {};
@@ -96,8 +96,8 @@ const prompt = await valueOf('handoffPrompt');
 // One question, not nine: doing this nine times by hand is the thing being
 // avoided.
 check('the prompt covers every kind in one go',
-  ANGLE_KEYS.every((k) => prompt.length > 0) && /Cover all of these/.test(prompt), prompt.slice(0, 200));
-check('naming all nine', (prompt.match(/^- /gm) || []).length === ANGLE_KEYS.length,
+  EVERYTHING_KEYS.every((k) => prompt.length > 0) && /Cover all of these/.test(prompt), prompt.slice(0, 200));
+check('naming all nine - films are only searched when picked', (prompt.match(/^- /gm) || []).length === EVERYTHING_KEYS.length,
   String((prompt.match(/^- /gm) || []).length));
 check('it carries the villages, like the app\'s own search does',
   /Ashford-in-the-Water/.test(prompt), prompt.slice(0, 300));

@@ -14,7 +14,7 @@
 // fast searches are on screen while the slow one is still thinking. It cannot
 // pass by accident, and it could not pass at all before this change.
 import { chromium } from 'playwright';
-import { ANGLE_MARKERS, angleFromPrompt, ANGLE_KEYS } from './lib/angles.mjs';
+import { ANGLE_MARKERS, angleFromPrompt, ANGLE_KEYS, EVERYTHING_KEYS } from './lib/angles.mjs';
 import { chooseWhen } from './lib/screens.mjs';
 import fs from 'node:fs';
 const SANDBOX_CHROMIUM = '/opt/pw-browsers/chromium';
@@ -165,7 +165,7 @@ check('including one that has been placed on the map, not just listed',
 const progress = await page.evaluate(() =>
   Array.from(document.querySelectorAll('.ev-angle')).map((e) => e.textContent.replace(/\s+/g, ' ').trim()));
 check('each search is named while it runs, with where it has got to',
-  progress.length === ANGLE_KEYS.length && progress.some((t) => /Music & nightlife/.test(t)),
+  progress.length === EVERYTHING_KEYS.length && progress.some((t) => /Music & nightlife/.test(t)),
   JSON.stringify(progress));
 check('and says how many have been found so far', /so far/.test(await screen()), (await screen()).slice(0, 400));
 check('with a way to stop and keep them', await page.evaluate(() => !!document.getElementById('evStop')));

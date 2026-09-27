@@ -12,6 +12,7 @@
 // narrowing before searching saves real money. They stay a choice made
 // before the search - they just stop being nine chips on the front page.
 import { chromium } from 'playwright';
+import { ANGLE_KEYS } from './lib/angles.mjs';
 import { goTo, openEventForm, openWhatSheet, openWhenSheet, openWhereSheet } from './lib/screens.mjs';
 import fs from 'node:fs';
 const SANDBOX_CHROMIUM = '/opt/pw-browsers/chromium';
@@ -107,7 +108,7 @@ check('when still offers every window', await countOf('#placeModal [data-ev-when
 await closeSheet();
 
 await openWhatSheet(page);
-check('what still offers all nine kinds', await countOf('#placeModal [data-ev-kind]') === 9,
+check('what still offers every kind, films included', await countOf('#placeModal [data-ev-kind]') === ANGLE_KEYS.length,
   String(await countOf('#placeModal [data-ev-kind]')));
 // The reason narrowing exists at all, finally with room to be said.
 check('and explains that narrowing saves requests', /request/i.test(await sheetText()),
@@ -133,12 +134,12 @@ check('no prompt editors on the form', await countOf('.ev-ask [data-ev-tune]') =
 await openWhatSheet(page);
 check('nor in the What sheet', await countOf('#placeModal [data-ev-tune]') === 0);
 await closeSheet();
-check('they are in Settings instead', await page.evaluate(async () => {
+check('they are in Settings instead', await page.evaluate(async (n) => {
   if (!window.__tripTest || !window.__tripTest.openSettings) return false;
   window.__tripTest.openSettings();
   await new Promise((r) => setTimeout(r, 400));
-  return document.querySelectorAll('[data-ev-tune]').length === 9;
-}));
+  return document.querySelectorAll('[data-ev-tune]').length === n;
+}, ANGLE_KEYS.length));
 
 await browser.close();
 console.log(failures ? `\n${failures} FAILED` : '\nAll checks passed');

@@ -232,6 +232,9 @@
       // app shows everything exactly as it did before modes existed - by the
       // owner's explicit choice it never guesses from who is travelling.
       mode: stored.mode === "kids" || stored.mode === "adults" ? stored.mode : "",
+      // Film ratings chosen per mode ("kids", "adults", "any"). Empty means
+      // each mode's own default.
+      filmRatings: stored.filmRatings && typeof stored.filmRatings === "object" ? stored.filmRatings : {},
       aiProvider: stored.aiProvider || "gemini",
       aiBaseUrl: stored.aiBaseUrl || "",
       aiModel: stored.aiModel || "",
@@ -4029,7 +4032,7 @@
             <div class="settings-divider"></div>
             <label class="settings-label">What each search asks for</label>
             <p class="settings-hint">
-              Finding what's on runs ${EVENT_ANGLES.length} separate searches, each looking for a
+              Finding what's on runs ${defaultAngles().length} separate searches (and one each for films and theatre, when you pick them), each looking for a
               different kind of thing. This is the wording each one uses. It is worth
               editing when you know something the app cannot guess — the actual name of a
               village newsletter, a listings site you happen to read. A search you have
@@ -8377,6 +8380,13 @@ ${(() => {
       childFocus: /^(aimed|allowed|adults)$/i.test(String(item.childFocus || "").trim())
         ? String(item.childFocus).trim().toLowerCase()
         : "",
+      // Films only. An unknown rating is a blank, never a guess - the filter
+      // decides what a blank means in each mode.
+      filmRating: filmRatingWord(item.rating),
+      showtimes: (Array.isArray(item.times) ? item.times : [])
+        .map((x) => String(x || "").trim())
+        .filter((x) => /^\d{1,2}:\d{2}$/.test(x))
+        .slice(0, 12),
       bookingLevel: /^(required|advised|none)$/i.test(String(item.booking || "").trim())
         ? String(item.booking).trim().toLowerCase()
         : "",
@@ -8401,7 +8411,7 @@ ${(() => {
   const EVENT_FIELDS = [
     "startsAt", "endsAt", "time", "endTime", "venue", "price", "ticketUrl",
     "recurring", "approximate", "setting", "minAge", "maxAge", "childFocus",
-    "bookingLevel", "booking",
+    "bookingLevel", "booking", "filmRating", "showtimes", "film", "showing",
     // Google's own id for the venue, once one has been found. Without it here
     // the exact link would be dropped by the same list that already lost
     // endsAt and approximate once.
@@ -8591,6 +8601,34 @@ ${(() => {
     // else are exactly the ones a tidy set of categories loses. The old
     // catch-all was doing this job badly while also covering halls, clubs and
     // fetes; with those three taken off it, it can do only this.
+    // Films are searched only when asked for. A week of cinema listings for
+    // a city is hundreds of showings, and folded into "everything" it would
+    // bury the village fete and double what a search costs.
+    { key: "films", label: "Films", onlyWhenPicked: true,
+      ask: "films showing at cinemas - chain, independent and community cinemas, film society " +
+           "screenings, outdoor and pop-up screenings. One entry per film per cinema, with that " +
+           "day's showing times and its BBFC rating",
+      kidsAsk: "films for children and families showing at cinemas - new family releases, kids' " +
+               "club and weekend morning screenings, relaxed and autism-friendly screenings, " +
+               "outdoor family screenings. One entry per film per cinema, with that day's showing " +
+               "times and its BBFC rating",
+      adultsAsk: "films showing at cinemas - new releases, independent and arthouse cinemas, film " +
+                 "society screenings, classics and re-releases, Q&A and preview screenings, outdoor " +
+                 "screenings. One entry per film per cinema, with that day's showing times and its BBFC rating" },
+    // The theatre, with the same shape as films: one row per show per venue,
+    // with its performance times, searched only when picked. "Arts &
+    // theatre" still catches the am-dram night among everything else; this
+    // is for when a show is what you are going out for.
+    { key: "theatre", label: "Theatre & shows", onlyWhenPicked: true,
+      ask: "plays, musicals, pantomime, comedy, dance, opera and ballet, children's theatre, " +
+           "touring productions and amateur dramatics at theatres, arts centres and halls. One entry per " +
+           "show per venue, with that day's performance times and the age guidance the venue gives",
+      kidsAsk: "shows for children and families - children's theatre, pantomime, puppet shows, family " +
+               "musicals, circus and storytelling shows, relaxed performances. One entry per " +
+               "show per venue, with that day's performance times and the age guidance the venue gives",
+      adultsAsk: "plays, musicals, comedy, dance, opera and ballet, new writing, fringe and touring " +
+                 "productions, amateur dramatics. One entry per show per venue, with that day's performance times " +
+                 "and the age guidance the venue gives" },
     { key: "oneoff", label: "Seasonal & one-off",
       ask: "the odd one-off things that fit no category - wassails, well dressings, " +
            "beating the bounds, lantern parades, bonfire and firework nights, light switch-ons, " +
@@ -8702,7 +8740,7 @@ ${(() => {
       // All nine at once. The app asks these separately because it can afford
       // to; by hand, one question that names every kind is the whole point.
       `Cover all of these:\n` +
-      modeAngles().map((a) => `- ${a.label}: ${anglePrompt(a.key)}`).join("\n") +
+      defaultAngles().map((a) => `- ${a.label}: ${anglePrompt(a.key)}`).join("\n") +
       `${aiContextBlock()}\n\n` +
       `${smallEventAppetite()}\n\n` +
       `${SMALL_EVENT_SOURCES}\n\n` +
@@ -8777,7 +8815,7 @@ ${(() => {
           `something that finishes before then is no use, but something that runs across it is.`
         : "") +
       `\n\n` +
-      `Specifically: ${anglePrompt(angle.key)}.${who}\n\n` +
+      `Specifically: ${anglePrompt(angle.key)}.${filmClause(angle)}${who}\n\n` +
       // The old prompt said "leave out anything you cannot confirm; six real
       // ones are worth more than twelve guesses", and the model did as it was
       // told. Breadth is the job here - the app filters afterwards, and an
@@ -8816,7 +8854,7 @@ ${(() => {
   // somebody looking at six results wondering where the other thirty went.
   const NO_DROPS = {
     unplaced: 0, undated: 0, outside: 0, tooFar: 0, finished: 0, merged: 0, offRoute: 0,
-    adultsOnly: 0, notForChildren: 0, forChildren: 0,
+    adultsOnly: 0, notForChildren: 0, forChildren: 0, ratedOut: 0, unrated: 0, tooOld: 0,
   };
 
   // Whether an event belongs in this mode, and if not, which count it goes
@@ -8834,8 +8872,23 @@ ${(() => {
   function eventFitsMode(event) {
     const m = tripMode();
     const focus = event.childFocus || "";
+    // A film is judged by its rating, which is what the rating is for. A U
+    // film is a kids' outing whatever "childFocus" the model guessed; a film
+    // outside the ratings you chose is out whatever mode this is.
+    if (event.film) {
+      if (event.filmRating && !chosenFilmRatings().includes(event.filmRating)) return "ratedOut";
+      if (!event.filmRating && m === "kids") return "unrated";
+      if (m === "adults" && focus === "aimed") return "forChildren";
+      return "";
+    }
     if (m === "kids") {
       if (focus === "adults") return "adultsOnly";
+      // A show says who it is for in years. Pitched above the youngest child
+      // coming, it is not a family outing, however "aimed" it is.
+      if (event.showing && event.minAge != null) {
+        const ages = childrenOnTrip().map((c) => c.age).filter((a) => a != null);
+        if (ages.length && event.minAge > Math.min(...ages)) return "tooOld";
+      }
       if (focus === "aimed") return "";
       if (!focus && eventLooksForChildren(event)) return "";
       return "notForChildren";
@@ -8859,7 +8912,10 @@ ${(() => {
       .toLowerCase()
       .replace(/^(the|a)\s+/, "")
       .replace(/[^a-z0-9]+/g, "");
-    return `${name}|${String(event.startsAt || "").slice(0, 10)}`;
+    // Two cinemas in one town showing the same film are two rows: the town
+    // match that merges a market found twice would fold them into one.
+    const at = event.film || event.showing ? `|${String(event.venue || "").toLowerCase().replace(/[^a-z0-9]+/g, "")}` : "";
+    return `${name}|${String(event.startsAt || "").slice(0, 10)}${at}`;
   }
 
   // ---------- Can we actually go? ----------
@@ -9170,6 +9226,9 @@ ${(() => {
       d.adultsOnly ? `${d.adultsOnly} ${d.adultsOnly === 1 ? "was" : "were"} adults-only` : "",
       d.notForChildren ? `${d.notForChildren} ${d.notForChildren === 1 ? "wasn't" : "weren't"} for children` : "",
       d.forChildren ? `${d.forChildren} ${d.forChildren === 1 ? "was" : "were"} for children` : "",
+      d.ratedOut ? `${d.ratedOut} ${d.ratedOut === 1 ? "film was" : "films were"} rated outside your choice` : "",
+      d.unrated ? `${d.unrated} ${d.unrated === 1 ? "film had" : "films had"} no rating given` : "",
+      d.tooOld ? `${d.tooOld} ${d.tooOld === 1 ? "show was" : "shows were"} for older children` : "",
       // Deliberately not counted here. A listing found by two angles and
       // merged into one row was not left out of anything - it is on the
       // screen. Saying "left out: 3 were the same thing found twice" reads
@@ -9453,6 +9512,14 @@ ${(() => {
         eventsDropped.finished++;
         return;
       }
+      if (answer.angle === "films" || answer.angle === "theatre") {
+        event.showing = true;
+        if (answer.angle === "films") event.film = true;
+        // A cinema is indoors; "indoors or out, not sure" on a film is noise.
+        // A play may well be open-air, so it keeps what the listing said.
+        if (answer.angle === "films" && !event.setting) event.setting = "indoor";
+        if (!event.time && event.showtimes.length) event.time = event.showtimes[0];
+      }
       const fit = eventFitsMode(event);
       if (fit) {
         eventsDropped[fit] = (eventsDropped[fit] || 0) + 1;
@@ -9691,7 +9758,9 @@ ${(() => {
         }
         ${time}
         <div class="ev-main">
-          <div class="ev-name">${esc(e.name)}${runs}</div>
+          <div class="ev-name">${
+            e.filmRating ? `<span class="rating-badge rating-${esc(e.filmRating.toLowerCase())}" aria-label="Rated ${esc(e.filmRating)}">${esc(e.filmRating)}</span> ` : ""
+          }${esc(e.name)}${runs}</div>
           ${where ? `<div class="ev-where">${esc(where)}</div>` : ""}
           ${
             // Only on a journey. "2 miles off the route" is the number that
@@ -9705,6 +9774,14 @@ ${(() => {
               ? `<div class="ev-detour">couldn't place this one — it may not be on your way</div>`
               : ""
           }
+          ${
+            e.showtimes && e.showtimes.length > 1
+              ? `<div class="ev-showtimes">${e.showtimes.map((x) => `<span>${esc(x)}</span>`).join("")}${
+                  e.endsAt ? `<span class="ev-showtimes-note">times for ${esc(humanDate(new Date(e.startsAt)))} — check other days</span>` : ""
+                }</div>`
+              : ""
+          }
+          ${e.film && !e.filmRating ? `<div class="ev-tags"><span class="ev-tag soft">rating not given</span></div>` : ""}
           ${e.description ? `<div class="ev-what">${esc(e.description)}</div>` : ""}
           ${
             verdict
@@ -9849,7 +9926,7 @@ ${(() => {
           <button class="modal-close" data-close="1" aria-label="Close">${icon("close", { size: 17, cls: "ico-inline" })}</button>
           <div class="modal-body">
             <h2 class="modal-title">Ask somewhere else</h2>
-            <div class="modal-subtitle">One question covering all ${EVENT_ANGLES.length} kinds, for ${esc(
+            <div class="modal-subtitle">One question covering all ${defaultAngles().length} kinds, for ${esc(
               centre.name
             )}</div>
 
@@ -10277,7 +10354,7 @@ ${(() => {
   }
 
   function whatAnswer() {
-    if (!eventSearch.kinds.length) return `Everything (${modeAngles().length} kinds)`;
+    if (!eventSearch.kinds.length) return `Everything (${defaultAngles().length} kinds)`;
     const names = EVENT_ANGLES.filter((a) => eventSearch.kinds.includes(a.key)).map((a) => a.label);
     return names.length <= 2 ? names.join(", ") : `${names.length} kinds`;
   }
@@ -10303,6 +10380,13 @@ ${(() => {
         const i = eventSearch.kinds.indexOf(key);
         if (i >= 0) eventSearch.kinds.splice(i, 1);
         else eventSearch.kinds.push(key);
+        redraw();
+      })
+    );
+
+    root.querySelectorAll("[data-film-rating]").forEach((b) =>
+      b.addEventListener("click", () => {
+        toggleFilmRating(b.getAttribute("data-film-rating"));
         redraw();
       })
     );
@@ -10617,6 +10701,7 @@ ${(() => {
           }" data-ev-kind="${esc(a.key)}">${esc(a.label)}</button>`;
         }).join("")}
       </div>
+      ${eventSearch.kinds.includes("films") ? renderRatingChips() : ""}
       ${
         eventSearch.kinds.length
           ? `<button class="link-btn" id="evAllKinds">Search everything again</button>`
@@ -10625,10 +10710,10 @@ ${(() => {
       <p class="settings-hint">
         ${
           eventSearch.kinds.length
-            ? `${eventSearch.kinds.length} of ${EVENT_ANGLES.length} picked — that is ${
+            ? `${eventSearch.kinds.length} picked — that is ${
                 eventSearch.kinds.length
-              } request${eventSearch.kinds.length === 1 ? "" : "s"} to the model rather than ${EVENT_ANGLES.length}.`
-            : `All ${EVENT_ANGLES.length} at once — ${EVENT_ANGLES.length} requests — which is how it finds the coffee morning as well as the festival.`
+              } request${eventSearch.kinds.length === 1 ? "" : "s"} to the model rather than ${defaultAngles().length}.`
+            : `All ${defaultAngles().length} at once — ${defaultAngles().length} requests. Films and theatre are searched only when you pick them.`
         }
         Each kind is one request to the model, so this is the only choice in the app that
         changes what a search costs. Tap any to narrow it.
@@ -10941,14 +11026,24 @@ ${(() => {
       // a genuinely quiet week and a village that only posts to a group look
       // identical - and the difference decides whether you go looking
       // elsewhere or assume the app is broken.
+      // Said about the search that was actually run: "nine searches through
+      // parish newsletters" under a list of cinema times was wrong twice.
+      const ran = anglesForSearch();
+      const filmsOnly = ran.length === 1 && (ran[0].key === "films" || ran[0].key === "theatre");
       html += `<p class="settings-hint ev-caveat">${icon("info", {
         size: 14,
         cls: "ico-inline",
-      })} Nine searches, through parish newsletters, hall and church pages, council and library
-         listings, clubs and the small ticketing sites. Closed Facebook groups and Instagram
-         can't be searched by anything — if you know about something from there,
-         <button class="link-btn" id="evAddByHand">add it by hand</button> and it gets a pin,
-         a day and reminders like the rest.</p>`;
+      })}<span>${
+        filmsOnly
+          ? ran[0].key === "films"
+            ? `From cinema listings on the web. Showing times change — check with the cinema before you go.`
+            : `From theatre and venue listings on the web. Times and availability change — check with the venue before you go.`
+          : `${ran.length} search${ran.length === 1 ? "" : "es"}, through parish newsletters, hall and church pages,
+             council and library listings, clubs and the small ticketing sites. Closed Facebook groups and
+             Instagram can't be searched by anything — if you know about something from there,
+             <button class="link-btn" id="evAddByHand">add it by hand</button> and it gets a pin,
+             a day and reminders like the rest.`
+      }</span></p>`;
     }
 
     if (upcoming.length) {
@@ -10988,6 +11083,22 @@ ${(() => {
           </span>
           ${icon("forward", { size: 16, cls: "more-row-go" })}
         </button>
+        <button class="more-row" data-find="films">
+          <span class="more-row-ico">${icon("film", { size: 20 })}</span>
+          <span class="more-row-main">
+            <span class="more-row-title">At the cinema</span>
+            <span class="more-row-meta">Films on near you, rated ${esc(chosenFilmRatings().join(", "))}</span>
+          </span>
+          ${icon("forward", { size: 16, cls: "more-row-go" })}
+        </button>
+        <button class="more-row" data-find="theatre">
+          <span class="more-row-ico">${icon("events", { size: 20 })}</span>
+          <span class="more-row-main">
+            <span class="more-row-title">At the theatre</span>
+            <span class="more-row-meta">${tripMode() === "kids" ? "Pantos, children's theatre and family shows" : "Plays, musicals, comedy and dance"}</span>
+          </span>
+          ${icon("forward", { size: 16, cls: "more-row-go" })}
+        </button>
         <button class="more-row" data-find="idea">
           <span class="more-row-ico">${icon("sparkle", { size: 20 })}</span>
           <span class="more-row-main">
@@ -11016,7 +11127,14 @@ ${(() => {
       b.addEventListener("click", () => {
         const to = b.getAttribute("data-find");
         if (to === "explore") showView("explore");
-        else openTripIdea();
+        else if (to === "films" || to === "theatre") {
+          // That kind only, on the same sheet as its choices (the ratings,
+          // for films): one tap to get here, one to search.
+          eventSearch.kinds = [to];
+          eventSearch.showKind = null;
+          renderEvents();
+          openWhatSheet();
+        } else openTripIdea();
       })
     );
 
@@ -11260,6 +11378,7 @@ ${(() => {
       w.fromTime || "",
       kinds.slice().sort().join("+") || "all",
       tripMode() || "any",
+      kinds.includes("films") ? chosenFilmRatings().join("+") : "",
     ].join("|");
   }
 
@@ -11403,10 +11522,105 @@ ${(() => {
     });
   }
 
-  function anglesForSearch() {
-    return modeAngles().filter(
-      (a) => !eventSearch.kinds.length || eventSearch.kinds.includes(a.key)
+  // ---------- Film ratings ----------
+  // The BBFC's, since this is a UK app and every cinema listing here carries
+  // one. 12 is the home-video rating; cinemas show 12A, so the two are one
+  // choice. R18 is never searched for: it is only shown in licensed venues,
+  // and "adults" in this app means grown-up, not explicit.
+  const FILM_RATINGS = ["U", "PG", "12A", "15", "18"];
+
+  function filmRatingWord(value) {
+    const v = String(value || "").trim().toUpperCase().replace(/\s+/g, "");
+    if (v === "12") return "12A";
+    return FILM_RATINGS.includes(v) ? v : "";
+  }
+
+  // What each mode starts on. Kids: U and PG, and more as the youngest child
+  // gets older, because a family goes to what the youngest can see. Adults
+  // and no mode: everything.
+  function defaultFilmRatings() {
+    if (tripMode() !== "kids") return FILM_RATINGS.slice();
+    const ages = childrenOnTrip().map((c) => c.age).filter((a) => a != null);
+    const youngest = ages.length ? Math.min(...ages) : 0;
+    const out = ["U", "PG"];
+    if (youngest >= 12) out.push("12A");
+    if (youngest >= 15) out.push("15");
+    return out;
+  }
+
+  // Which ratings a search can offer at all. 18 is not a choice for a day
+  // out with children.
+  function offeredFilmRatings() {
+    return tripMode() === "kids" ? FILM_RATINGS.filter((r) => r !== "18") : FILM_RATINGS.slice();
+  }
+
+  // Chosen per mode and kept, so kids mode remembers U and PG while adults
+  // mode remembers whatever you picked there.
+  function chosenFilmRatings() {
+    const stored = (loadTripSettings().filmRatings || {})[tripMode() || "any"];
+    const offered = offeredFilmRatings();
+    const list = Array.isArray(stored) ? stored.filter((r) => offered.includes(r)) : [];
+    return list.length ? list : defaultFilmRatings().filter((r) => offered.includes(r));
+  }
+
+  function toggleFilmRating(r) {
+    if (!offeredFilmRatings().includes(r)) return;
+    const now = chosenFilmRatings();
+    const next = now.includes(r) ? now.filter((x) => x !== r) : now.concat(r);
+    // A search for no ratings at all is a search for nothing.
+    if (!next.length) return;
+    const all = Object.assign({}, loadTripSettings().filmRatings || {});
+    all[tripMode() || "any"] = FILM_RATINGS.filter((x) => next.includes(x));
+    saveTripSettings({ filmRatings: all });
+  }
+
+  function renderRatingChips() {
+    const chosen = chosenFilmRatings();
+    return `
+      <div class="film-ratings" role="group" aria-label="Film ratings">
+        <div class="film-ratings-label">Film ratings</div>
+        <div class="search-chips">
+          ${offeredFilmRatings().map((r) => `
+            <button class="rating-chip rating-${esc(r.toLowerCase())}${chosen.includes(r) ? " on" : ""}"
+                    data-film-rating="${esc(r)}" aria-pressed="${chosen.includes(r)}">${esc(r)}</button>`).join("")}
+        </div>
+      </div>`;
+  }
+
+  // Films need what no other listing has: a rating, and more than one time.
+  // And one row per film per cinema, not per showing, or a week in a city
+  // is a thousand rows.
+  function filmClause(angle) {
+    if (angle.key === "theatre") {
+      return (
+        `\n\nList each show once per venue: "date" is the first day in these dates it is on ` +
+        `there, "endDate" the last, and "times" that first day's performance times, as a list ` +
+        `of "HH:MM" strings. Give the venue's age guidance as "minAge" (the youngest age it ` +
+        `recommends, as a number, or null if it gives none).`
+      );
+    }
+    if (angle.key !== "films") return "";
+    return (
+      `\n\nOnly films rated ${chosenFilmRatings().join(" or ")} by the BBFC. List each film ` +
+      `once per cinema: "date" is the first day in these dates it is showing there, ` +
+      `"endDate" the last, and "times" that first day's showing times. Also give ` +
+      `"rating": the BBFC rating, one of U, PG, 12A, 15 or 18, and "times": ` +
+      `a list of "HH:MM" strings. Nothing rated R18.`
     );
+  }
+
+  // What "everything" means: every kind in this mode except the ones that
+  // are only searched when picked.
+  function defaultAngles() {
+    return modeAngles().filter((a) => !a.onlyWhenPicked);
+  }
+
+  // Kinds chosen in another mode - "Music" picked, then switched to kids -
+  // used to leave nothing to search, and the search did nothing at all.
+  // Whatever is left in this mode is searched; if nothing is, everything.
+  function anglesForSearch() {
+    const picked = modeAngles().filter((a) => eventSearch.kinds.includes(a.key));
+    return picked.length ? picked : defaultAngles();
   }
 
   // Runs one angle and feeds whatever it finds straight into the queue. Called
@@ -19980,6 +20194,12 @@ ${(() => {
   // anything.
   window.__tripTest = {
     ASSISTANTS,
+    chosenFilmRatings,
+    defaultAngles,
+    anglesForSearch,
+    setEventKinds: (k) => {
+      eventSearch.kinds = k.slice();
+    },
     audienceLine,
     eventFitsMode,
     anglePrompt,

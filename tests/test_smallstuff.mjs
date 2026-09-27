@@ -21,7 +21,7 @@
 // The honest limit, stated on screen rather than hidden: closed Facebook
 // groups and Instagram are not indexed by anything, and no prompt reaches them.
 import { chromium } from 'playwright';
-import { ANGLE_MARKERS, ANGLE_KEYS, angleFromPrompt } from './lib/angles.mjs';
+import { ANGLE_MARKERS, ANGLE_KEYS, EVERYTHING_KEYS, angleFromPrompt } from './lib/angles.mjs';
 import { chooseWhen, closeAskSheet, openAnglePencils, openEventForm, openWhatSheet } from './lib/screens.mjs';
 import fs from 'node:fs';
 const SANDBOX_CHROMIUM = '/opt/pw-browsers/chromium';
@@ -116,7 +116,7 @@ await search();
 // ---------- Nine searches, not one general one ----------
 
 check('the catch-all is split into the places small things actually live',
-  ANGLE_KEYS.length === 9, `${ANGLE_KEYS.length} angles`);
+  EVERYTHING_KEYS.length === 9, `${EVERYTHING_KEYS.length} angles`);
 const asked = new Set(prompts.map(angleFromPrompt).filter(Boolean));
 check('and every one of them is asked', asked.size === 9, `${asked.size}: ${[...asked].join(',')}`);
 check('including the village hall, the clubs and the fetes',
@@ -192,8 +192,8 @@ check('and offers the thing to do about it', await page.evaluate(() =>
 // ---------- Tuning a search, the way a category already can be ----------
 
 await openAnglePencils(page);
-check('each search can be changed', await page.evaluate(() =>
-  document.querySelectorAll('[data-ev-tune]').length === 9),
+check('each search can be changed, films and theatre included', await page.evaluate((n) =>
+  document.querySelectorAll('[data-ev-tune]').length === n, ANGLE_KEYS.length),
   await page.evaluate(() => document.querySelectorAll('[data-ev-tune]').length));
 
 await openAnglePencils(page);

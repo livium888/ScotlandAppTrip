@@ -18,7 +18,7 @@
 // else, including every chip on this screen, "selected" looked identical to
 // "not selected".
 import { chromium } from 'playwright';
-import { angleFromPrompt, ANGLE_KEYS } from './lib/angles.mjs';
+import { angleFromPrompt, EVERYTHING_KEYS as ANGLE_KEYS } from './lib/angles.mjs';
 import { chooseWhen, openWhatSheet, openWhenSheet } from './lib/screens.mjs';
 import fs from 'node:fs';
 const SANDBOX_CHROMIUM = '/opt/pw-browsers/chromium';
@@ -154,7 +154,7 @@ check('the same is true of the kinds you pick', kindLook.on !== kindLook.off, JS
 // why it matters. What the form itself has to do is tell you what you
 // narrowed to without opening anything - which the What row does by name.
 check('and the sheet says how many you have picked',
-  /1 of 9 picked/.test(await page.evaluate(() => document.getElementById('placeModal').textContent)),
+  /1 picked/.test(await page.evaluate(() => document.getElementById('placeModal').textContent)),
   await page.evaluate(() => document.getElementById('placeModal').textContent.slice(0, 300)));
 check('and the form says it too, in words', await page.evaluate(() => {
   const row = document.querySelector('[data-ev-ask="what"]');

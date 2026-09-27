@@ -22,9 +22,15 @@ export const ANGLE_MARKERS = {
   clubs: ['horticultural', 'coding and science clubs'],
   fetes: ['duck races', 'race nights'],
   oneoff: ['well dressings', 'pumpkin picking'],
+  films: ['BBFC rating'],
+  theatre: ['performance times'],
 };
 
 export const ANGLE_KEYS = Object.keys(ANGLE_MARKERS);
+
+// The kinds a search with nothing picked runs. Films and theatre are
+// searched only when picked - a week of listings would bury everything else.
+export const EVERYTHING_KEYS = ANGLE_KEYS.filter((k) => k !== 'films' && k !== 'theatre');
 
 // The angle a prompt is for, or null. Deliberately checks every marker rather
 // than returning on the first hit: a prompt matching two markers means the
