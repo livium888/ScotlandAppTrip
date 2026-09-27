@@ -172,16 +172,52 @@ check('never to an image or speech model', !requests.some((r) => /image|tts/.tes
 check('and what it searched for is shown', JSON.stringify(await names()) === JSON.stringify(['Folk Evening']),
   JSON.stringify(await names()));
 
-// A model pinned in Settings is the owner's choice.
+// A model pinned in Settings is the owner's choice - unless it is a lite
+// one, which does not search reliably (see 6b).
 await seed();
 await page.evaluate(() => {
   const s = JSON.parse(localStorage.getItem('trip-settings-v1'));
-  localStorage.setItem('trip-settings-v1', JSON.stringify(Object.assign(s, { geminiModel: 'models/gemini-3.5-flash-lite', geminiModelPinned: true })));
+  localStorage.setItem('trip-settings-v1', JSON.stringify(Object.assign(s, { geminiModel: 'models/gemini-3.5-pro', geminiModelPinned: true })));
 });
 behaviour = ({ grounded }) => grounded ? { text: JSON.stringify([listing('Folk Evening')]), gm: GM } : { text: '[]' };
 await searchOne('hall');
-check('a model pinned in Settings is used as chosen', requests[0] && requests[0].model === 'gemini-3.5-flash-lite',
+check('a full model pinned in Settings is used as chosen', requests[0] && requests[0].model === 'gemini-3.5-pro',
   JSON.stringify(requests.map((r) => r.model)));
+
+// ---------- 6b. The key from the trace ----------
+// A real trace: both searches went to gemini-3.5-flash-lite, answered "[]"
+// in under two seconds and never searched. The ranking put version before
+// tier, so a newer lite model beat an older full one.
+check('a full flash model outranks a newer lite one', await page.evaluate(() => {
+  const s = window.__tripTest.scoreSearchModel;
+  return s('models/gemini-2.5-flash') > s('models/gemini-3.5-flash-lite') &&
+    s('models/gemini-flash-latest') > s('models/gemini-3.5-flash-lite') &&
+    s('models/gemini-3.5-flash') > s('models/gemini-2.5-flash') &&
+    s('models/gemini-2.5-flash-image') === -Infinity;
+}));
+// Lite chosen in Settings, and a lite search model remembered from the old
+// ranking: neither is used to search.
+await seed();
+await page.evaluate(() => {
+  const s = JSON.parse(localStorage.getItem('trip-settings-v1'));
+  localStorage.setItem('trip-settings-v1', JSON.stringify(Object.assign(s, {
+    geminiModel: 'models/gemini-3.5-flash-lite', geminiModelPinned: true,
+    geminiSearchModel: 'models/gemini-3.5-flash-lite' })));
+});
+behaviour = ({ grounded, model }) => grounded && !/lite/.test(model)
+  ? { text: JSON.stringify([listing('Folk Evening')]), gm: GM }
+  : { text: '[]' };
+await searchOne('hall');
+check('with lite chosen in Settings and remembered, the search still goes to a full model',
+  requests[0] && requests[0].model === 'gemini-3.5-flash', JSON.stringify(requests.map((r) => r.model)));
+check('and finds what is on', (await names()).includes('Folk Evening'), JSON.stringify(await names()));
+await page.evaluate(() => document.getElementById('evTrace')?.click());
+await page.waitForTimeout(300);
+const tr = await page.evaluate(() => document.querySelector('#placeModal .trace-text')?.textContent || '');
+check('the trace says which models the key has', /Models on this key: .*gemini-3\.5-flash-lite.*gemini-3\.5-flash/.test(tr), tr.slice(0, 400));
+check('and why this one was used, lite in Settings included', /Why this model: the best search model on this key \(Settings has gemini-3\.5-flash-lite chosen, but lite models don't search reliably\)/.test(tr),
+  (tr.match(/Why this model:.*/) || [''])[0]);
+await page.evaluate(() => document.querySelector('#placeModal .modal-close')?.click());
 
 // ---------- 7. Neither searched: nothing shown, and said plainly ----------
 await seed();

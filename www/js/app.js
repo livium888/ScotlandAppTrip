@@ -918,28 +918,41 @@
   // they already know what is on this weekend. A full flash model searches
   // far more reliably. Only real text models: the list also carries image,
   // speech and live-audio models whose names score just as well.
+  // The tier decides first and the version second. It was the other way
+  // round, so a newer lite model beat an older full one - 3.5 flash-lite
+  // scored 350 against 2.5 flash's 290 - and the search went to the one
+  // tier that answers "[]" in under two seconds without looking.
   function scoreSearchModel(name) {
     const n = name.replace(/^models\//, "");
     if (/(image|tts|audio|live|embed|robotics|computer|learnlm|gemma|aqa)/i.test(n)) return -Infinity;
     const version = parseFloat((n.match(/gemini-(\d+(?:\.\d+)?)/) || [])[1] || "0");
-    let score = version * 100;
-    if (/flash-lite/.test(n)) score += 0;
-    else if (/flash/.test(n)) score += 40;
-    else if (/pro/.test(n)) score += 20;
+    const tier = /lite/.test(n) ? 0 : /flash/.test(n) ? 2 : /pro/.test(n) ? 1 : 0;
+    let score = tier * 1000 + version * 100;
     if (/-\d{3}$/.test(n)) score -= 25;
     if (/(exp|preview)/.test(n)) score -= 30;
     return score;
   }
 
+  // For the trace: why a model was picked.
+  let searchModelWhy = "";
+
   async function resolveSearchModel(key) {
+    // A lite model remembered from before the ranking was fixed is not
+    // trusted: it is asked again, and replaced if anything better exists.
     const cached = loadTripSettings().geminiSearchModel;
-    if (cached) return cached;
+    if (cached && !/lite/.test(cached)) {
+      searchModelWhy = "the best search model on this key (remembered)";
+      return cached;
+    }
     const models = await geminiListModels(key);
     const best = models
       .map((m) => m.name)
       .filter((n) => scoreSearchModel(n) > -Infinity)
       .sort((a, b) => scoreSearchModel(b) - scoreSearchModel(a))[0];
     if (best) saveTripSettings({ geminiSearchModel: best });
+    searchModelWhy = best && /lite/.test(best)
+      ? "only lite models on this key - these often answer without searching"
+      : "the best search model on this key";
     return best || "";
   }
 
@@ -9519,12 +9532,24 @@ ${(() => {
     // Straight to the model that searches. The everyday lite model often
     // decides not to, and asking it first meant two paid requests for one
     // answer. A model pinned in Settings is the owner's choice and is kept.
+    // A pinned model is kept unless it is a lite one: the lite tier does
+    // not search reliably, and a search that does not search is a request
+    // paid for nothing.
     let model = "";
-    if (aiProviderKey() === "gemini" && !loadTripSettings().geminiModelPinned) {
-      try {
-        model = await resolveSearchModel(loadTripSettings().geminiKey.trim());
-      } catch (e) {
-        model = "";
+    const settingsNow = loadTripSettings();
+    if (aiProviderKey() === "gemini") {
+      const pinned = settingsNow.geminiModelPinned ? settingsNow.geminiModel : "";
+      if (pinned && !/lite/.test(pinned)) {
+        model = pinned;
+        searchModelWhy = "the model chosen in Settings";
+      } else {
+        try {
+          model = await resolveSearchModel(settingsNow.geminiKey.trim());
+          if (pinned) searchModelWhy += ` (Settings has ${pinned.replace(/^models\//, "")} chosen, but lite models don't search reliably)`;
+        } catch (e) {
+          model = "";
+          searchModelWhy = `couldn't list this key's models (${(e && e.message) || e}) - used the everyday one`;
+        }
       }
     }
     try {
@@ -9540,6 +9565,7 @@ ${(() => {
     }
     traceKind(angle.key, {
       model: (answer && answer.model) || model || "(the everyday model)",
+      why: searchModelWhy,
       ms: Date.now() - began,
       error: answer ? "" : error,
       searched: answer ? answer.searched : null,
@@ -12461,6 +12487,21 @@ ${(() => {
       towns: (ctx.towns || []).join(", "),
       cache: "a new search",
     });
+    // The key's models, once, for the trace: which one a search used only
+    // means something next to what else it could have used.
+    if (aiProviderKey() === "gemini") {
+      geminiListModels(loadTripSettings().geminiKey.trim())
+        .then((models) => {
+          if (searchTrace) {
+            searchTrace.keyModels = models
+              .map((m) => m.name.replace(/^models\//, ""))
+              .filter((n) => scoreSearchModel(n) > -Infinity)
+              .join(", ");
+            saveTrace();
+          }
+        })
+        .catch(() => {});
+    }
     angles.forEach((a) => { eventSearch.angles[a.key] = "waiting"; });
     eventSearch.live = {};
 
@@ -19564,10 +19605,12 @@ ${(() => {
     if (t.ratings) out.push(`Film ratings: ${t.ratings}`);
     if (t.cache) out.push(`Answered from: ${t.cache}`);
     if (t.towns) out.push(`Towns named: ${t.towns}`);
+    if (t.keyModels) out.push(`Models on this key: ${t.keyModels}`);
     Object.keys(t.kinds || {}).forEach((key) => {
       const k = t.kinds[key];
       out.push("");
       out.push(`=== ${k.label || key} ===`);
+      if (k.why) out.push(`Why this model: ${k.why}`);
       out.push(`Model: ${k.model || "?"}   Took: ${k.ms != null ? `${(k.ms / 1000).toFixed(1)}s` : "?"}   Searched the web: ${
         k.searched == null ? "?" : k.searched ? "yes" : "NO"
       }   Sources: ${k.sources != null ? k.sources : "?"}`);
@@ -21153,6 +21196,7 @@ ${(() => {
   // anything.
   window.__tripTest = {
     ASSISTANTS,
+    scoreSearchModel,
     traceText: () => traceText(loadTrace()),
     recentEventSearches,
     partialListings,
