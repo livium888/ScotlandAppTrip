@@ -8459,7 +8459,7 @@ ${(() => {
   const EVENT_FIELDS = [
     "startsAt", "endsAt", "time", "endTime", "venue", "price", "ticketUrl",
     "recurring", "approximate", "setting", "minAge", "maxAge", "childFocus",
-    "bookingLevel", "booking", "filmRating", "showtimes", "film", "showing",
+    "bookingLevel", "booking", "filmRating", "showtimes", "film", "showing", "kidsSession",
     // Google's own id for the venue, once one has been found. Without it here
     // the exact link would be dropped by the same list that already lost
     // endsAt and approximate once.
@@ -8652,7 +8652,7 @@ ${(() => {
     // Films are searched only when asked for. A week of cinema listings for
     // a city is hundreds of showings, and folded into "everything" it would
     // bury the village fete and double what a search costs.
-    { key: "films", label: "Films", onlyWhenPicked: true,
+    { key: "films", label: "Films", onlyWhenPicked: true, session: true,
       ask: "films showing at cinemas - chain, independent and community cinemas, film society " +
            "screenings, outdoor and pop-up screenings. One entry per film per cinema, with that " +
            "day's showing times and its BBFC rating",
@@ -8667,7 +8667,7 @@ ${(() => {
     // with its performance times, searched only when picked. "Arts &
     // theatre" still catches the am-dram night among everything else; this
     // is for when a show is what you are going out for.
-    { key: "theatre", label: "Theatre & shows", onlyWhenPicked: true,
+    { key: "theatre", label: "Theatre & shows", onlyWhenPicked: true, session: true,
       ask: "plays, musicals, pantomime, comedy, dance, opera and ballet, children's theatre, " +
            "touring productions and amateur dramatics at theatres, arts centres and halls. One entry per " +
            "show per venue, with that day's performance times and the age guidance the venue gives",
@@ -8679,6 +8679,37 @@ ${(() => {
       adultsAsk: "plays, musicals, comedy, dance, opera and ballet, new writing, fringe and touring " +
                  "productions, amateur dramatics. One entry per show per venue, with that day's performance times " +
                  "and the age guidance the venue gives" },
+    // For the kids, each its own search: things with sessions at set times,
+    // which the one broad "For children" search could only skim. Searched
+    // only when tapped, and only offered where children are on the outing.
+    { key: "workshops", label: "Workshops & classes", onlyWhenPicked: true, session: true, kidsOnly: true,
+      icon: "edit", meta: "Craft, science, cooking, LEGO, coding",
+      ask: "workshops and classes children can join - craft, art, science, cooking and baking, LEGO and building, coding and robotics sessions at libraries, museums, arts centres and shops." +
+           " One entry per session per venue, with that day's times and the ages it is for" },
+    { key: "storytime", label: "Storytime & family sessions", onlyWhenPicked: true, session: true, kidsOnly: true,
+      icon: "note", meta: "Rhyme time, storytelling, museum family days",
+      ask: "storytime, rhyme time and storytelling at libraries and bookshops, and family trails, activity days and drop-in family sessions at museums and galleries." +
+           " One entry per session per venue, with that day's times and the ages it is for" },
+    { key: "swim", label: "Swimming sessions", onlyWhenPicked: true, session: true, kidsOnly: true,
+      icon: "swim", meta: "Fun sessions, family swims, splash times",
+      ask: "public swimming sessions for families - inflatable fun sessions, family swims, splash and wave times, parent and toddler swims - at leisure centres and pools, with the session times." +
+           " One entry per session per venue, with that day's times and the ages it is for" },
+    { key: "active", label: "Active sessions", onlyWhenPicked: true, session: true, kidsOnly: true,
+      icon: "walk", meta: "Trampolines, climbing, skating, sport tasters",
+      ask: "active sessions for children - trampoline park jump sessions, climbing and bouldering sessions, ice skating public sessions, junior sports taster sessions, junior parkrun, kids' bike and scooter sessions." +
+           " One entry per session per venue, with that day's times and the ages it is for" },
+    { key: "animals", label: "Animal encounters", onlyWhenPicked: true, session: true, kidsOnly: true,
+      icon: "paw", meta: "Feeding times, meet-the-keeper, lambing days",
+      ask: "animal encounters for families at farms, zoos, aquariums and wildlife parks - feeding times, meet-the-keeper talks, animal handling, lambing days, pony rides and pony days." +
+           " One entry per session per venue, with that day's times and the ages it is for" },
+    { key: "holiday", label: "Holiday clubs & day camps", onlyWhenPicked: true, session: true, kidsOnly: true,
+      icon: "calendar", meta: "School-holiday clubs, activity days, forest school",
+      ask: "school holiday and half-term clubs and day camps children can book onto - activity days, sports camps, drama and arts camps, forest school sessions, nature and outdoor days." +
+           " One entry per session per venue, with that day's times and the ages it is for" },
+    { key: "kidsmusic", label: "Music & dance for kids", onlyWhenPicked: true, session: true, kidsOnly: true,
+      icon: "music", meta: "Toddler music, family concerts, dance tasters",
+      ask: "music and dance for children - toddler music classes, baby and toddler sing-alongs, family and children's concerts, kids' dance taster sessions, instrument have-a-go days." +
+           " One entry per session per venue, with that day's times and the ages it is for" },
     { key: "oneoff", label: "Seasonal & one-off",
       ask: "the odd one-off things that fit no category - wassails, well dressings, " +
            "beating the bounds, lantern parades, bonfire and firework nights, light switch-ons, " +
@@ -8906,7 +8937,7 @@ ${(() => {
   // somebody looking at six results wondering where the other thirty went.
   const NO_DROPS = {
     unplaced: 0, undated: 0, outside: 0, tooFar: 0, finished: 0, merged: 0, offRoute: 0,
-    adultsOnly: 0, notForChildren: 0, forChildren: 0, ratedOut: 0, unrated: 0, tooOld: 0,
+    adultsOnly: 0, notForChildren: 0, forChildren: 0, ratedOut: 0, unrated: 0, tooOld: 0, tooYoung: 0,
   };
 
   // Whether an event belongs in this mode, and if not, which count it goes
@@ -8937,10 +8968,17 @@ ${(() => {
       if (focus === "adults") return "adultsOnly";
       // A show says who it is for in years. Pitched above the youngest child
       // coming, it is not a family outing, however "aimed" it is.
-      if (event.showing && event.minAge != null) {
+      if (event.showing) {
         const ages = childrenOnTrip().map((c) => c.age).filter((a) => a != null);
-        if (ages.length && event.minAge > Math.min(...ages)) return "tooOld";
+        if (ages.length && event.minAge != null && event.minAge > Math.min(...ages)) return "tooOld";
+        // A toddler class is no use to a nine-year-old: out when every child
+        // coming is past the top of its range.
+        if (ages.length && event.maxAge != null && ages.every((a) => a > event.maxAge)) return "tooYoung";
       }
+      // Everything a kids' session search returns was asked for as a
+      // children's session; a listing that did not label itself is not a
+      // reason to drop it.
+      if (event.kidsSession) return "";
       if (focus === "aimed") return "";
       if (!focus && eventLooksForChildren(event)) return "";
       return "notForChildren";
@@ -9280,7 +9318,8 @@ ${(() => {
       d.forChildren ? `${d.forChildren} ${d.forChildren === 1 ? "was" : "were"} for children` : "",
       d.ratedOut ? `${d.ratedOut} ${d.ratedOut === 1 ? "film was" : "films were"} rated outside your choice` : "",
       d.unrated ? `${d.unrated} ${d.unrated === 1 ? "film had" : "films had"} no rating given` : "",
-      d.tooOld ? `${d.tooOld} ${d.tooOld === 1 ? "show was" : "shows were"} for older children` : "",
+      d.tooOld ? `${d.tooOld} ${d.tooOld === 1 ? "was" : "were"} for older children` : "",
+      d.tooYoung ? `${d.tooYoung} ${d.tooYoung === 1 ? "was" : "were"} for younger children` : "",
       // Deliberately not counted here. A listing found by two angles and
       // merged into one row was not left out of anything - it is on the
       // screen. Saying "left out: 3 were the same thing found twice" reads
@@ -9634,8 +9673,10 @@ ${(() => {
         eventsDropped.finished++;
         return;
       }
-      if (answer.angle === "films" || answer.angle === "theatre") {
+      const sessionKind = EVENT_ANGLES.find((a) => a.key === answer.angle);
+      if (sessionKind && sessionKind.session) {
         event.showing = true;
+        if (sessionKind.kidsOnly) event.kidsSession = true;
         if (answer.angle === "films") event.film = true;
         // A cinema is indoors; "indoors or out, not sure" on a film is noise.
         // A play may well be open-air, so it keeps what the listing said.
@@ -10809,15 +10850,67 @@ ${(() => {
   // The What sheet's body. The nine kinds, and - with room to say it properly
   // at last - why narrowing them matters: each one is a separate request to
   // the model, so this is the only control on the screen that costs money.
+  // The seven children's session searches, one row each. Tapping one picks
+  // it and hands over to the What sheet, where the search button is.
+  function openKidSessions() {
+    placeModal.innerHTML = `
+      <div class="modal-backdrop" data-close="1">
+        <div class="modal-sheet" role="dialog" aria-label="For the kids">
+          <div class="modal-handle"></div>
+          <button class="modal-close" data-close="1" aria-label="Close">${icon("close", { size: 17, cls: "ico-inline" })}</button>
+          <div class="modal-body">
+            <h2 class="modal-title">For the kids</h2>
+            <div class="card more-list kid-sessions">
+              ${EVENT_ANGLES.filter((a) => a.kidsOnly)
+                .map(
+                  (a) => `
+                <button class="more-row" data-find-kind="${esc(a.key)}">
+                  <span class="more-row-ico">${icon(a.icon, { size: 20 })}</span>
+                  <span class="more-row-main">
+                    <span class="more-row-title">${esc(a.label)}</span>
+                    <span class="more-row-meta">${esc(a.meta)}</span>
+                  </span>
+                  ${icon("forward", { size: 16, cls: "more-row-go" })}
+                </button>`
+                )
+                .join("")}
+            </div>
+          </div>
+        </div>
+      </div>`;
+    placeModal.classList.add("open");
+    makeSheetDraggable(placeModal, closePlaceModal);
+    placeModal.querySelectorAll("[data-close]").forEach((el) =>
+      el.addEventListener("click", (e) => {
+        if (el.classList.contains("modal-backdrop") && e.target !== el) return;
+        closePlaceModal();
+      })
+    );
+    placeModal.querySelectorAll("[data-find-kind]").forEach((b) =>
+      b.addEventListener("click", () => {
+        eventSearch.kinds = [b.getAttribute("data-find-kind")];
+        eventSearch.showKind = null;
+        renderEvents();
+        openWhatSheet();
+      })
+    );
+  }
+
+  function kindChip(a) {
+    const tuned = !!loadTripSettings().anglePrompts[a.key];
+    return `<button class="search-chip${eventSearch.kinds.includes(a.key) ? " on" : ""}${
+      tuned ? " tuned" : ""
+    }" data-ev-kind="${esc(a.key)}">${esc(a.label)}</button>`;
+  }
+
   function renderEventWhat() {
     return `
       <div class="search-chips ev-kinds">
-        ${modeAngles().map((a) => {
-          const tuned = !!loadTripSettings().anglePrompts[a.key];
-          return `<button class="search-chip${eventSearch.kinds.includes(a.key) ? " on" : ""}${
-            tuned ? " tuned" : ""
-          }" data-ev-kind="${esc(a.key)}">${esc(a.label)}</button>`;
-        }).join("")}
+        ${modeAngles().filter((a) => !a.onlyWhenPicked).map(kindChip).join("")}
+      </div>
+      <div class="film-ratings-label" style="margin-top:12px;">Searched only when picked</div>
+      <div class="search-chips ev-kinds">
+        ${modeAngles().filter((a) => a.onlyWhenPicked).map(kindChip).join("")}
       </div>
       ${eventSearch.kinds.includes("films") ? renderRatingChips() : ""}
       ${
@@ -11162,7 +11255,7 @@ ${(() => {
       // Said about the search that was actually run: "nine searches through
       // parish newsletters" under a list of cinema times was wrong twice.
       const ran = anglesForSearch();
-      const filmsOnly = ran.length === 1 && (ran[0].key === "films" || ran[0].key === "theatre");
+      const filmsOnly = ran.length === 1 && !!ran[0].session;
       html += `<p class="settings-hint ev-caveat">${icon("info", {
         size: 14,
         cls: "ico-inline",
@@ -11170,7 +11263,7 @@ ${(() => {
         filmsOnly
           ? ran[0].key === "films"
             ? `From cinema listings on the web. Showing times change — check with the cinema before you go.`
-            : `From theatre and venue listings on the web. Times and availability change — check with the venue before you go.`
+            : `From ${ran[0].key === "theatre" ? "theatre and venue" : "venue"} listings on the web. Times and availability change — check with the venue before you go.`
           : `${ran.length} search${ran.length === 1 ? "" : "es"}, through parish newsletters, hall and church pages,
              council and library listings, clubs and the small ticketing sites. Closed Facebook groups and
              Instagram can't be searched by anything — if you know about something from there,
@@ -11216,6 +11309,20 @@ ${(() => {
           </span>
           ${icon("forward", { size: 16, cls: "more-row-go" })}
         </button>
+        ${
+          // One row, not seven: arriving on Find should not be a menu. The
+          // seven children's session searches are one tap behind it.
+          showsKids()
+            ? `<button class="more-row" data-find="kids">
+                 <span class="more-row-ico">${icon("kids", { size: 20 })}</span>
+                 <span class="more-row-main">
+                   <span class="more-row-title">For the kids</span>
+                   <span class="more-row-meta">Workshops, swimming, animals and more, with session times</span>
+                 </span>
+                 ${icon("forward", { size: 16, cls: "more-row-go" })}
+               </button>`
+            : ""
+        }
         <button class="more-row" data-find="films">
           <span class="more-row-ico">${icon("film", { size: 20 })}</span>
           <span class="more-row-main">
@@ -11274,6 +11381,7 @@ ${(() => {
         const to = b.getAttribute("data-find");
         if (to === "explore") showView("explore");
         else if (to === "weekly") openWeeklyChecks();
+        else if (to === "kids") openKidSessions();
         else if (to === "films" || to === "theatre") {
           // That kind only, on the same sheet as its choices (the ratings,
           // for films): one tap to get here, one to search.
@@ -11682,6 +11790,7 @@ ${(() => {
     return EVENT_ANGLES.filter((a) => {
       if (a.key === "family" && !showsKids()) return false;
       if (a.key === "music" && !showsAdults()) return false;
+      if (a.kidsOnly && !showsKids()) return false;
       return true;
     });
   }
@@ -11755,6 +11864,14 @@ ${(() => {
   // And one row per film per cinema, not per showing, or a week in a city
   // is a thousand rows.
   function filmClause(angle) {
+    if (angle.session && angle.key !== "films" && angle.key !== "theatre") {
+      return (
+        `\n\nList each session once per venue: "date" is the first day in these dates it runs ` +
+        `there, "endDate" the last, and "times" that first day's session times, as a list of ` +
+        `"HH:MM" strings. Give the ages it is for as "minAge" and "maxAge" (numbers, or null ` +
+        `if the listing gives none), and say if it has to be booked.`
+      );
+    }
     if (angle.key === "theatre") {
       return (
         `\n\nList each show once per venue: "date" is the first day in these dates it is on ` +

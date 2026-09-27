@@ -24,13 +24,22 @@ export const ANGLE_MARKERS = {
   oneoff: ['well dressings', 'pumpkin picking'],
   films: ['BBFC rating'],
   theatre: ['performance times'],
+  workshops: ['LEGO'],
+  storytime: ['family trails'],
+  swim: ['inflatable'],
+  active: ['trampoline park'],
+  animals: ['meet-the-keeper'],
+  holiday: ['half-term clubs'],
+  kidsmusic: ['toddler music classes'],
 };
 
 export const ANGLE_KEYS = Object.keys(ANGLE_MARKERS);
 
 // The kinds a search with nothing picked runs. Films and theatre are
 // searched only when picked - a week of listings would bury everything else.
-export const EVERYTHING_KEYS = ANGLE_KEYS.filter((k) => k !== 'films' && k !== 'theatre');
+// The children's session searches are the same: each its own row on Find.
+export const ON_THEIR_OWN = ['films', 'theatre', 'workshops', 'storytime', 'swim', 'active', 'animals', 'holiday', 'kidsmusic'];
+export const EVERYTHING_KEYS = ANGLE_KEYS.filter((k) => !ON_THEIR_OWN.includes(k));
 
 // The angle a prompt is for, or null. Deliberately checks every marker rather
 // than returning on the first hit: a prompt matching two markers means the
