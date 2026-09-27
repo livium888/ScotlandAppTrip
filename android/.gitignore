@@ -56,6 +56,11 @@ captures/
 # Uncomment the following lines if you do not want to check your keystore files in.
 #*.jks
 #*.keystore
+# The release key is decoded here during the release workflow and must never
+# be committed. Named specifically, so the deliberately committed
+# keystore/debug.keystore is unaffected.
+app/release.keystore
+app/*.jks
 
 # External native build folder generated in Android Studio 2.2 and later
 .externalNativeBuild

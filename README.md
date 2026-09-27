@@ -52,6 +52,20 @@ GitHub Actions secrets: `ANDROID_KEYSTORE_BASE64`,
 `ANDROID_KEY_PASSWORD`. The release keystore is reconstructed only during the
 build and is never committed.
 
+**Back up your trips before switching to a release build.** Debug and release
+builds share the app ID but are signed with different keys, so Android will not
+install one over the other: you have to uninstall first, and uninstalling
+deletes everything the app has saved. Use Settings → Export backup, install the
+release build, then import the backup.
+
+**Builds can't be rolled back in place.** `versionCode` now rises with every CI
+run and Android refuses to install a lower one over a higher one. Going back to
+an older APK - including any from before versioning was added, which were all
+version 1, or a local build - means uninstalling first, with the same data loss.
+
+**Keep the release keystore safe.** Without it the app can never be updated
+again. Enable Play App Signing and keep a copy somewhere other than GitHub.
+
 ## Project structure
 
 - `www/` — the app itself (plain HTML/CSS/JS, no build step; Leaflet is vendored, everything else is fetched at runtime)

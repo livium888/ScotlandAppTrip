@@ -19,9 +19,12 @@ android {
         applicationId "com.livium888.scotlandtrip"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        // CI supplies VERSION_CODE, falling back to the GitHub run number so
-        // every APK can be installed over the previous one without a manual
-        // Gradle edit. Local builds remain installable with version 1.
+        // CI supplies VERSION_CODE, falling back to the GitHub run number, so
+        // versions rise with every build and show up in the phone's app info.
+        // Local builds get version 1 - which installs on a clean phone but not
+        // over a CI build, because Android refuses a lower versionCode. The
+        // same applies to any APK from before this was added; see the README
+        // before going backwards.
         versionCode buildVersionCode
         versionName buildVersionName
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
