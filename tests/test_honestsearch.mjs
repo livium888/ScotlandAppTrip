@@ -45,7 +45,7 @@ await page.route(/generativelanguage\.googleapis\.com/, async (route) => {
         { name: 'models/gemini-3.5-flash-preview-tts', supportedGenerationMethods: ['generateContent'] },
       ] }) });
   }
-  const model = (route.request().url().match(/models\/([^:]+):generateContent/) || [])[1] || '';
+  const model = (route.request().url().match(/models\/([^:]+):(?:streamGenerateContent|generateContent)/) || [])[1] || '';
   const body = JSON.parse(route.request().postData() || '{}');
   const prompt = body.contents[0].parts[0].text;
   const grounded = !!(body.tools && body.tools.length);

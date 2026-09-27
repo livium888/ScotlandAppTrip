@@ -1195,7 +1195,7 @@
     return out;
   }
 
-  async function callGemini(key, prompt, { grounded = false, json = false, maxTokens = 0, timeoutMs = 0, model: only = "" } = {}) {
+  async function callGemini(key, prompt, { grounded = false, json = false, maxTokens = 0, timeoutMs = 0, model: only = "", onText = null } = {}) {
     const limit = timeoutMs || AI_TIMEOUT_MS;
     lastAiPrompt = prompt;
     const model = only || (await resolveGeminiModel(key));
@@ -1223,12 +1223,21 @@
     const timer = setTimeout(() => controller.abort(), limit);
     let res;
     try {
-      res = await fetch(`${GEMINI_BASE}/${path}:generateContent?key=${encodeURIComponent(key)}`, {
+      // Streamed when someone is watching it arrive: the answer is written a
+      // listing at a time, and a search that shows nothing for a minute and
+      // then everything at once reads as broken for that whole minute.
+      const method = onText ? "streamGenerateContent?alt=sse&" : "generateContent?";
+      res = await fetch(`${GEMINI_BASE}/${path}:${method}key=${encodeURIComponent(key)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
         signal: controller.signal,
       });
+      if (onText && res.ok) {
+        const streamed = await readGeminiStream(res, onText);
+        clearTimeout(timer);
+        return finishGeminiReply(streamed, grounded, path);
+      }
     } catch (e) {
       if (e && e.name === "AbortError") {
         // The abort is kept as the cause: the message above is for the person
@@ -1264,6 +1273,95 @@
       throw err;
     }
     if (!data) throw new Error("Gemini returned a response that wasn't JSON.");
+    return finishGeminiReply(data, grounded, path);
+  }
+
+  // A streamed reply, read as it arrives and folded back into the shape of a
+  // single one: the text joined up, the grounding from whichever chunk
+  // carried it, the usage from the last. It also accepts a reply that was
+  // not streamed at all - a plain object, or an array of chunks - since what
+  // arrives is up to the server and the network in between.
+  async function readGeminiStream(res, onText) {
+    const merged = { candidates: [{ content: { parts: [] }, groundingMetadata: null }], usageMetadata: null };
+    let text = "";
+    const take = (chunk) => {
+      if (!chunk || typeof chunk !== "object") return;
+      const c = chunk.candidates && chunk.candidates[0];
+      if (c) {
+        const piece = ((c.content && c.content.parts) || []).map((p) => p.text || "").join("");
+        if (piece) {
+          text += piece;
+          try {
+            onText(text);
+          } catch (e) {
+            /* a display callback failing is not the search failing */
+          }
+        }
+        if (c.groundingMetadata) {
+          const g = merged.candidates[0].groundingMetadata || {};
+          const n = c.groundingMetadata;
+          merged.candidates[0].groundingMetadata = {
+            webSearchQueries: (g.webSearchQueries || []).concat(n.webSearchQueries || []),
+            groundingChunks: (g.groundingChunks || []).concat(n.groundingChunks || []),
+            searchEntryPoint: n.searchEntryPoint || g.searchEntryPoint,
+          };
+        }
+      }
+      if (chunk.usageMetadata) merged.usageMetadata = chunk.usageMetadata;
+    };
+    const handleBlock = (block) => {
+      const lines = block.split(/\r?\n/).filter((l) => l.startsWith("data:"));
+      if (!lines.length) return false;
+      const payload = lines.map((l) => l.slice(5).trim()).join("");
+      try {
+        take(JSON.parse(payload));
+      } catch (e) {
+        /* a malformed chunk loses that chunk, not the answer */
+      }
+      return true;
+    };
+
+    let all = "";
+    let sawEvents = false;
+    if (res.body && res.body.getReader) {
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        const piece = decoder.decode(value, { stream: true });
+        all += piece;
+        buffer += piece;
+        let cut;
+        while ((cut = buffer.search(/\r?\n\r?\n/)) >= 0) {
+          const block = buffer.slice(0, cut);
+          buffer = buffer.slice(cut).replace(/^\r?\n\r?\n/, "");
+          if (handleBlock(block)) sawEvents = true;
+        }
+      }
+      if (buffer.trim() && handleBlock(buffer)) sawEvents = true;
+    } else {
+      all = await res.text();
+      all.split(/\r?\n\r?\n/).forEach((b) => {
+        if (handleBlock(b)) sawEvents = true;
+      });
+    }
+    if (!sawEvents) {
+      let data = null;
+      try {
+        data = JSON.parse(all);
+      } catch (e) {
+        data = null;
+      }
+      if (!data) throw new Error("Gemini returned a response that wasn't JSON.");
+      (Array.isArray(data) ? data : [data]).forEach(take);
+    }
+    merged.candidates[0].content.parts = [{ text }];
+    return merged;
+  }
+
+  function finishGeminiReply(data, grounded, path) {
     const cand = data.candidates && data.candidates[0];
     if (!cand) throw new Error("gemini returned no candidates");
 
@@ -9363,8 +9461,14 @@ ${(() => {
     const prompt = eventPrompt(centre, window, radiusMetres, angle, towns, route);
     let answer = null;
     let error = "";
+    const watch = (text) => {
+      const names = partialListings(text).map((x) => String((x && x.name) || "").trim()).filter(Boolean);
+      const live = (eventSearch.live || {})[angle.key];
+      if (!live || names.length !== live.names.length) liveStage(angle.key, "writing", { names });
+    };
+    liveStage(angle.key, "searching", { started: Date.now(), names: [] });
     try {
-      answer = await callModel(prompt, { grounded: true, maxTokens: 8192, timeoutMs: EVENT_SEARCH_TIMEOUT_MS });
+      answer = await callModel(prompt, { grounded: true, maxTokens: 8192, timeoutMs: EVENT_SEARCH_TIMEOUT_MS, onText: watch });
     } catch (e) {
       error = (e && e.message) || String(e);
     }
@@ -9378,11 +9482,13 @@ ${(() => {
       try {
         const strong = await resolveSearchModel(loadTripSettings().geminiKey.trim());
         if (strong && strong !== answer.model) {
+          liveStage(angle.key, "retrying", { names: [] });
           const again = await callModel(prompt, {
             grounded: true,
             maxTokens: 8192,
             timeoutMs: EVENT_SEARCH_TIMEOUT_MS,
             model: strong,
+            onText: watch,
           });
           if (again && again.searched) answer = again;
         }
@@ -9403,6 +9509,7 @@ ${(() => {
 
     let list = extractJson(answer.text);
     if (!(Array.isArray(list) && list.length) && (answer.text || "").trim().length > 40) {
+      liveStage(angle.key, "tidying");
       try {
         const tidy = await callModel(reformatEventsPrompt(answer.text, angle), { json: true, maxTokens: 8192 });
         list = extractJson(tidy.text);
@@ -9419,6 +9526,54 @@ ${(() => {
       angle: angle.key,
       error: error || (Array.isArray(list) ? "" : "The search answered, but not in a form that could be read."),
     };
+  }
+
+  // The listings finished so far in an answer still being written: every
+  // complete {...} at the top level of the array, read the moment its brace
+  // closes. Half an object is left until the rest of it arrives.
+  function partialListings(text) {
+    const start = String(text || "").indexOf("[");
+    if (start < 0) return [];
+    const out = [];
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    let from = -1;
+    for (let i = start + 1; i < text.length; i++) {
+      const ch = text[i];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (ch === "\\") escaped = true;
+        else if (ch === '"') inString = false;
+        continue;
+      }
+      if (ch === '"') inString = true;
+      else if (ch === "{") {
+        if (depth === 0) from = i;
+        depth++;
+      } else if (ch === "}") {
+        depth--;
+        if (depth === 0 && from >= 0) {
+          try {
+            out.push(JSON.parse(text.slice(from, i + 1)));
+          } catch (e) {
+            /* not valid on its own; the whole answer is still read at the end */
+          }
+          from = -1;
+        }
+      } else if (ch === "]" && depth === 0) break;
+    }
+    return out;
+  }
+
+  // What each search is doing right now, for the progress card: which stage,
+  // since when, and the names it has written so far. Names only - nothing
+  // here is a result until the search is confirmed at the end.
+  function liveStage(key, phase, patch) {
+    eventSearch.live = eventSearch.live || {};
+    const was = eventSearch.live[key] || { started: Date.now(), names: [] };
+    eventSearch.live[key] = Object.assign(was, { phase }, patch || {});
+    scheduleEventsRedraw();
   }
 
   // The rescue for a searched reply that came back as prose: rewrite it,
@@ -10977,6 +11132,68 @@ ${(() => {
   // when one angle hangs, is ninety seconds of an app that looks broken.
   const ANGLE_STATE_LABEL = { waiting: "…", running: "…", done: "✓", failed: "—", stopped: "—" };
 
+  // One line per search still going: what it is doing, for how long, and -
+  // while the answer is being written - the names in it so far, marked as
+  // not yet checked. The seconds tick on their own (see tickLiveSeconds), so
+  // a slow search visibly is a search rather than a frozen screen.
+  const LIVE_PHASE = {
+    searching: "Searching the web",
+    writing: "Reading listings",
+    retrying: "Answered without searching — asking a stronger model",
+    tidying: "Tidying the answer",
+    placing: "Putting them on the map",
+  };
+
+  function renderLiveStages(angles) {
+    const live = eventSearch.live || {};
+    const lines = angles
+      .filter((a) => live[a.key] && LIVE_PHASE[live[a.key].phase])
+      .map((a) => {
+        const l = live[a.key];
+        const secs = Math.max(0, Math.round((Date.now() - l.started) / 1000));
+        const count =
+          l.phase === "writing" && l.names.length
+            ? ` — ${l.names.length} found so far`
+            : l.phase === "placing" && l.toPlace
+              ? ` — ${l.toPlace} to go`
+              : "";
+        const names =
+          l.phase === "writing" && l.names.length
+            ? `<div class="ev-live-names">${l.names
+                .slice(-6)
+                .map((n) => `<span>${esc(n)}</span>`)
+                .join("")}<em>being checked</em></div>`
+            : "";
+        return `<div class="ev-live" data-live="${esc(a.key)}">
+            <span class="ev-live-dot" aria-hidden="true"></span>
+            <span class="ev-live-text"><b>${esc(a.label)}</b> · ${esc(LIVE_PHASE[l.phase])}${esc(count)}
+              <span class="ev-live-secs" data-live-started="${l.started}">${secs}s</span></span>
+            ${names}
+          </div>`;
+      });
+    return lines.length ? `<div class="ev-live-list" aria-live="polite">${lines.join("")}</div>` : "";
+  }
+
+  // The seconds, and only the seconds: rewriting the whole screen every
+  // second would flicker under your thumb and lose your place.
+  let liveTicker = null;
+  function tickLiveSeconds() {
+    if (liveTicker) return;
+    liveTicker = setInterval(() => {
+      const spans = document.querySelectorAll("[data-live-started]");
+      // Stops when the search does, not when a redraw briefly has no line
+      // on it - which stopped it after its first tick.
+      if (!spans.length && eventSearch.status !== "loading") {
+        clearInterval(liveTicker);
+        liveTicker = null;
+        return;
+      }
+      spans.forEach((el) => {
+        el.textContent = `${Math.max(0, Math.round((Date.now() - Number(el.getAttribute("data-live-started"))) / 1000))}s`;
+      });
+    }, 1000);
+  }
+
   function renderAngleProgress() {
     const angles = anglesForSearch();
     const state = (k) => eventSearch.angles[k] || "waiting";
@@ -10994,11 +11211,10 @@ ${(() => {
       .join("")}</div>`;
 
     if (running) {
-      html += `<p class="settings-hint">${
-        eventSearch.results.length
-          ? `${eventSearch.results.length} so far — the rest are still looking.`
-          : "Looking. Results appear as each search answers rather than all at the end."
-      }</p>`;
+      html += renderLiveStages(angles);
+      if (eventSearch.results.length) {
+        html += `<p class="settings-hint">${eventSearch.results.length} on the list so far — the rest are still looking.</p>`;
+      }
       html += `<button class="link-btn" id="evStop">Stop and keep what's found</button>`;
     } else if (eventSearch.stopped) {
       html += `<p class="settings-hint">Stopped — the ${eventSearch.results.length} already found ${
@@ -11366,6 +11582,7 @@ ${(() => {
     view.innerHTML = html;
     view.scrollTop = screenId === eventsScreenId ? previousScroll : 0;
     eventsScreenId = screenId;
+    if (view.querySelector("[data-live-started]")) tickLiveSeconds();
     endRenderPass();
     wireEvents();
   }
@@ -11922,10 +12139,13 @@ ${(() => {
     eventSearch.angleErrors[angle.key] = answer.error || "";
 
     const fresh = absorbAngle(answer, ctx);
-    scheduleEventsRedraw();
+    let toPlace = fresh.length;
+    liveStage(angle.key, toPlace ? "placing" : "done", { toPlace, names: [] });
     fresh.forEach((entry) => {
       eventQueue.push(async () => {
         const placed = await placeOne(entry, ctx);
+        toPlace--;
+        if (generation === eventGeneration) liveStage(angle.key, toPlace > 0 ? "placing" : "done", { toPlace });
         if (generation !== eventGeneration || !placed) return;
         const onRoute = measureAgainstRoute(placed, ctx.route);
         if (!onRoute.keep) {
@@ -12177,6 +12397,7 @@ ${(() => {
 
     const angles = anglesForSearch();
     angles.forEach((a) => { eventSearch.angles[a.key] = "waiting"; });
+    eventSearch.live = {};
 
     // Independent chains rather than a Promise.all barrier. The fastest
     // angle's results are on screen while the slowest is still thinking,
@@ -20739,6 +20960,7 @@ ${(() => {
   // anything.
   window.__tripTest = {
     ASSISTANTS,
+    partialListings,
     runWeeklyCheck,
     weeklyNotifications,
     askOneAngle,
