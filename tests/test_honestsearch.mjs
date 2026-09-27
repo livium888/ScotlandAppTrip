@@ -195,28 +195,46 @@ check('a full flash model outranks a newer lite one', await page.evaluate(() => 
     s('models/gemini-3.5-flash') > s('models/gemini-2.5-flash') &&
     s('models/gemini-2.5-flash-image') === -Infinity;
 }));
-// Lite chosen in Settings, and a lite search model remembered from the old
-// ranking: neither is used to search.
+// A lite search model remembered from the old ranking, with nothing chosen
+// in Settings: asked again, and replaced by a full one.
 await seed();
 await page.evaluate(() => {
   const s = JSON.parse(localStorage.getItem('trip-settings-v1'));
   localStorage.setItem('trip-settings-v1', JSON.stringify(Object.assign(s, {
-    geminiModel: 'models/gemini-3.5-flash-lite', geminiModelPinned: true,
-    geminiSearchModel: 'models/gemini-3.5-flash-lite' })));
+    geminiModel: 'models/gemini-3.5-flash-lite', geminiSearchModel: 'models/gemini-3.5-flash-lite' })));
 });
 behaviour = ({ grounded, model }) => grounded && !/lite/.test(model)
   ? { text: JSON.stringify([listing('Folk Evening')]), gm: GM }
   : { text: '[]' };
 await searchOne('hall');
-check('with lite chosen in Settings and remembered, the search still goes to a full model',
+check('with nothing chosen, a lite model remembered from before is replaced by a full one',
   requests[0] && requests[0].model === 'gemini-3.5-flash', JSON.stringify(requests.map((r) => r.model)));
 check('and finds what is on', (await names()).includes('Folk Evening'), JSON.stringify(await names()));
 await page.evaluate(() => document.getElementById('evTrace')?.click());
 await page.waitForTimeout(300);
-const tr = await page.evaluate(() => document.querySelector('#placeModal .trace-text')?.textContent || '');
+let tr = await page.evaluate(() => document.querySelector('#placeModal .trace-text')?.textContent || '');
 check('the trace says which models the key has', /Models on this key: .*gemini-3\.5-flash-lite.*gemini-3\.5-flash/.test(tr), tr.slice(0, 400));
-check('and why this one was used, lite in Settings included', /Why this model: the best search model on this key \(Settings has gemini-3\.5-flash-lite chosen, but lite models don't search reliably\)/.test(tr),
-  (tr.match(/Why this model:.*/) || [''])[0]);
+check('and why this one was used', /Why this model: the best search model on this key/.test(tr), (tr.match(/Why this model:.*/) || [''])[0]);
+await page.evaluate(() => document.querySelector('#placeModal .modal-close')?.click());
+
+// A model chosen in Settings is used for searches too - whatever it is.
+// "I select a model in settings, you need to use that one, end of story."
+await seed();
+await page.evaluate(() => {
+  const s = JSON.parse(localStorage.getItem('trip-settings-v1'));
+  localStorage.setItem('trip-settings-v1', JSON.stringify(Object.assign(s, {
+    geminiModel: 'models/gemini-3.5-flash-lite', geminiModelPinned: true })));
+});
+behaviour = ({ grounded }) => grounded ? { text: JSON.stringify([listing('Folk Evening')]), gm: GM } : { text: '[]' };
+await searchOne('hall');
+check('a lite model chosen in Settings is the one used to search', requests[0] && requests[0].model === 'gemini-3.5-flash-lite',
+  JSON.stringify(requests.map((r) => r.model)));
+check('and only that one - no other model is asked', requests.every((r) => r.model === 'gemini-3.5-flash-lite'),
+  JSON.stringify(requests.map((r) => r.model)));
+await page.evaluate(() => document.getElementById('evTrace')?.click());
+await page.waitForTimeout(300);
+tr = await page.evaluate(() => document.querySelector('#placeModal .trace-text')?.textContent || '');
+check('and the trace says it was chosen in Settings', /Why this model: the model chosen in Settings/.test(tr), (tr.match(/Why this model:.*/) || [''])[0]);
 await page.evaluate(() => document.querySelector('#placeModal .modal-close')?.click());
 
 // ---------- 6c. Lines of text, read on the phone ----------

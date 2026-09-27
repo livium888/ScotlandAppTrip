@@ -9569,20 +9569,19 @@ ${(() => {
     // Straight to the model that searches. The everyday lite model often
     // decides not to, and asking it first meant two paid requests for one
     // answer. A model pinned in Settings is the owner's choice and is kept.
-    // A pinned model is kept unless it is a lite one: the lite tier does
-    // not search reliably, and a search that does not search is a request
-    // paid for nothing.
+    // A model chosen in Settings is used, full stop - the owner's decision,
+    // including for searches. Only when nothing is chosen does the app pick,
+    // and then it picks the best searching model on the key.
     let model = "";
     const settingsNow = loadTripSettings();
     if (aiProviderKey() === "gemini") {
       const pinned = settingsNow.geminiModelPinned ? settingsNow.geminiModel : "";
-      if (pinned && !/lite/.test(pinned)) {
+      if (pinned) {
         model = pinned;
         searchModelWhy = "the model chosen in Settings";
       } else {
         try {
           model = await resolveSearchModel(settingsNow.geminiKey.trim());
-          if (pinned) searchModelWhy += ` (Settings has ${pinned.replace(/^models\//, "")} chosen, but lite models don't search reliably)`;
         } catch (e) {
           model = "";
           searchModelWhy = `couldn't list this key's models (${(e && e.message) || e}) - used the everyday one`;
