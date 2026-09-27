@@ -1,9 +1,11 @@
 // Four asks, one commit.
 //
-// "Cache results from past searches for like 7 days so I don't have to keep
-// querying AI." Nine grounded calls is the most expensive thing this app does,
-// and going back to a screen you were on ten minutes ago bought all nine
-// again.
+// "Save the results as entries on a list, and drop them once there are 10 or
+// 20 - not a cache that answers a search for me." It began as "cache results
+// for 7 days so I don't keep querying AI", and was built as a hidden cache
+// that answered a repeated question from memory. That turned a failed search
+// into a permanent "zero". Now every search asks, and past searches are a
+// list of the last twenty, the newest back on screen when the app reopens.
 //
 // "Don't cap the list - if you find 50 results give me 50." There was a
 // slice(0, 40) per angle. Everything downstream already filters hard; a cap on
@@ -177,32 +179,20 @@ const found = await rows();
 check('a search that finds fifty shows fifty, not forty',
   found >= MANY, `${found} rows from ${MANY} + ${ANGLE_KEYS.length - 1} others`);
 
-// ---------- Not paying twice for the same question ----------
+// ---------- Every search asks; earlier ones are a list ----------
 
 const callsFresh = calls;
 check('the first search actually asked', callsFresh >= ANGLE_KEYS.length, String(callsFresh));
 
 await searchWindow('today');
-check('asking the same thing again costs nothing', calls === 0, `${calls} calls`);
-check('and the answers are still there', (await rows()) === found, `${found} -> ${await rows()}`);
-check('and it says they were remembered rather than found',
-  /Remembered from/.test(await screen()), (await screen()).slice(0, 700));
-check('with a way to go and look again', await page.evaluate(() => !!document.getElementById('evFresh')));
+check('asking the same thing again really asks - nothing is answered from memory',
+  calls >= ANGLE_KEYS.length, `${calls} calls`);
+check('and the answers are there', (await rows()) === found, `${found} -> ${await rows()}`);
 
-// A different day is a different question.
 await searchWindow('tomorrow');
 check('a different day is asked properly', calls >= ANGLE_KEYS.length, `${calls} calls`);
 
-// And the remembered copy is per-question, so going back is free again.
-await searchWindow('today');
-check('and going back to the first one is free again', calls === 0, `${calls} calls`);
-
-await page.evaluate(() => { const b = document.getElementById('evFresh'); if (b) b.click(); });
-await settle();
-check('"look again" does go and ask', calls >= ANGLE_KEYS.length, `${calls} calls`);
-check('and stops calling the results remembered', !/Remembered from/.test(await screen()));
-
-// ---------- What is remembered, and for how long ----------
+// ---------- What is kept, and how much ----------
 
 const cache = await page.evaluate(() => JSON.parse(localStorage.getItem('event-cache-v1') || '{}'));
 check('the answers are stored', Object.keys(cache).length >= 1, JSON.stringify(Object.keys(cache)));
@@ -210,19 +200,32 @@ check('the answers are stored', Object.keys(cache).length >= 1, JSON.stringify(O
 check('keyed on the actual dates rather than the name of the window',
   Object.keys(cache).some((k) => k.includes(today)), JSON.stringify(Object.keys(cache)));
 
-const aged = await page.evaluate((day) => {
+// Not by age: an old search about days still to come is still worth having.
+check('an entry ten days old is still offered, because its events are still to come', await page.evaluate(() => {
   const c = JSON.parse(localStorage.getItem('event-cache-v1') || '{}');
-  const key = Object.keys(c).find((k) => k.includes(day));
-  if (!key) return null;
-  // Eight days old: past its week.
-  c[key].at = Date.now() - 8 * 24 * 60 * 60 * 1000;
+  const key = Object.keys(c)[0];
+  c[key].at = Date.now() - 10 * 24 * 60 * 60 * 1000;
   localStorage.setItem('event-cache-v1', JSON.stringify(c));
-  return key;
-}, today);
-check('an entry can be aged for the test', !!aged);
+  return window.__tripTest.recentEventSearches().some((r) => r.key === key);
+}));
+
+// Twenty, then the oldest goes.
+await page.evaluate(() => {
+  const c = JSON.parse(localStorage.getItem('event-cache-v1') || '{}');
+  const model = c[Object.keys(c)[0]];
+  for (let i = 0; i < 25; i++) c[`planted-${i}`] = Object.assign({}, model, { at: Date.now() - (30 + i) * 86400000 });
+  localStorage.setItem('event-cache-v1', JSON.stringify(c));
+});
 await searchWindow('today');
-check('anything older than a week is asked again rather than served stale',
-  calls >= ANGLE_KEYS.length, `${calls} calls`);
+check('the list keeps the last twenty and drops the oldest', await page.evaluate(() => {
+  const c = JSON.parse(localStorage.getItem('event-cache-v1') || '{}');
+  return Object.keys(c).length === 20 && !('planted-24' in c) && 'planted-0' in c;
+}), await page.evaluate(() => Object.keys(JSON.parse(localStorage.getItem('event-cache-v1') || '{}')).length));
+await page.evaluate(() => {
+  const c = JSON.parse(localStorage.getItem('event-cache-v1') || '{}');
+  Object.keys(c).filter((k) => k.startsWith('planted-')).forEach((k) => delete c[k]);
+  localStorage.setItem('event-cache-v1', JSON.stringify(c));
+});
 
 // A remembered answer must never show something that has since finished.
 const stale = await page.evaluate((day) => {
@@ -237,9 +240,15 @@ const stale = await page.evaluate((day) => {
   return true;
 }, today);
 check('a past event can be planted in the remembered copy', stale);
-await searchWindow('today');
+await page.reload({ waitUntil: 'load' });
+await page.waitForTimeout(500);
+await page.evaluate(() => document.querySelector('[data-view="events"]').click());
+await page.waitForTimeout(400);
+await page.evaluate(() => { const b = document.querySelector('[data-recent]'); if (b) b.click(); });
+await page.waitForTimeout(400);
 check('and it is not shown, because the diary is filtered on the way out',
   !/Last Month Fair/.test(await screen()));
+await openForm();
 
 // ---------- The searches themselves, listed ----------
 //
@@ -264,9 +273,11 @@ await page.waitForTimeout(400);
 
 const listed = await page.evaluate(() =>
   Array.from(document.querySelectorAll('[data-recent]')).map((b) => b.textContent.replace(/\s+/g, ' ').trim()));
-// This is the assertion the change exists for.
-check('after closing and reopening, earlier searches are on the screen',
-  listed.length >= 2, JSON.stringify(listed));
+// This is the assertion the change exists for: coming back to the app does
+// not mean searching again. The last one is on screen, the rest are listed.
+check('after closing and reopening, the last search is back on screen, asking nothing',
+  (await rows()) > 0 && /Remembered from/.test(await screen()), (await screen()).slice(0, 300));
+check('and the earlier ones are listed', listed.length >= 1, JSON.stringify(listed));
 check('each says where and when it was for', /Bakewell/.test(listed.join(' ')), JSON.stringify(listed));
 check('and how much is still to come', /still to come/.test(listed.join(' ')), JSON.stringify(listed));
 check('and how long ago it was found', /ago|just now/.test(listed.join(' ')), JSON.stringify(listed));

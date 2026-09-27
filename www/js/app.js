@@ -1396,7 +1396,13 @@
         gm.searchEntryPoint)
     );
 
-    return { text, sources, searched, model: path };
+    return {
+      text,
+      sources,
+      searched,
+      model: path,
+      queries: gm && Array.isArray(gm.webSearchQueries) ? gm.webSearchQueries.slice(0, 20) : [],
+    };
   }
 
   // ---------- What the AI is costing ----------
@@ -9508,6 +9514,8 @@ ${(() => {
       if (!live || names.length !== live.names.length) liveStage(angle.key, "writing", { names });
     };
     liveStage(angle.key, "searching", { started: Date.now(), names: [] });
+    const began = Date.now();
+    traceKind(angle.key, { label: angle.label, prompt, items: [] });
     // Straight to the model that searches. The everyday lite model often
     // decides not to, and asking it first meant two paid requests for one
     // answer. A model pinned in Settings is the owner's choice and is kept.
@@ -9530,6 +9538,15 @@ ${(() => {
     } catch (e) {
       error = (e && e.message) || String(e);
     }
+    traceKind(angle.key, {
+      model: (answer && answer.model) || model || "(the everyday model)",
+      ms: Date.now() - began,
+      error: answer ? "" : error,
+      searched: answer ? answer.searched : null,
+      queries: (answer && answer.queries) || [],
+      sources: answer ? (answer.sources || []).length : 0,
+      raw: answer ? String(answer.text || "").slice(0, 15000) : null,
+    });
     if (!answer) return { list: [], sources: [], angle: angle.key, error };
 
     // One request per kind, and no quiet second one: an answer that was not
@@ -9546,6 +9563,7 @@ ${(() => {
     let list = extractJson(answer.text);
     if (!(Array.isArray(list) && list.length) && (answer.text || "").trim().length > 40) {
       liveStage(angle.key, "tidying");
+      traceKind(angle.key, { rewritten: true });
       try {
         const tidy = await callModel(reformatEventsPrompt(answer.text, angle), { json: true, maxTokens: 8192 });
         list = extractJson(tidy.text);
@@ -9553,6 +9571,7 @@ ${(() => {
         error = (e && e.message) || String(e);
       }
     }
+    traceKind(angle.key, { parsed: Array.isArray(list) ? list.length : 0 });
     if (Array.isArray(list) && list.length) {
       return { list, sources: answer.sources || [], searched: !!answer.searched, angle: angle.key };
     }
@@ -9852,16 +9871,25 @@ ${(() => {
     // shown.
     (answer.list || []).forEach((item) => {
       const event = normaliseEvent(item, ctx.window);
+      const label = `${(item && item.name) || "(no name)"}${item && item.venue ? ` @ ${item.venue}` : ""}${
+        item && item.date ? ` (${item.date}${item.endDate ? `–${item.endDate}` : ""})` : ""
+      }`;
       if (!event) {
         // Two different failures wearing one name. "The model gave no usable
         // date" and "it is real but not in the days you asked about" want
         // different answers from you, so they are counted and said apart.
-        if (!parseEventDate(item && item.date)) eventsDropped.undated++;
-        else eventsDropped.outside++;
+        if (!parseEventDate(item && item.date)) {
+          eventsDropped.undated++;
+          traceItem(answer.angle, label, "dropped: no usable date");
+        } else {
+          eventsDropped.outside++;
+          traceItem(answer.angle, label, "dropped: outside the dates asked for");
+        }
         return;
       }
       if (!stillOnAt(event, ctx.cutoff)) {
         eventsDropped.finished++;
+        traceItem(answer.angle, label, "dropped: already finished by the time asked for");
         return;
       }
       const sessionKind = EVENT_ANGLES.find((a) => a.key === answer.angle);
@@ -9877,6 +9905,9 @@ ${(() => {
       const fit = eventFitsMode(event);
       if (fit) {
         eventsDropped[fit] = (eventsDropped[fit] || 0) + 1;
+        traceItem(answer.angle, label, `dropped: ${fit}${event.filmRating ? ` (rated ${event.filmRating})` : ""}${
+          event.minAge != null || event.maxAge != null ? ` (ages ${event.minAge ?? "?"}-${event.maxAge ?? "?"})` : ""
+        }`);
         return;
       }
       const id = eventFingerprint(event);
@@ -9886,6 +9917,7 @@ ${(() => {
         // keeping whichever version knows more. The row may already be on
         // screen by now, so this enriches it in place rather than adding one.
         eventsDropped.merged++;
+        traceItem(answer.angle, label, "merged with the same listing found by another kind");
         existing.angles.push(answer.angle);
         if (!existing.event.ticketUrl && event.ticketUrl) existing.event.ticketUrl = event.ticketUrl;
         if (!existing.event.venue && event.venue) existing.event.venue = event.venue;
@@ -9896,8 +9928,12 @@ ${(() => {
       }
       // Same name, same day, different town: two events, not one.
       const dedupeKey = existing ? `${id}|${String(event.area || "").toLowerCase()}` : id;
-      if (ctx.seen.has(dedupeKey)) return;
-      const entry = { event, sources: answer.sources || [], searched: !!answer.searched, angles: [answer.angle] };
+      if (ctx.seen.has(dedupeKey)) {
+        traceItem(answer.angle, label, "dropped: duplicate");
+        return;
+      }
+      traceItem(answer.angle, label, "kept, being placed on the map");
+      const entry = { event, sources: answer.sources || [], searched: !!answer.searched, angles: [answer.angle], label };
       ctx.seen.set(dedupeKey, entry);
       fresh.push(entry);
     });
@@ -9915,11 +9951,13 @@ ${(() => {
     // and shown on request with the reason attached.
     if (!spot) {
       eventsDropped.unplaced++;
+      traceItem(found[0], entry.label || event.name, "held back: couldn't be placed on the map");
       eventsHeldBack.push(Object.assign({}, event, { kinds: found, sources, why: "couldn't be placed on the map" }));
       return null;
     }
     if (spot.tooFar) {
       eventsDropped.tooFar++;
+      traceItem(found[0], entry.label || event.name, "held back: looks like it's somewhere else");
       eventsHeldBack.push(Object.assign({}, event, { kinds: found, sources, why: "looks like it's somewhere else" }));
       return null;
     }
@@ -10239,7 +10277,7 @@ ${(() => {
       })
       .join("");
     html += `</div>`;
-    html += `<p class="settings-hint">Kept for a week, then dropped. Opening one costs nothing —
+    html += `<p class="settings-hint">Your last ${EVENT_CACHE_MAX} searches. Opening one costs nothing —
       it shows what was found at the time, with anything that has since been and gone taken out.
       <button class="link-btn" id="evForget">Forget these</button></p>`;
     return html;
@@ -11376,6 +11414,11 @@ ${(() => {
     if (eventSearch.status === "loading" || Object.keys(eventSearch.angles).length) {
       html += renderAngleProgress();
     }
+    // After any search, whatever it found - including nothing, which is
+    // when it is most wanted.
+    if ((eventSearch.status === "done" || eventSearch.status === "error") && loadTrace()) {
+      html += `<button class="link-btn ev-trace-btn" id="evTrace">${icon("info", { size: 15, cls: "ico-inline" })} What happened?</button>`;
+    }
 
     if (eventSearch.results.length) {
       const savedIds = new Set(saved.map((p) => p.id));
@@ -11696,6 +11739,9 @@ ${(() => {
     }
 
 
+    const why = document.getElementById("evTrace");
+    if (why) why.addEventListener("click", openTrace);
+
     const go = document.getElementById("evSearch");
     if (go) {
       go.addEventListener("click", () => {
@@ -11875,8 +11921,11 @@ ${(() => {
   // stored copy is filtered on the way out anyway, so a cached search never
   // shows you something that has since finished.
   const EVENT_CACHE_KEY = "event-cache-v1";
-  const EVENT_CACHE_MS = 7 * 24 * 60 * 60 * 1000;
-  const EVENT_CACHE_MAX = 12;
+  // The last twenty searches that found something, newest first. Not by
+  // age: a search from ten days ago about next month is still worth having.
+  // An entry goes when twenty newer ones push it off, or when everything in
+  // it has been and gone.
+  const EVENT_CACHE_MAX = 20;
 
   function eventCacheKey(centre, windowKey, radius, kinds) {
     const w = eventWindow(windowKey);
@@ -11911,7 +11960,7 @@ ${(() => {
     return Object.keys(cache)
       .map((key) => {
         const hit = cache[key];
-        if (!hit || Date.now() - hit.at > EVENT_CACHE_MS) return null;
+        if (!hit) return null;
         if (cachedFromMemory(hit)) return null;
         const upcoming = (hit.results || []).filter((e) => !eventIsPast(e));
         // A search whose events have all been and gone is not worth offering.
@@ -11924,8 +11973,16 @@ ${(() => {
       .sort((a, b) => b.at - a.at);
   }
 
+  // Coming back to the app - or Android having closed it in the background
+  // - brings back the last search's results rather than an empty Find.
+  function restoreLastSearch() {
+    if (eventSearch.status !== "idle" || eventSearch.results.length) return;
+    const last = recentEventSearches()[0];
+    if (last) openRecentSearch(last.key, { quiet: true });
+  }
+
   // Opening one is not a search. Nothing is asked for, nothing is spent.
-  function openRecentSearch(key) {
+  function openRecentSearch(key, opts) {
     const hit = readEventCache(key);
     if (!hit) return;
     const meta = hit.meta || {};
@@ -11948,7 +12005,7 @@ ${(() => {
     eventSearch.indoorOnly = false;
     eventSearch.dismissed = [];
     eventSearch.status = "done";
-    renderEvents();
+    if (!(opts && opts.quiet) || view.dataset.activeTab === "events") renderEvents();
   }
 
   function forgetRecentSearches() {
@@ -11957,7 +12014,7 @@ ${(() => {
 
   function readEventCache(key) {
     const hit = loadEventCache()[key];
-    if (!hit || Date.now() - hit.at > EVENT_CACHE_MS) return null;
+    if (!hit) return null;
     if (cachedFromMemory(hit)) return null;
     return hit;
   }
@@ -11966,17 +12023,22 @@ ${(() => {
   // nothing at all was looked up. Serving it for the rest of its week would
   // keep showing exactly what was wrong; asking again costs one search.
   function cachedFromMemory(hit) {
-    const all = (hit.results || []).filter((e) => !e.pastedIn);
-    return all.length > 0 && all.every((e) => e.unsourced);
+    const results = hit.results || [];
+    // Empty ones too: remembered from before empty searches stopped being
+    // kept, and replaying them is what made a failed search look permanent.
+    if (!results.length) return true;
+    // A list you pasted in is yours, not a guess.
+    const found = results.filter((e) => !e.pastedIn);
+    return found.length > 0 && found.every((e) => e.unsourced);
   }
 
   function writeEventCache(key, results, dropped, held, meta) {
     const cache = loadEventCache();
     cache[key] = { at: Date.now(), results, dropped, held, meta: meta || {} };
-    // Oldest out first, and anything past its week goes regardless. Without
-    // the cap this grows for ever on a device that searches a lot of places.
+    // Anything whose events have all been and gone makes room first, then
+    // the oldest beyond twenty.
     Object.keys(cache).forEach((k) => {
-      if (Date.now() - cache[k].at > EVENT_CACHE_MS) delete cache[k];
+      if (!(cache[k].results || []).some((e) => !eventIsPast(e))) delete cache[k];
     });
     const keys = Object.keys(cache).sort((a, b) => cache[b].at - cache[a].at);
     keys.slice(EVENT_CACHE_MAX).forEach((k) => delete cache[k]);
@@ -12155,8 +12217,10 @@ ${(() => {
         const onRoute = measureAgainstRoute(placed, ctx.route);
         if (!onRoute.keep) {
           eventsDropped.offRoute = (eventsDropped.offRoute || 0) + 1;
+          traceItem(angle.key, entry.label || placed.name, "dropped: too far off the route");
           return;
         }
+        traceItem(angle.key, entry.label || placed.name, "SHOWN");
         if (onRoute.offKm != null) {
           placed.offRouteMi = toMiles(onRoute.offKm);
           placed.alongKm = onRoute.alongKm;
@@ -12267,7 +12331,6 @@ ${(() => {
   }
 
   async function runEventSearch(opts) {
-    const fresh = !!(opts && opts.fresh);
     // The one place in the app where an ungrounded model must not be allowed
     // to answer. Everything else degrades: Explore falls back to
     // OpenStreetMap, a described place search falls back to a name lookup.
@@ -12339,25 +12402,14 @@ ${(() => {
     const radius = (centre.miles || DEFAULT_ANCHOR_MILES) * 1609;
     const window = eventWindow(eventSearch.when);
 
-    // The same question asked twice inside a week is answered from what it
-    // said the first time. Everything past its date is dropped on the way out,
-    // so yesterday's cached answer never shows you yesterday's events.
+    // Where this search is filed in the list of earlier ones. The same
+    // question asked again replaces its older entry.
     const cacheKey = eventCacheKey(centre, eventSearch.when, radius, eventSearch.kinds);
-    if (!fresh) {
-      const hit = readEventCache(cacheKey);
-      if (hit) {
-        eventSearch.results = sortEventsByWhen((hit.results || []).filter((e) => !eventIsPast(e)));
-        eventsDropped = Object.assign({}, NO_DROPS, hit.dropped || {});
-        eventsHeldBack = hit.held || [];
-        eventSearch.fromCache = hit.at;
-        eventSearch.status = eventSearch.results.length ? "done" : "error";
-        if (!eventSearch.results.length) {
-          eventSearch.error = `Nothing found on ${window.label} near ${centre.name}.`;
-        }
-        renderEvents();
-        return;
-      }
-    }
+
+    // Every search asks. Earlier searches are kept as a list you open by
+    // choice (and the last one is back on screen when you return to the
+    // app) - never used to answer a new search without asking, which is how
+    // a failed search came back as "zero" again and again.
     eventSearch.fromCache = 0;
 
     // The moment to search from, when one was given: on that day, anything
@@ -12401,6 +12453,14 @@ ${(() => {
     eventQueue = makePlaceQueue(scheduleEventsRedraw);
 
     const angles = anglesForSearch();
+    startTrace({
+      where: route ? `${route.from.name} to ${route.to.name}` : `${centre.name} (${Math.round(toMiles(radius / 1000))} miles)`,
+      when: `${isoDate(window.from)} to ${isoDate(window.to)}${window.fromTime ? ` from ${window.fromTime}` : ""} (${window.label})`,
+      mode: tripMode(),
+      ratings: angles.some((a) => a.key === "films") ? chosenFilmRatings().join(", ") : "",
+      towns: (ctx.towns || []).join(", "),
+      cache: "a new search",
+    });
     angles.forEach((a) => { eventSearch.angles[a.key] = "waiting"; });
     eventSearch.live = {};
 
@@ -12425,10 +12485,12 @@ ${(() => {
     await eventQueue.whenIdle();
     if (generation !== eventGeneration) return;
 
-    // Kept whether or not anything was found: a search that legitimately
-    // returns nothing is exactly the one not worth paying for twice.
-    // Enough to describe the search on a list without re-deriving any of it.
-    writeEventCache(cacheKey, eventSearch.results, eventsDropped, eventsHeldBack, {
+    // Remembered only when it worked. A search that found nothing, or where
+    // any kind failed, used to be kept for a week - and asking again then
+    // replayed "zero results" in a second without asking anything, which is
+    // how a city full of cinemas came back empty twice running.
+    const anyFailed = angles.some((a) => eventSearch.angles[a.key] === "failed");
+    if (eventSearch.results.length && !anyFailed) writeEventCache(cacheKey, eventSearch.results, eventsDropped, eventsHeldBack, {
       centre: centre.name,
       lat: centre.lat,
       lon: centre.lon,
@@ -19430,6 +19492,132 @@ ${(() => {
     store(NOTIFY_FINGERPRINT_KEY, "");
   }
 
+  // ---------- What happened: the trace of the last search ----------
+  // "If you want to give me a debug button, it's time - so we stop going in
+  // circles." Everything a search did, per kind: the exact question, which
+  // model, how long, whether Gemini actually searched and for what, its raw
+  // answer, and what became of every listing in it. Kept for the last search
+  // only, on this phone, and never with the API key in it.
+  const TRACE_KEY = "search-trace-v1";
+  let searchTrace = null;
+
+  function startTrace(meta) {
+    searchTrace = Object.assign({ at: new Date().toISOString(), app: APP_VERSION_LABEL(), kinds: {} }, meta);
+    saveTrace();
+  }
+
+  function traceKind(key, patch) {
+    if (!searchTrace) return null;
+    const k = searchTrace.kinds[key] || (searchTrace.kinds[key] = { items: [] });
+    Object.assign(k, patch || {});
+    saveTrace();
+    return k;
+  }
+
+  function traceItem(key, name, fate) {
+    const k = traceKind(key);
+    if (k && k.items.length < 200) k.items.push({ name: String(name || "(no name)").slice(0, 120), fate });
+    saveTrace();
+  }
+
+  let traceSaveTimer = null;
+  function saveTrace() {
+    clearTimeout(traceSaveTimer);
+    traceSaveTimer = setTimeout(() => {
+      try {
+        store(TRACE_KEY, JSON.stringify(searchTrace));
+      } catch (e) {
+        /* a full phone loses the trace, not the search */
+      }
+    }, 300);
+  }
+
+  function loadTrace() {
+    return searchTrace || readJson(TRACE_KEY, null);
+  }
+
+  // Which build this is, so a trace says which APK it came from. Android
+  // knows (the version code rises with every CI build); a browser does not.
+  let appBuild = "";
+  (async () => {
+    const app = nativePlugin("App");
+    if (!app || !app.getInfo) return;
+    try {
+      const info = await app.getInfo();
+      appBuild = `${info.version || "?"} (${info.build || "?"})`;
+    } catch (e) {
+      /* unknown is fine */
+    }
+  })();
+
+  function APP_VERSION_LABEL() {
+    return appBuild;
+  }
+
+  // As text, for copying into a message. The key cannot be in it: it is
+  // never put in a trace, and anything shaped like one is scrubbed anyway.
+  function traceText(t) {
+    if (!t) return "No search has been run on this phone yet.";
+    const out = [];
+    out.push(`Wayfare search trace ${t.at}${t.app ? ` (build ${t.app})` : ""}`);
+    out.push(`Where: ${t.where || "?"}   When: ${t.when || "?"}   Mode: ${t.mode || "none"}`);
+    if (t.ratings) out.push(`Film ratings: ${t.ratings}`);
+    if (t.cache) out.push(`Answered from: ${t.cache}`);
+    if (t.towns) out.push(`Towns named: ${t.towns}`);
+    Object.keys(t.kinds || {}).forEach((key) => {
+      const k = t.kinds[key];
+      out.push("");
+      out.push(`=== ${k.label || key} ===`);
+      out.push(`Model: ${k.model || "?"}   Took: ${k.ms != null ? `${(k.ms / 1000).toFixed(1)}s` : "?"}   Searched the web: ${
+        k.searched == null ? "?" : k.searched ? "yes" : "NO"
+      }   Sources: ${k.sources != null ? k.sources : "?"}`);
+      if (k.queries && k.queries.length) out.push(`Google searches it ran: ${k.queries.join(" | ")}`);
+      if (k.error) out.push(`Error: ${k.error}`);
+      if (k.parsed != null) out.push(`Listings in the answer: ${k.parsed}${k.rewritten ? " (after reformatting a prose reply)" : ""}`);
+      (k.items || []).forEach((it) => out.push(`  - ${it.name}: ${it.fate}`));
+      if (k.prompt) out.push(`--- question sent ---\n${k.prompt}`);
+      if (k.raw != null) out.push(`--- raw answer (${k.raw.length} chars) ---\n${k.raw || "(empty)"}`);
+    });
+    return out.join("\n").replace(/AIza[0-9A-Za-z_-]{20,}/g, "[key removed]");
+  }
+
+  function openTrace() {
+    const t = loadTrace();
+    const text = traceText(t);
+    placeModal.innerHTML = `
+      <div class="modal-backdrop" data-close="1">
+        <div class="modal-sheet" role="dialog" aria-label="What happened">
+          <div class="modal-handle"></div>
+          <button class="modal-close" data-close="1" aria-label="Close">${icon("close", { size: 17, cls: "ico-inline" })}</button>
+          <div class="modal-body">
+            <h2 class="modal-title">What happened</h2>
+            <div class="settings-btn-row">
+              <button class="modal-btn modal-btn-primary" id="traceCopy">${icon("note", { size: 16, cls: "ico-inline" })} Copy</button>
+              <button class="modal-btn" id="traceShare">${icon("share", { size: 16, cls: "ico-inline" })} Share</button>
+            </div>
+            <pre class="settings-result trace-text">${esc(text)}</pre>
+          </div>
+        </div>
+      </div>`;
+    placeModal.classList.add("open");
+    makeSheetDraggable(placeModal, closePlaceModal);
+    placeModal.querySelectorAll("[data-close]").forEach((el) =>
+      el.addEventListener("click", (e) => {
+        if (el.classList.contains("modal-backdrop") && e.target !== el) return;
+        closePlaceModal();
+      })
+    );
+    document.getElementById("traceCopy").addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(text);
+        toast("Copied — paste it into a message");
+      } catch (e) {
+        toast("Couldn't copy — use Share instead");
+      }
+    });
+    document.getElementById("traceShare").addEventListener("click", () => shareText("Wayfare search trace", text));
+  }
+
   // ---------- The weekly check ----------
   // "Make an automatic query once a week at a set time, or multiple ones, so
   // you can tell me what's on at the weekend and I can book tickets."
@@ -20965,6 +21153,8 @@ ${(() => {
   // anything.
   window.__tripTest = {
     ASSISTANTS,
+    traceText: () => traceText(loadTrace()),
+    recentEventSearches,
     partialListings,
     runWeeklyCheck,
     weeklyNotifications,
@@ -21087,6 +21277,7 @@ ${(() => {
   // was scheduled last week is not what should fire tomorrow.
   scheduleReschedule();
   scheduleWeeklyChecks();
+  restoreLastSearch();
   window.addEventListener("focus", scheduleReschedule);
 
   refreshForBoard();

@@ -209,7 +209,11 @@ await goTo(page, 'events', 500);
 const offered = () => page.evaluate(() => [...document.querySelectorAll('[data-recent]')].map((b) => b.getAttribute('data-recent')));
 check('a search remembered from before, where nothing was looked up, is not offered again',
   !(await offered()).includes('oldkey'), JSON.stringify(await offered()));
-check('while one that was looked up still is', (await offered()).includes('goodkey'), JSON.stringify(await offered()));
+// The newest good one is back on screen by itself; either way it is kept.
+check('while one that was looked up still is - on the list, or back on screen',
+  (await offered()).includes('goodkey') || (await names()).includes('Folk Evening'), JSON.stringify(await offered()));
+check('and the guessed one is not the one put back on screen', !(await names()).some((n) => /Frozen/.test(n)),
+  JSON.stringify(await names()));
 
 await browser.close();
 console.log(failures ? `\n${failures} FAILED` : '\nAll checks passed');

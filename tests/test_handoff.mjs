@@ -295,14 +295,19 @@ await page.evaluate(() => document.querySelector('[data-view="events"]').click()
 await page.waitForTimeout(500);
 const recentRows = await page.evaluate(() =>
   Array.from(document.querySelectorAll('[data-recent]')).map((b) => b.textContent.replace(/\s+/g, ' ').trim()));
-// The assertion this half exists for.
-check('after closing and reopening the app, the pasted list is still offered',
-  recentRows.length >= 1, JSON.stringify(recentRows));
+// The assertion this half exists for. The last search now comes back on
+// screen by itself when the app is reopened; an older one is on the list.
+const backOnScreen = await rows();
+check('after closing and reopening the app, the pasted list is back',
+  backOnScreen.length >= 1 || recentRows.length >= 1, JSON.stringify({ backOnScreen, recentRows }));
 check('and says it was pasted in, not found',
-  /pasted in/.test(recentRows.join(' ')), JSON.stringify(recentRows));
+  /pasted in/.test(recentRows.join(' ') + await page.evaluate(() => document.getElementById('view').textContent)),
+  JSON.stringify(recentRows));
 
-await page.evaluate(() => { const b = document.querySelector('[data-recent]'); if (b) b.click(); });
-await page.waitForTimeout(600);
+if (!backOnScreen.length) {
+  await page.evaluate(() => { const b = document.querySelector('[data-recent]'); if (b) b.click(); });
+  await page.waitForTimeout(600);
+}
 const restored = await rows();
 check('opening it puts the pasted events back', restored.length >= 1, JSON.stringify(restored));
 check('and asked the AI for nothing to do it', aiCalls === 0, `${aiCalls} calls`);

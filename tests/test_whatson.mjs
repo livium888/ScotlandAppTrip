@@ -264,6 +264,9 @@ await page.waitForTimeout(500);
 await page.evaluate(() => document.querySelector('[data-view="events"]').click());
 await page.waitForTimeout(400);
 await page.evaluate(() => localStorage.removeItem('event-cache-v1'));
+// The last search is back on screen after a reload, with the form folded
+// away; open it the way a person would.
+await openEventForm(page);
 await page.evaluate(() => document.getElementById('evSearch').click());
 await page.waitForTimeout(700);
 // The wording widened when Gemini stopped being the only model that can do
