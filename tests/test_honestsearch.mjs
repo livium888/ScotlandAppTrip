@@ -152,31 +152,44 @@ await searchOne('hall', 90000);
 check('a search that takes fifty seconds is still waited for, not replaced with a guess',
   JSON.stringify(await names()) === JSON.stringify(['Late Folk Evening']), JSON.stringify(await names()));
 
-// ---------- 6. Gemini skipped the search: the stronger model is asked ----------
-// What the phone showed after the first fix: search on, offered, unused.
-// Google leaves the search to the model, and the lite tier often decides it
-// already knows what is on.
+// ---------- 6. One request, on the model that searches ----------
+// The lite model often decides not to search, and asking it first cost two
+// paid requests for one answer. Event searches go straight to the full
+// flash model - never an image or speech model - and ask once.
 await seed();
 behaviour = ({ grounded, model }) => !grounded
   ? { text: '[]' }
   : /lite/.test(model)
-    ? { text: JSON.stringify([listing('Remembered Gala')]) } // no grounding metadata: did not search
+    ? { text: JSON.stringify([listing('Remembered Gala')]) }
     : { text: JSON.stringify([listing('Folk Evening')]), gm: GM };
 await searchOne('hall');
 check('every event question tells the model to search, not answer from memory',
   requests.every((r) => !r.grounded || /Search the web for current listings before answering - do not answer from memory/.test(r.prompt)));
-check('an answer given without searching is not used', !(await names()).includes('Remembered Gala'), JSON.stringify(await names()));
-check('the same question goes to the full flash model', requests.some((r) => r.grounded && r.model === 'gemini-3.5-flash'),
+check('one request for one kind', requests.filter((r) => r.grounded).length === 1, JSON.stringify(requests.map((r) => r.model)));
+check('sent to the full flash model, not the lite one first', requests[0] && requests[0].model === 'gemini-3.5-flash',
   JSON.stringify(requests.map((r) => r.model)));
 check('never to an image or speech model', !requests.some((r) => /image|tts/.test(r.model)));
-check('and what that one searched for is shown', JSON.stringify(await names()) === JSON.stringify(['Folk Evening']),
+check('and what it searched for is shown', JSON.stringify(await names()) === JSON.stringify(['Folk Evening']),
   JSON.stringify(await names()));
+
+// A model pinned in Settings is the owner's choice.
+await seed();
+await page.evaluate(() => {
+  const s = JSON.parse(localStorage.getItem('trip-settings-v1'));
+  localStorage.setItem('trip-settings-v1', JSON.stringify(Object.assign(s, { geminiModel: 'models/gemini-3.5-flash-lite', geminiModelPinned: true })));
+});
+behaviour = ({ grounded }) => grounded ? { text: JSON.stringify([listing('Folk Evening')]), gm: GM } : { text: '[]' };
+await searchOne('hall');
+check('a model pinned in Settings is used as chosen', requests[0] && requests[0].model === 'gemini-3.5-flash-lite',
+  JSON.stringify(requests.map((r) => r.model)));
 
 // ---------- 7. Neither searched: nothing shown, and said plainly ----------
 await seed();
 behaviour = ({ grounded }) => grounded ? { text: JSON.stringify([listing('Remembered Gala')]) } : { text: '[]' };
 await searchOne('hall');
-check('when no model will search, nothing is shown', (await names()).length === 0, JSON.stringify(await names()));
+check('when the model will not search, nothing is shown', (await names()).length === 0, JSON.stringify(await names()));
+check('and it is not asked a second time behind your back', requests.filter((r) => r.grounded).length === 1,
+  `${requests.filter((r) => r.grounded).length} requests`);
 check('and the screen says it answered from memory, so nothing was used', /answered from memory/.test(await view()),
   (await view()).slice(0, 300));
 check('with the retry button', await page.evaluate(() => !!document.querySelector('[data-ev-retry="hall"]')));

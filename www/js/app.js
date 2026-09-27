@@ -8752,62 +8752,49 @@ ${(() => {
     // bury the village fete and double what a search costs.
     { key: "films", label: "Films", onlyWhenPicked: true, session: true,
       ask: "films showing at cinemas - chain, independent and community cinemas, film society " +
-           "screenings, outdoor and pop-up screenings. One entry per film per cinema, with that " +
-           "day's showing times and its BBFC rating",
+           "screenings, outdoor and pop-up screenings",
       kidsAsk: "films for children and families showing at cinemas - new family releases, kids' " +
                "club and weekend morning screenings, relaxed and autism-friendly screenings, " +
-               "outdoor family screenings. One entry per film per cinema, with that day's showing " +
-               "times and its BBFC rating",
+               "outdoor family screenings",
       adultsAsk: "films showing at cinemas - new releases, independent and arthouse cinemas, film " +
                  "society screenings, classics and re-releases, Q&A and preview screenings, outdoor " +
-                 "screenings. One entry per film per cinema, with that day's showing times and its BBFC rating" },
+                 "screenings" },
     // The theatre, with the same shape as films: one row per show per venue,
     // with its performance times, searched only when picked. "Arts &
     // theatre" still catches the am-dram night among everything else; this
     // is for when a show is what you are going out for.
     { key: "theatre", label: "Theatre & shows", onlyWhenPicked: true, session: true,
       ask: "plays, musicals, pantomime, comedy, dance, opera and ballet, children's theatre, " +
-           "touring productions and amateur dramatics at theatres, arts centres and halls. One entry per " +
-           "show per venue, with that day's performance times and the age guidance the venue gives",
+           "touring productions and amateur dramatics at theatres, arts centres and halls",
       kidsAsk: "theatre for children and families - children's plays and children's theatre, " +
                "pantomime, puppet shows, family musicals, circus and storytelling shows, relaxed " +
-               "performances, and drama workshops and youth theatre sessions children can join. " +
-               "One entry per show per venue, with that day's performance times and the age " +
-               "guidance the venue gives",
+               "performances, and drama workshops and youth theatre sessions children can join",
       adultsAsk: "plays, musicals, comedy, dance, opera and ballet, new writing, fringe and touring " +
-                 "productions, amateur dramatics. One entry per show per venue, with that day's performance times " +
-                 "and the age guidance the venue gives" },
+                 "productions, amateur dramatics" },
     // For the kids, each its own search: things with sessions at set times,
     // which the one broad "For children" search could only skim. Searched
     // only when tapped, and only offered where children are on the outing.
     { key: "workshops", label: "Workshops & classes", onlyWhenPicked: true, session: true, kidsOnly: true,
       icon: "edit", meta: "Craft, science, cooking, LEGO, coding",
-      ask: "workshops and classes children can join - craft, art, science, cooking and baking, LEGO and building, coding and robotics sessions at libraries, museums, arts centres and shops." +
-           " One entry per session per venue, with that day's times and the ages it is for" },
+      ask: "workshops and classes children can join - craft, art, science, cooking and baking, LEGO and building, coding and robotics sessions at libraries, museums, arts centres and shops" },
     { key: "storytime", label: "Storytime & family sessions", onlyWhenPicked: true, session: true, kidsOnly: true,
       icon: "note", meta: "Rhyme time, storytelling, museum family days",
-      ask: "storytime, rhyme time and storytelling at libraries and bookshops, and family trails, activity days and drop-in family sessions at museums and galleries." +
-           " One entry per session per venue, with that day's times and the ages it is for" },
+      ask: "storytime, rhyme time and storytelling at libraries and bookshops, and family trails, activity days and drop-in family sessions at museums and galleries" },
     { key: "swim", label: "Swimming sessions", onlyWhenPicked: true, session: true, kidsOnly: true,
       icon: "swim", meta: "Fun sessions, family swims, splash times",
-      ask: "public swimming sessions for families - inflatable fun sessions, family swims, splash and wave times, parent and toddler swims - at leisure centres and pools, with the session times." +
-           " One entry per session per venue, with that day's times and the ages it is for" },
+      ask: "public swimming sessions for families - inflatable fun sessions, family swims, splash and wave times, parent and toddler swims - at leisure centres and pools, with the session times" },
     { key: "active", label: "Active sessions", onlyWhenPicked: true, session: true, kidsOnly: true,
       icon: "walk", meta: "Trampolines, climbing, skating, sport tasters",
-      ask: "active sessions for children - trampoline park jump sessions, climbing and bouldering sessions, ice skating public sessions, junior sports taster sessions, junior parkrun, kids' bike and scooter sessions." +
-           " One entry per session per venue, with that day's times and the ages it is for" },
+      ask: "active sessions for children - trampoline park jump sessions, climbing and bouldering sessions, ice skating public sessions, junior sports taster sessions, junior parkrun, kids' bike and scooter sessions" },
     { key: "animals", label: "Animal encounters", onlyWhenPicked: true, session: true, kidsOnly: true,
       icon: "paw", meta: "Feeding times, meet-the-keeper, lambing days",
-      ask: "animal encounters for families at farms, zoos, aquariums and wildlife parks - feeding times, meet-the-keeper talks, animal handling, lambing days, pony rides and pony days." +
-           " One entry per session per venue, with that day's times and the ages it is for" },
+      ask: "animal encounters for families at farms, zoos, aquariums and wildlife parks - feeding times, meet-the-keeper talks, animal handling, lambing days, pony rides and pony days" },
     { key: "holiday", label: "Holiday clubs & day camps", onlyWhenPicked: true, session: true, kidsOnly: true,
       icon: "calendar", meta: "School-holiday clubs, activity days, forest school",
-      ask: "school holiday and half-term clubs and day camps children can book onto - activity days, sports camps, drama and arts camps, forest school sessions, nature and outdoor days." +
-           " One entry per session per venue, with that day's times and the ages it is for" },
+      ask: "school holiday and half-term clubs and day camps children can book onto - activity days, sports camps, drama and arts camps, forest school sessions, nature and outdoor days" },
     { key: "kidsmusic", label: "Music & dance for kids", onlyWhenPicked: true, session: true, kidsOnly: true,
       icon: "music", meta: "Toddler music, family concerts, dance tasters",
-      ask: "music and dance for children - toddler music classes, baby and toddler sing-alongs, family and children's concerts, kids' dance taster sessions, instrument have-a-go days." +
-           " One entry per session per venue, with that day's times and the ages it is for" },
+      ask: "music and dance for children - toddler music classes, baby and toddler sing-alongs, family and children's concerts, kids' dance taster sessions, instrument have-a-go days" },
     { key: "oneoff", label: "Seasonal & one-off",
       ask: "the odd one-off things that fit no category - wassails, well dressings, " +
            "beating the bounds, lantern parades, bonfire and firework nights, light switch-ons, " +
@@ -8959,7 +8946,61 @@ ${(() => {
     `"none" if you can turn up, or "" if the listing doesn't say}. ` +
     `No other text.`;
 
+  // Films, theatre and the children's sessions: one short question about that
+  // one kind. The general events prompt is four thousand characters of
+  // coffee mornings, parish magazines and church noticeboards - right for
+  // finding a village's small events, and waste in a question about cinema
+  // times, where it also pulled the answers off the subject.
+  function sessionPrompt(centre, window, radiusMetres, angle, route) {
+    const miles = Math.max(1, Math.round(toMiles(radiusMetres / 1000)));
+    const where = route
+      ? `on the way from ${route.from.name} to ${route.to.name}, within about ${route.miles || DEFAULT_CORRIDOR_MILES} miles of that road`
+      : `within about ${miles} miles of ${centre.name}`;
+    const when = isoDate(window.from) === isoDate(window.to)
+      ? `on ${humanDate(window.from)} ${window.from.getFullYear()}`
+      : `between ${humanDate(window.from)} and ${humanDate(window.to)} ${window.from.getFullYear()}`;
+    const m = tripMode();
+    const who = [];
+    const travellers = whoDescription();
+    if (travellers) who.push(`Travellers: ${travellers}.`);
+    if (m === "kids") who.push("Who this is for: a day out WITH CHILDREN - only things put on for children or families.");
+    if (m === "adults") who.push("Who this is for: grown-ups WITHOUT children - nothing aimed at children or families, and nothing sexual or explicit.");
+    const prefs = preferencesForMode();
+    if (prefs) who.push(`What matters to us: ${prefs}`);
+
+    const film = angle.key === "films";
+    const rules = film
+      ? `Only films rated ${chosenFilmRatings().join(" or ")} by the BBFC. Nothing rated R18. List each film once per cinema.`
+      : angle.key === "theatre"
+        ? "List each show once per venue."
+        : "List each session once per venue, with its session times.";
+    return (
+      `Search the web for current listings before answering - do not answer from memory. ` +
+      `Anything you have not found listed must not be included.\n\n` +
+      `Find ${anglePrompt(angle.key)} ${when}, ${where}.\n${rules}\n` +
+      (who.length ? `${who.join("\n")}\n` : "") +
+      `\nLeave a field empty rather than guessing. ${sessionContract(angle)}`
+    );
+  }
+
+  // The fields a session kind answers with, said once.
+  function sessionContract(angle) {
+    const film = angle.key === "films";
+    const fields =
+      `{"name", "venue", "area": the town, "date": "YYYY-MM-DD" the first day in these dates it is on there, ` +
+      `"endDate": the last such day or "", "times": that first day's times as a list of "HH:MM", ` +
+      (film
+        ? `"rating": the BBFC rating (U, PG, 12A, 15 or 18), `
+        : `"minAge" and "maxAge": the ages it is for as numbers, or null, `) +
+      (angle.key === "theatre" ? `"setting": "indoor" or "outdoor" or "", ` : "") +
+      `"childFocus": "aimed" if put on for children or families, "allowed", "adults" or "", ` +
+      `"price": "free", "£", "££" or "£££", "booking": "required", "advised", "none" or "", ` +
+      `"tickets": the booking URL or "", "link": the page it is listed on or "", "what": a few words}`;
+    return `Reply with ONLY a JSON array of ${fields}. No other text.`;
+  }
+
   function eventPrompt(centre, window, radiusMetres, angle, towns, route) {
+    if (angle.session) return sessionPrompt(centre, window, radiusMetres, angle, route);
     const miles = Math.max(1, Math.round(toMiles(radiusMetres / 1000)));
     const who = aiContextBlock();
     // Named places rather than a radius, when we know them. The radius stays
@@ -8996,7 +9037,7 @@ ${(() => {
           `something that finishes before then is no use, but something that runs across it is.`
         : "") +
       `\n\n` +
-      `Specifically: ${anglePrompt(angle.key)}.${filmClause(angle)}${who}\n\n` +
+      `Specifically: ${anglePrompt(angle.key)}.${who}\n\n` +
       // The old prompt said "leave out anything you cannot confirm; six real
       // ones are worth more than twelve guesses", and the model did as it was
       // told. Breadth is the job here - the app filters afterwards, and an
@@ -9467,44 +9508,39 @@ ${(() => {
       if (!live || names.length !== live.names.length) liveStage(angle.key, "writing", { names });
     };
     liveStage(angle.key, "searching", { started: Date.now(), names: [] });
+    // Straight to the model that searches. The everyday lite model often
+    // decides not to, and asking it first meant two paid requests for one
+    // answer. A model pinned in Settings is the owner's choice and is kept.
+    let model = "";
+    if (aiProviderKey() === "gemini" && !loadTripSettings().geminiModelPinned) {
+      try {
+        model = await resolveSearchModel(loadTripSettings().geminiKey.trim());
+      } catch (e) {
+        model = "";
+      }
+    }
     try {
-      answer = await callModel(prompt, { grounded: true, maxTokens: 8192, timeoutMs: EVENT_SEARCH_TIMEOUT_MS, onText: watch });
+      answer = await callModel(prompt, {
+        grounded: true,
+        maxTokens: 8192,
+        timeoutMs: EVENT_SEARCH_TIMEOUT_MS,
+        onText: watch,
+        model,
+      });
     } catch (e) {
       error = (e && e.message) || String(e);
     }
     if (!answer) return { list: [], sources: [], angle: angle.key, error };
 
-    // Gemini says whether it searched. When it did not, it answered from
-    // memory with the search tool sitting unused - which is what "nothing
-    // here was looked up" was reporting after the search-off retry had gone.
-    // Once more on the stronger model, then refuse.
+    // One request per kind, and no quiet second one: an answer that was not
+    // searched is not used, and the screen says so with a button to try again.
     if (answer.searched === false) {
-      try {
-        const strong = await resolveSearchModel(loadTripSettings().geminiKey.trim());
-        if (strong && strong !== answer.model) {
-          liveStage(angle.key, "retrying", { names: [] });
-          const again = await callModel(prompt, {
-            grounded: true,
-            maxTokens: 8192,
-            timeoutMs: EVENT_SEARCH_TIMEOUT_MS,
-            model: strong,
-            onText: watch,
-          });
-          if (again && again.searched) answer = again;
-        }
-      } catch (e) {
-        error = (e && e.message) || String(e);
-      }
-      if (!answer.searched) {
-        return {
-          list: [],
-          sources: [],
-          angle: angle.key,
-          error:
-            error ||
-            "Gemini answered from memory instead of searching the web, so nothing it said was used. Trying again usually works.",
-        };
-      }
+      return {
+        list: [],
+        sources: [],
+        angle: angle.key,
+        error: "Gemini answered from memory instead of searching the web, so nothing it said was used.",
+      };
     }
 
     let list = extractJson(answer.text);
@@ -9583,7 +9619,7 @@ ${(() => {
     return (
       `Below is what a web search found. Rewrite it as data. Use ONLY what the text says: ` +
       `do not add events, do not correct anything, and leave a field empty rather than ` +
-      `guessing.${filmClause(angle)}\n\n${EVENT_JSON_CONTRACT}\n\nText:\n${String(text).slice(0, 24000)}`
+      `guessing.\n\n${angle.session ? sessionContract(angle) : EVENT_JSON_CONTRACT}\n\nText:\n${String(text).slice(0, 24000)}`
     );
   }
 
@@ -11139,7 +11175,6 @@ ${(() => {
   const LIVE_PHASE = {
     searching: "Searching the web",
     writing: "Reading listings",
-    retrying: "Answered without searching — asking a stronger model",
     tidying: "Tidying the answer",
     placing: "Putting them on the map",
   };
@@ -12075,36 +12110,6 @@ ${(() => {
                     data-film-rating="${esc(r)}" aria-pressed="${chosen.includes(r)}">${esc(r)}</button>`).join("")}
         </div>
       </div>`;
-  }
-
-  // Films need what no other listing has: a rating, and more than one time.
-  // And one row per film per cinema, not per showing, or a week in a city
-  // is a thousand rows.
-  function filmClause(angle) {
-    if (angle.session && angle.key !== "films" && angle.key !== "theatre") {
-      return (
-        `\n\nList each session once per venue: "date" is the first day in these dates it runs ` +
-        `there, "endDate" the last, and "times" that first day's session times, as a list of ` +
-        `"HH:MM" strings. Give the ages it is for as "minAge" and "maxAge" (numbers, or null ` +
-        `if the listing gives none), and say if it has to be booked.`
-      );
-    }
-    if (angle.key === "theatre") {
-      return (
-        `\n\nList each show once per venue: "date" is the first day in these dates it is on ` +
-        `there, "endDate" the last, and "times" that first day's performance times, as a list ` +
-        `of "HH:MM" strings. Give the venue's age guidance as "minAge" (the youngest age it ` +
-        `recommends, as a number, or null if it gives none).`
-      );
-    }
-    if (angle.key !== "films") return "";
-    return (
-      `\n\nOnly films rated ${chosenFilmRatings().join(" or ")} by the BBFC. List each film ` +
-      `once per cinema: "date" is the first day in these dates it is showing there, ` +
-      `"endDate" the last, and "times" that first day's showing times. Also give ` +
-      `"rating": the BBFC rating, one of U, PG, 12A, 15 or 18, and "times": ` +
-      `a list of "HH:MM" strings. Nothing rated R18.`
-    );
   }
 
   // What "everything" means: every kind in this mode except the ones that

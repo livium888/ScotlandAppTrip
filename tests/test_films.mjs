@@ -144,6 +144,11 @@ check('only the films request is made', prompts.length === 1 && !!filmPrompt, `$
 check('and it asks for the chosen ratings', /Only films rated 12A or 15 by the BBFC/.test(filmPrompt), filmPrompt.slice(0, 300));
 check('with every showing time, one row per film per cinema', /"times"/.test(filmPrompt) && /once per cinema/.test(filmPrompt));
 check('and never R18', /Nothing rated R18/.test(filmPrompt));
+// A question about cinema times is about cinema times: none of the
+// four-thousand-character small-events brief, which cost tokens and pulled
+// the answers off the subject.
+check('and it is short, about films only', filmPrompt.length < 1600 &&
+  !/coffee morning|parish|toddler group|church|noticeboard|beetle/i.test(filmPrompt), `${filmPrompt.length} chars`);
 check('what comes back is only the ratings chosen',
   JSON.stringify(found) === JSON.stringify(['Alien: Romulus @ Vue Omni', 'Conclave @ Filmhouse', 'Mystery Screening @ Cameo']),
   JSON.stringify(found));

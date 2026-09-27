@@ -27,8 +27,7 @@ const day = new Date(Date.now() + 2 * 864e5).toISOString().slice(0, 10);
 
 // Gemini, writing slowly. A real stream: the page's fetch gets a body that
 // arrives a piece at a time, in the server-sent-events format Gemini uses.
-// window.__stream.searched decides whether the last piece says it searched;
-// the full flash model always does.
+// window.__stream.searched decides whether the last piece says it searched.
 await page.addInitScript((d) => {
   const real = window.fetch.bind(window);
   window.__stream = { searched: true, urls: [] };
@@ -38,10 +37,9 @@ await page.addInitScript((d) => {
     const u = String(url);
     if (!u.includes(':streamGenerateContent')) return real(url, opts);
     window.__stream.urls.push(u);
-    const strong = /gemini-3\.5-flash:/.test(u);
-    const searched = strong || window.__stream.searched;
-    const a = JSON.stringify(item(strong ? 'Strong Puppet Show' : 'Puppet Show'));
-    const b = JSON.stringify(item(strong ? 'Strong Storytime' : 'Storytime at the Library'));
+    const searched = window.__stream.searched;
+    const a = JSON.stringify(item('Puppet Show'));
+    const b = JSON.stringify(item('Storytime at the Library'));
     const text = `[${a}, ${b}]`;
     const cut1 = text.indexOf(a) + a.length + 1; // after the first object and its comma
     const cut2 = cut1 + 12; // part-way into the second
@@ -131,15 +129,14 @@ check('and the live lines are gone', (await live()) === '', await live());
 await seed();
 await page.evaluate(() => { window.__stream.searched = false; });
 await start();
-await page.waitForFunction(() => /Answered without searching/.test(document.querySelector('.ev-live-list')?.textContent || ''), null, { timeout: 15000 }).catch(() => {});
-check('when the answer turns out not to have been searched, it says it is asking a stronger model',
-  /asking a stronger model/.test(await live()), await live());
-check('and the names it had written are cleared, not kept', !/Puppet Show|Storytime at the Library/.test((await live()).replace(/Strong \w+ ?\w*/g, '')),
-  await live());
-await page.waitForFunction(() => (window.__tripTest.eventResults || []).length >= 2, null, { timeout: 15000 }).catch(() => {});
-await page.waitForTimeout(800);
-check('what the stronger model searched for is what is shown',
-  JSON.stringify(await results()) === JSON.stringify(['Strong Puppet Show', 'Strong Storytime']), JSON.stringify(await results()));
+await page.waitForFunction(() => /answered from memory/.test(document.getElementById('view').textContent), null, { timeout: 15000 }).catch(() => {});
+await page.waitForTimeout(500);
+check('when the answer turns out not to have been searched, the names it wrote are cleared',
+  (await results()).length === 0 && !/being checked/.test(await live()), JSON.stringify(await results()));
+check('and the screen says why, with a way to try again', /answered from memory/.test(await page.evaluate(() =>
+  document.getElementById('view').textContent)) && await page.evaluate(() => !!document.querySelector('[data-ev-retry]')));
+check('without a second request behind your back', await page.evaluate(() => window.__stream.urls.length === 1),
+  String(await page.evaluate(() => window.__stream.urls.length)));
 
 await browser.close();
 console.log(failures ? `\n${failures} FAILED` : '\nAll checks passed');
