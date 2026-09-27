@@ -229,6 +229,10 @@
       geminiKey: stored.geminiKey || "",
       // Which model answers. Empty means Gemini, so every install that
       // predates this keeps working without being asked anything.
+      // Kids mode or adults mode. Empty means nobody has chosen yet, and the
+      // app shows everything exactly as it did before modes existed - by the
+      // owner's explicit choice it never guesses from who is travelling.
+      mode: stored.mode === "kids" || stored.mode === "adults" ? stored.mode : "",
       aiProvider: stored.aiProvider || "gemini",
       aiBaseUrl: stored.aiBaseUrl || "",
       aiModel: stored.aiModel || "",
@@ -307,6 +311,38 @@
     return ages.length ? Math.min.apply(null, ages) : null;
   }
 
+  // ---------- Who this outing is for ----------
+  // "There are so many options, it's ridiculous - everything is everywhere."
+  // Measured, the child-specific material reached 77 places and adapted in
+  // none of them: the Kids screen, the "For children" search, playgrounds and
+  // soft play, nap and bedtime warnings all showed on an adults-only trip.
+  // Some of it was worse than irrelevant - walking times were fixed at a
+  // 4-year-old's pace for everybody.
+  //
+  // Two modes, switched by hand. Kids mode hides the adult things (nightlife,
+  // adults-only events, pubs); adults mode hides the child things. Neither
+  // touches what is stored: in adults mode the children are still on the
+  // travellers list, they are just not on this outing.
+  // Asked once per walking leg and per kid check, so a plan of twenty stops
+  // would otherwise parse the settings twenty times in one paint.
+  function tripMode() {
+    return perPass("mode", () => loadTripSettings().mode);
+  }
+
+  function showsKids() {
+    return tripMode() !== "adults";
+  }
+
+  function showsAdults() {
+    return tripMode() !== "kids";
+  }
+
+  // The children who are actually coming. Every surface that is about
+  // children reads them through here rather than off the travellers list.
+  function childrenOnTrip() {
+    return showsKids() ? loadPeople().filter(isChild) : [];
+  }
+
   // The sentence a prompt gets. Written from the list when there is one, and
   // otherwise whatever was typed in the old box - so nothing that already
   // worked stops working.
@@ -316,7 +352,9 @@
     if (!people.length) return typed;
 
     const adults = people.filter((p) => !isChild(p));
-    const children = people.filter(isChild);
+    // In adults mode the children are not on this outing, so the model is
+    // not told they are - otherwise every suggestion comes back child-sized.
+    const children = childrenOnTrip();
     const bits = [];
     if (adults.length) bits.push(`${adults.length} adult${adults.length === 1 ? "" : "s"}`);
     if (children.length) {
@@ -540,8 +578,7 @@
   }
 
   function earliestBedtime() {
-    const kids = loadPeople()
-      .filter(isChild)
+    const kids = childrenOnTrip()
       .map((p) => ({ p, mins: bedtimeOf(p) }))
       .filter((x) => x.mins != null)
       .sort((a, b) => a.mins - b.mins);
@@ -5031,7 +5068,7 @@ ${(() => {
   // now, if anybody has been added, and "a 3-year-old" gets a noticeably
   // different answer to "a 9-year-old" from the same question.
   function kidsTitle() {
-    const kids = loadPeople().filter(isChild);
+    const kids = childrenOnTrip();
     const named = kids.map((k) => (k.name || "").trim()).filter(Boolean);
     if (named.length === 1) return `For ${named[0]}`;
     if (named.length === 2) return `For ${named[0]} and ${named[1]}`;
@@ -5039,8 +5076,7 @@ ${(() => {
   }
 
   function forOurKids(query) {
-    const ages = loadPeople()
-      .filter(isChild)
+    const ages = childrenOnTrip()
       .map((p) => p.age)
       .filter((a) => a != null)
       .sort((a, b) => a - b);
@@ -6540,7 +6576,14 @@ ${(() => {
   // with a detour factor rather than a routing API - it needs no key, works
   // offline, and the point is to flag "that's a long way with a small child",
   // not to give turn-by-turn timings.
-  const WALK_KMH = 3.5; // slower than an adult's pace, this is with a 4-year-old
+  // Walking pace depends on who is walking. This was a constant 3.5 km/h -
+  // "this is with a 4-year-old" - for everybody, so an adults-only trip got
+  // a child's walking times on every leg.
+  const WALK_KMH_CHILD = 3.5;
+  const WALK_KMH_ADULT = 5;
+  function walkKmh() {
+    return showsKids() && loadPeople().some(isChild) ? WALK_KMH_CHILD : WALK_KMH_ADULT;
+  }
   const DETOUR_FACTOR = 1.3; // streets aren't straight lines
 
   // ---------- Distance ----------
@@ -6587,7 +6630,7 @@ ${(() => {
     const straight = haversineKm(a.lat, a.lon, b.lat, b.lon);
     const driving = straight * DETOUR_FACTOR > WALK_MAX_KM;
     const km = straight * (driving ? ROAD_FACTOR : DETOUR_FACTOR);
-    const mins = Math.round((km / (driving ? DRIVE_KMH : WALK_KMH)) * 60);
+    const mins = Math.round((km / (driving ? DRIVE_KMH : walkKmh())) * 60);
     return { km, mins, driving, icon: driving ? "🚗" : "🚶" };
   }
 
@@ -8601,7 +8644,7 @@ ${(() => {
   // says so whether or not anything survived, which is the whole point. A
   // count that only appears when the search fails completely is no use to
   // somebody looking at six results wondering where the other thirty went.
-  const NO_DROPS = { unplaced: 0, undated: 0, outside: 0, tooFar: 0, finished: 0, merged: 0, offRoute: 0 };
+  const NO_DROPS = { unplaced: 0, undated: 0, outside: 0, tooFar: 0, finished: 0, merged: 0, offRoute: 0, adultsOnly: 0 };
   let eventsDropped = Object.assign({}, NO_DROPS);
   // The ones that can be shown anyway, with the reason attached. Something we
   // could not place is still a real listing with a name, a date and a link.
@@ -8672,7 +8715,7 @@ ${(() => {
 
   function kidAges() {
     if (renderPass && renderPass.kids) return renderPass.kids;
-    const kids = loadPeople().filter(isChild).map((p) => p.age).filter((a) => a != null);
+    const kids = childrenOnTrip().map((p) => p.age).filter((a) => a != null);
     if (renderPass) renderPass.kids = kids;
     return kids;
   }
@@ -8922,6 +8965,7 @@ ${(() => {
       d.offRoute
         ? `${d.offRoute} turned out to be too far off the route`
         : "",
+      d.adultsOnly ? `${d.adultsOnly} ${d.adultsOnly === 1 ? "was" : "were"} adults-only` : "",
       // Deliberately not counted here. A listing found by two angles and
       // merged into one row was not left out of anything - it is on the
       // screen. Saying "left out: 3 were the same thing found twice" reads
@@ -9203,6 +9247,10 @@ ${(() => {
       }
       if (!stillOnAt(event, ctx.cutoff)) {
         eventsDropped.finished++;
+        return;
+      }
+      if (!showsAdults() && event.childFocus === "adults") {
+        eventsDropped.adultsOnly = (eventsDropped.adultsOnly || 0) + 1;
         return;
       }
       const id = eventFingerprint(event);
@@ -10024,7 +10072,7 @@ ${(() => {
   }
 
   function whatAnswer() {
-    if (!eventSearch.kinds.length) return `Everything (${EVENT_ANGLES.length} kinds)`;
+    if (!eventSearch.kinds.length) return `Everything (${modeAngles().length} kinds)`;
     const names = EVENT_ANGLES.filter((a) => eventSearch.kinds.includes(a.key)).map((a) => a.label);
     return names.length <= 2 ? names.join(", ") : `${names.length} kinds`;
   }
@@ -10357,7 +10405,7 @@ ${(() => {
   function renderEventWhat() {
     return `
       <div class="search-chips ev-kinds">
-        ${EVENT_ANGLES.map((a) => {
+        ${modeAngles().map((a) => {
           const tuned = !!loadTripSettings().anglePrompts[a.key];
           return `<button class="search-chip${eventSearch.kinds.includes(a.key) ? " on" : ""}${
             tuned ? " tuned" : ""
@@ -11016,6 +11064,7 @@ ${(() => {
       isoDate(w.to),
       w.fromTime || "",
       kinds.slice().sort().join("+") || "all",
+      tripMode() || "any",
     ].join("|");
   }
 
@@ -11147,8 +11196,20 @@ ${(() => {
     );
   }
 
+  // The searches that belong to this mode. "For children" has no business
+  // on an adults' evening and "Music & nightlife" none on a day with a
+  // four-year-old - and since each angle is its own request to the model,
+  // leaving the wrong one out saves money as well as clutter.
+  function modeAngles() {
+    return EVENT_ANGLES.filter((a) => {
+      if (a.key === "family" && !showsKids()) return false;
+      if (a.key === "music" && !showsAdults()) return false;
+      return true;
+    });
+  }
+
   function anglesForSearch() {
-    return EVENT_ANGLES.filter(
+    return modeAngles().filter(
       (a) => !eventSearch.kinds.length || eventSearch.kinds.includes(a.key)
     );
   }
@@ -11788,9 +11849,17 @@ ${(() => {
     });
   }
 
+  function categoryInMode(c) {
+    const forKids = c.group === "With a child" || c.key === "kidfriendly";
+    const forAdults = c.key === "pub";
+    if (forKids && !showsKids()) return false;
+    if (forAdults && !showsAdults()) return false;
+    return true;
+  }
+
   function openCategoryPicker() {
     const groups = CATEGORY_GROUPS.map((g) => {
-      const items = NEARBY_CATEGORIES.filter((c) => c.group === g);
+      const items = NEARBY_CATEGORIES.filter((c) => c.group === g && categoryInMode(c));
       if (!items.length) return "";
       return `
         <div class="cat-group-label">${esc(g)}</div>
@@ -12566,10 +12635,14 @@ ${(() => {
               </button>
               <button class="modal-btn" data-explore-from="${esc(p.id)}">${icon('directions', { size: 16, cls: 'ico-inline' })} What's nearby</button>
             </div>
-            <button class="modal-btn booked-toggle${isForKids(p) ? " on" : ""}" data-toggle-kids="${esc(p.id)}"
+            ${
+              showsKids()
+                ? `<button class="modal-btn booked-toggle${isForKids(p) ? " on" : ""}" data-toggle-kids="${esc(p.id)}"
                     style="width:100%;margin-top:8px;">
-              ${isForKids(p) ? "🧸 One for the kids" : "🧸 One for the kids?"}
-            </button>
+              ${icon("kids", { size: 16, cls: "ico-inline" })} ${isForKids(p) ? "One for the kids" : "One for the kids?"}
+            </button>`
+                : ""
+            }
 
             <label class="settings-label">Folder</label>
             <div class="move-row">
@@ -13206,7 +13279,7 @@ ${(() => {
   const IDEA_FIELDS = {
     from: "e.g. the town you're staying in",
     towards: "e.g. towards the coast",
-    who: "e.g. two adults and a 4-year-old",
+    who: "e.g. two adults and a four-year-old, or two adults on their own",
     extra: "e.g. no motorways, back by six",
   };
 
@@ -14467,13 +14540,23 @@ ${(() => {
     "Worth the detour",
     "Somewhere quiet",
     "Best view around here",
-    "Rainy day with a 4-year-old",
+    { text: "Rainy day with the kids", mode: "kids" },
     "Free things to do",
     "Open late",
     "Older than everything around it",
     "Good coffee",
-    "Playground nearby",
+    { text: "Playground nearby", mode: "kids" },
+    { text: "A proper pub", mode: "adults" },
+    { text: "Somewhere for a quiet drink", mode: "adults" },
   ];
+
+  // The suggestions that fit this outing. Plain strings are for anyone.
+  function suggestionsForMode() {
+    return SEARCH_SUGGESTIONS.filter((x) => {
+      if (typeof x === "string") return true;
+      return x.mode === "kids" ? showsKids() : showsAdults();
+    }).map((x) => (typeof x === "string" ? x : x.text));
+  }
 
   // Deliberately not one of the chips above: it is a different kind of ask,
   // and half the point is not knowing what you will get.
@@ -14502,7 +14585,7 @@ ${(() => {
     return (
       `<div class="section-label">${esc(label)}</div><div class="search-chips">` +
       `<button class="search-chip search-chip-surprise" data-surprise="1">${icon('dice', { size: 16, cls: 'ico-inline' })} Surprise me</button>` +
-      SEARCH_SUGGESTIONS.map(
+      suggestionsForMode().map(
         (r) => `<button class="search-chip" data-recent="${esc(r)}">${esc(r)}</button>`
       ).join("") +
       `</div>`
@@ -17200,6 +17283,92 @@ ${(() => {
 
   document.getElementById("mapBtn").addEventListener("click", () => openAllMap(defaultMapFilter()));
 
+  // ---------- The kids / adults switch ----------
+  // By the owner's choice this is a manual switch and never a guess from the
+  // travellers list. Before anybody has chosen, it asks; after that one tap
+  // flips it, because a mode you have to dig into Settings for is a mode
+  // nobody changes for a single evening out.
+  const modeToggle = document.getElementById("modeToggle");
+
+  function paintModeToggle() {
+    if (!modeToggle) return;
+    const m = tripMode();
+    modeToggle.classList.toggle("unset", !m);
+    modeToggle.innerHTML = m
+      ? `${icon(m === "kids" ? "kids" : "today", { size: 16, cls: "ico-inline" })}<span>${m === "kids" ? "Kids" : "Adults"}</span>`
+      : `<span>Kids or adults?</span>`;
+    modeToggle.setAttribute(
+      "aria-label",
+      m ? `${m === "kids" ? "Kids" : "Adults"} mode - tap to switch` : "Choose kids or adults mode"
+    );
+  }
+
+  function setMode(next) {
+    saveTripSettings({ mode: next });
+    // Whatever is on screen was found for the other mode: an adults-only gig
+    // left sitting in kids mode is exactly what the switch exists to stop.
+    // Searches are cached per mode, so going back costs nothing.
+    eventSearch.results = [];
+    eventSearch.status = "idle";
+    eventSearch.kinds = eventSearch.kinds.filter((k) => modeAngles().some((a) => a.key === k));
+    const cat = NEARBY_CATEGORIES.find((c) => c.key === explore.category);
+    if (cat && !categoryInMode(cat)) {
+      explore.category = "";
+      explore.results = [];
+      explore.status = "idle";
+    }
+    paintModeToggle();
+    closePlaceModal();
+    showView(view.dataset.activeTab || firstVisibleTab());
+    toast(
+      next === "kids"
+        ? "Kids mode — nightlife and adults-only things are hidden"
+        : "Adults mode — the children's things are hidden"
+    );
+  }
+
+  function openModeChooser() {
+    placeModal.innerHTML = `
+      <div class="modal-backdrop" data-close="1">
+        <div class="modal-sheet" role="dialog" aria-label="Who is this for?">
+          <div class="modal-handle"></div>
+          <button class="modal-close" data-close="1" aria-label="Close">${icon("close", { size: 17, cls: "ico-inline" })}</button>
+          <div class="modal-body">
+            <h2 class="modal-title">Who is this for?</h2>
+            <p class="settings-hint">The app shows what fits and hides the rest. Switch any time from the top bar.</p>
+            <button class="mode-choice" data-choose-mode="kids">
+              <b>${icon("kids", { size: 18, cls: "ico-inline" })} With the kids</b>
+              <span>Playgrounds, soft play, things put on for children, a child's walking pace. No nightlife.</span>
+            </button>
+            <button class="mode-choice" data-choose-mode="adults">
+              <b>${icon("today", { size: 18, cls: "ico-inline" })} Just the adults</b>
+              <span>Pubs, gigs, late shows, a grown-up walking pace. None of the children's things.</span>
+            </button>
+          </div>
+        </div>
+      </div>`;
+    placeModal.classList.add("open");
+    makeSheetDraggable(placeModal, closePlaceModal);
+    placeModal.querySelectorAll("[data-close]").forEach((el) =>
+      el.addEventListener("click", (e) => {
+        if (el.classList.contains("modal-backdrop") && e.target !== el) return;
+        closePlaceModal();
+      })
+    );
+    placeModal.querySelectorAll("[data-choose-mode]").forEach((b) =>
+      b.addEventListener("click", () => setMode(b.getAttribute("data-choose-mode")))
+    );
+  }
+
+  if (modeToggle) {
+    modeToggle.addEventListener("click", () => {
+      const m = tripMode();
+      if (!m) openModeChooser();
+      else setMode(m === "kids" ? "adults" : "kids");
+    });
+    paintModeToggle();
+  }
+
   // What the geocoder may be told about where a place is. Deliberately NOT the
   // folder: a folder is the user's own filing - "Unsorted", "Day trips",
   // anything they typed - and feeding it to a geocoder both wastes the lookup
@@ -17463,7 +17632,7 @@ ${(() => {
           <ul class="empty-list">
             <li><b>Share from Google Maps</b> — tap Share on a place, pick this app</li>
             <li><b>Search</b> — by name, or describe what you want</li>
-            <li><b>Explore around a place</b> — cafés, museums, playgrounds nearby</li>
+            <li><b>Explore around a place</b> — cafés, museums, ${showsKids() ? "playgrounds" : "pubs"} nearby</li>
             <li><b>Have a trip suggested</b> — say roughly where and how far, get whole routes back</li>
           </ul>
           <button class="modal-btn modal-btn-primary" data-open-search="1" style="width:100%;margin-top:12px;">${icon('search', { size: 18, cls: 'ico-inline' })} Search for a place</button>
@@ -18307,7 +18476,7 @@ ${(() => {
           const current = currentPlanDay();
           const anchor = current ? dayWeatherAnchor(current.day.id) : null;
           explore.open = true;
-          explore.category = "rainy";
+          explore.category = showsKids() ? "rainy" : "rain";
           explore.customQuery = "";
           if (anchor && anchor.lat != null) {
             explore.centre = { name: anchor.name, lat: anchor.lat, lon: anchor.lon };
@@ -18587,7 +18756,7 @@ ${(() => {
         const current = currentPlanDay();
         const anchor = current ? dayWeatherAnchor(current.day.id) : null;
         explore.open = true;
-        explore.category = "rainy";
+        explore.category = showsKids() ? "rainy" : "rain";
         explore.customQuery = "";
         if (anchor && anchor.lat != null) {
           explore.centre = { name: anchor.name, lat: anchor.lat, lon: anchor.lon };
@@ -18675,7 +18844,10 @@ ${(() => {
       more: true,
       // Reachable as views from the More hub, which is where their buttons
       // are now. Listed here so showView does not bounce them to a tab.
-      kids: true,
+      // Only in kids mode, or when no mode has been chosen. showView sends a
+      // hidden screen to the first visible tab, so a switch while you are on
+      // it lands somewhere sensible rather than on an empty page.
+      kids: showsKids(),
       usage: true,
       explore: true,
       // Reachable as views, but no longer tabs - there are no buttons for
@@ -18987,7 +19159,7 @@ ${(() => {
 
       <div class="section-label">This trip</div>
       <div class="card more-list">
-        ${row("kids", "kids", kidsTitle(), kidCount ? `${kidCount} marked` : "Nothing marked yet")}
+        ${showsKids() ? row("kids", "kids", kidsTitle(), kidCount ? `${kidCount} marked` : "Nothing marked yet") : ""}
         ${row("budget", "budget", "Budget", budgetLine)}
         ${row("tips", "tips", "Notes & packing", packing.length ? `${packed} of ${packing.length} packed` : "Nothing on the list yet")}
       </div>
@@ -19569,6 +19741,10 @@ ${(() => {
   // anything.
   window.__tripTest = {
     ASSISTANTS,
+    setMode,
+    openCategoryPicker,
+    walkKmh,
+    earliestBedtime,
     AI_PROVIDERS,
     get eventResults() { return eventSearch.results; },
     callModel,
@@ -19618,7 +19794,6 @@ ${(() => {
     eventsNeedingBackfill,
     napIsUnavoidable,
     napWindow,
-    earliestBedtime,
     bedtimeOf,
     looksOutdoor,
     copyEventFields,

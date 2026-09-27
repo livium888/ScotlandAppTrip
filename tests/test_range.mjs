@@ -98,6 +98,10 @@ await page.evaluate(() => {
     { id: 'custom:Stirling Castle', name: 'Stirling Castle', city: 'Stirling', lat: 56.1239, lon: -3.9478 },
     { id: 'custom:Camera Obscura', name: 'Camera Obscura', city: 'Edinburgh', lat: 55.9489, lon: -3.1953 },
   ]));
+  // Walking times depend on who is walking: a child's pace makes this short
+  // hop six minutes and worth showing, an adult's makes it four and not.
+  // This suite is about miles and driving, so it fixes the pace.
+  localStorage.setItem('people-v1', JSON.stringify([{ name: 'Ella', age: 4 }]));
   localStorage.setItem('board:b-r:plan', JSON.stringify({
     days: [{ id: 'd1', label: 'Day 1' }],
     items: { d1: [
