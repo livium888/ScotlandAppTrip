@@ -216,6 +216,11 @@ found = await runSearch();
 let theatrePrompt = prompts.find((p) => angleFromPrompt(p) === 'theatre') || '';
 check('one request, for theatre', prompts.length === 1 && !!theatrePrompt, `${prompts.length} prompts`);
 check('asking for family shows in kids mode', /pantomime, puppet shows, family musicals/.test(theatrePrompt));
+check('including children\'s plays, and drama sessions a child can join',
+  /children's plays/.test(theatrePrompt) && /drama workshops and youth theatre/.test(theatrePrompt));
+check('which the way in says too', /Children's plays/.test(await page.evaluate(() =>
+  document.querySelector('[data-find="theatre"]')?.textContent || '')),
+  await page.evaluate(() => document.querySelector('[data-find="theatre"]')?.textContent.replace(/\s+/g, ' ') || 'no row'));
 check('with performance times and age guidance', /"times"/.test(theatrePrompt) && /"minAge"/.test(theatrePrompt));
 check('a five-year-old gets The Gruffalo, not Matilda (8+) or Macbeth',
   JSON.stringify(found) === JSON.stringify(['The Gruffalo @ Church Hill Theatre']), JSON.stringify(found));

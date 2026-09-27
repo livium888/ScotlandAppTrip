@@ -8623,9 +8623,11 @@ ${(() => {
       ask: "plays, musicals, pantomime, comedy, dance, opera and ballet, children's theatre, " +
            "touring productions and amateur dramatics at theatres, arts centres and halls. One entry per " +
            "show per venue, with that day's performance times and the age guidance the venue gives",
-      kidsAsk: "shows for children and families - children's theatre, pantomime, puppet shows, family " +
-               "musicals, circus and storytelling shows, relaxed performances. One entry per " +
-               "show per venue, with that day's performance times and the age guidance the venue gives",
+      kidsAsk: "theatre for children and families - children's plays and children's theatre, " +
+               "pantomime, puppet shows, family musicals, circus and storytelling shows, relaxed " +
+               "performances, and drama workshops and youth theatre sessions children can join. " +
+               "One entry per show per venue, with that day's performance times and the age " +
+               "guidance the venue gives",
       adultsAsk: "plays, musicals, comedy, dance, opera and ballet, new writing, fringe and touring " +
                  "productions, amateur dramatics. One entry per show per venue, with that day's performance times " +
                  "and the age guidance the venue gives" },
@@ -11095,7 +11097,7 @@ ${(() => {
           <span class="more-row-ico">${icon("events", { size: 20 })}</span>
           <span class="more-row-main">
             <span class="more-row-title">At the theatre</span>
-            <span class="more-row-meta">${tripMode() === "kids" ? "Pantos, children's theatre and family shows" : "Plays, musicals, comedy and dance"}</span>
+            <span class="more-row-meta">${tripMode() === "kids" ? "Children's plays, pantos and drama workshops" : "Plays, musicals, comedy and dance"}</span>
           </span>
           ${icon("forward", { size: 16, cls: "more-row-go" })}
         </button>
