@@ -95,21 +95,51 @@ await openHandoff();
 const prompt = await valueOf('handoffPrompt');
 // One question, not nine: doing this nine times by hand is the thing being
 // avoided.
-check('the prompt covers every kind in one go',
-  EVERYTHING_KEYS.every((k) => prompt.length > 0) && /Cover all of these/.test(prompt), prompt.slice(0, 200));
+check('with nothing picked, the prompt covers every kind in one go',
+  /Search the web for these/.test(prompt), prompt.slice(0, 200));
 check('naming all nine - films are only searched when picked', (prompt.match(/^- /gm) || []).length === EVERYTHING_KEYS.length,
   String((prompt.match(/^- /gm) || []).length));
 check('it carries the villages, like the app\'s own search does',
   /Ashford-in-the-Water/.test(prompt), prompt.slice(0, 300));
 check('and where to go looking for small things',
   /parish magazines and community newsletters/.test(prompt));
-check('and the same JSON contract the app itself asks for',
-  /ONLY a JSON array/.test(prompt) && /childFocus/.test(prompt) && /bookingLevel|"booking"/.test(prompt));
+// Lines of text, not JSON: asking Gemini for JSON switches its search off,
+// in its own app as much as through the app's key.
+check('and the same line format the app itself asks for, not JSON',
+  /one listing per line/.test(prompt) && /for children \(aimed/.test(prompt) && /booking \(required/.test(prompt) && !/JSON/.test(prompt));
 check('there is a way to copy it', await page.evaluate(() => !!document.getElementById('handoffCopy')));
 check('and a way to open an assistant', await page.evaluate(() =>
   document.querySelectorAll('[data-assistant]').length >= 1));
 // The whole point: this must not spend anything of yours.
 check('and none of that asked the AI for anything', aiCalls === 0, `${aiCalls} calls`);
+
+// ---------- Only what was picked ----------
+// "If I select just one or two options, make sure the prompt is tailored
+// just for those, since for now it's for all of them."
+const tailored = await page.evaluate(() => {
+  window.__tripTest.setEventKinds(['films', 'theatre']);
+  const two = window.__tripTest.handoffPrompt();
+  window.__tripTest.setEventKinds(['films']);
+  const one = window.__tripTest.handoffPrompt();
+  window.__tripTest.setEventKinds(['market']);
+  const general = window.__tripTest.handoffPrompt();
+  window.__tripTest.setEventKinds([]);
+  return { two, one, general };
+});
+check('with films and theatre picked, it asks about those two and nothing else',
+  /- Films:/.test(tailored.two) && /- Theatre & shows:/.test(tailored.two) &&
+  (tailored.two.match(/^- /gm) || []).length === 2, tailored.two.slice(0, 400));
+check('with no coffee mornings, parish magazines or villages in it',
+  !/coffee morning|parish|beetle|Whiteley, Fareham - go through/i.test(tailored.two), tailored.two.slice(0, 600));
+check('but with the films rules: your ratings, and times not out yet', /Films: only ones rated/.test(tailored.two) &&
+  /on release and leave the times out/.test(tailored.two));
+check('and the cinemas nearby by name', /Cinemas in this area include: Cineworld Whiteley/.test(tailored.two));
+check('and the fields films and shows need', /times \(that first day's times/.test(tailored.two) && /rating \(U, PG/.test(tailored.two));
+check('with just films picked, it is one question about films', /^Search the web for films/.test(tailored.one) &&
+  !/Theatre/.test(tailored.one), tailored.one.slice(0, 200));
+check('a general kind picked on its own still gets the small-events brief, and only its own kind',
+  /parish magazines/.test(tailored.general) && (tailored.general.match(/^Search the web for farmers' markets/m) || []).length === 1 &&
+  !/Music & nightlife|Films/.test(tailored.general), tailored.general.slice(0, 300));
 
 // ---------- Pasting the answer back ----------
 
@@ -351,6 +381,14 @@ check('and one cut off mid-object', messy.truncated, JSON.stringify(messy));
 // Being more forgiving must not mean inventing a list out of a refusal.
 check('but prose with no list in it is still refused', messy.prose === null, JSON.stringify(messy.prose));
 check('and so is nothing at all', messy.empty === null, JSON.stringify(messy.empty));
+
+// ---------- An answer in lines, as the prompt now asks ----------
+await openHandoff();
+await fill('handoffAnswer', `Sure - here's what I found:\n- name: Well Dressing Walk; venue: Church Green; town: Bakewell; date: ${soon}; time: 11:00; price: free; what: guided walk round the wells\n- name: No other listings found`);
+await clickIf('handoffAdd');
+await page.waitForTimeout(2500);
+check('an answer in the one-per-line format is read too', /Added 1 event/.test(await textOf('handoffResult')),
+  await textOf('handoffResult'));
 
 await browser.close();
 console.log(failures === 0 ? '\nALL TESTS PASSED' : `\n${failures} FAILED`);

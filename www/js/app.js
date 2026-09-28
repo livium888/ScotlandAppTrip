@@ -8960,39 +8960,68 @@ ${(() => {
   // extractJson repairs it, normaliseEvent refuses anything malformed, and it
   // is placed, deduped and dated the same way. Nothing is trusted more for
   // having been pasted.
-  function handoffPrompt(centre, windowKey, radiusMetres, towns) {
+  // The question to take to another assistant, for exactly the kinds picked.
+  // It used to name all nine whatever was chosen, so asking another app
+  // about films meant a page on coffee mornings and parish magazines. Picked
+  // kinds only; the small-events brief only when a general kind is among
+  // them; each session kind's own rules; the nearby venues when known. And
+  // lines of text rather than JSON, for the same reason as the app's own
+  // search: asking Gemini for JSON switches its search off.
+  function handoffPrompt(centre, windowKey, radiusMetres, towns, venues) {
     const miles = Math.max(1, Math.round(toMiles(radiusMetres / 1000)));
     const w = eventWindow(windowKey);
+    const picked = anglesForSearch();
+    const general = picked.filter((a) => !a.session);
+    const sessions = picked.filter((a) => a.session);
     const sameDay = isoDate(w.from) === isoDate(w.to);
     const when = sameDay
       ? `on ${humanDate(w.from)} ${w.from.getFullYear()}`
       : `between ${humanDate(w.from)} and ${humanDate(w.to)} ${w.from.getFullYear()}`;
-    const where = towns && towns.length
+    const where = general.length && towns && towns.length
       ? `within about ${miles} miles of ${centre.name}. That area covers ${towns.join(", ")} - ` +
         `go through them, not just the biggest one`
       : `within about ${miles} miles of ${centre.name}`;
 
+    const what =
+      picked.length === 1
+        ? `Search the web for ${anglePrompt(picked[0].key)} ${when}, ${where}.`
+        : `Search the web for these ${when}, ${where}:\n` +
+          picked.map((a) => `- ${a.label}: ${anglePrompt(a.key)}`).join("\n");
+
+    const rules = [];
+    const v = venues || {};
+    sessions.forEach((a) => {
+      const named = v[a.key] || [];
+      if (a.key === "films") {
+        if (named.length) rules.push(`Cinemas in this area include: ${named.join(", ")}. Check each one's own listings.`);
+        rules.push(
+          `Films: only ones rated ${chosenFilmRatings().join(" or ")} by the BBFC, nothing R18, each film once per ` +
+            `cinema. If a cinema has not published times for these dates yet, list the films it has on release and leave the times out.`
+        );
+      } else if (a.key === "theatre") {
+        if (named.length) rules.push(`Theatres and arts centres in this area include: ${named.join(", ")}.`);
+        rules.push("Shows: each once per venue, with its performance times and the venue's age guidance.");
+      } else {
+        rules.push(`${a.label}: each session once per venue, with its session times and the ages it is for.`);
+      }
+    });
+
+    const fields =
+      EVENT_LINE_FIELDS +
+      (sessions.length ? `; times (that first day's times, HH:MM, comma-separated)` : "") +
+      (sessions.some((a) => a.key === "films") ? `; rating (U, PG, 12A, 15 or 18)` : "");
+
     return (
-      `List events happening ${when}, ${where}.` +
-      (w.fromTime
-        ? ` On ${humanDate(w.from)} only things still going at ${w.fromTime} or later.`
-        : "") +
-      `\n\n` +
-      // All nine at once. The app asks these separately because it can afford
-      // to; by hand, one question that names every kind is the whole point.
-      `Cover all of these:\n` +
-      defaultAngles().map((a) => `- ${a.label}: ${anglePrompt(a.key)}`).join("\n") +
+      `${what}` +
+      (w.fromTime ? `\nOn ${humanDate(w.from)} only things still going at ${w.fromTime} or later.` : "") +
+      (rules.length ? `\n\n${rules.join("\n")}` : "") +
       `${aiContextBlock()}\n\n` +
-      `${smallEventAppetite()}\n\n` +
-      `${SMALL_EVENT_SOURCES}\n\n` +
+      (general.length ? `${smallEventAppetite()}\n\n${SMALL_EVENT_SOURCES}\n\n` : "") +
       `Include something only if you have seen it listed with a date. Do not invent ` +
-      `plausible-sounding events, and do not pad the list with permanent attractions - ` +
-      `a castle that opens every day is not an event.\n\n` +
-      `For each one, say what the listing actually states, and leave the field empty ` +
-      `rather than guessing: whether it is indoors or outdoors, what ages it is for, ` +
-      `whether it is aimed at children, merely allows them or is adults-only, and whether ` +
-      `it has to be booked in advance.\n\n` +
-      EVENT_JSON_CONTRACT
+      `plausible-sounding events` +
+      (general.length ? `, and do not pad the list with permanent attractions - a castle that opens every day is not an event` : "") +
+      `.\n\n` +
+      lineFormat(fields)
     );
   }
 
@@ -10538,12 +10567,17 @@ ${(() => {
     }
     const radius = (centre.miles || DEFAULT_ANCHOR_MILES) * 1609;
     let towns = [];
+    const venues = {};
+    const picked = anglesForSearch();
     try {
-      towns = await townsAround(centre, radius);
+      if (picked.some((a) => !a.session)) towns = await townsAround(centre, radius);
+      for (const [kindKey, osm] of [["films", "cinema"], ["theatre", "theatre"]]) {
+        if (picked.some((a) => a.key === kindKey)) venues[kindKey] = await venuesNear(centre.lat, centre.lon, radius, osm);
+      }
     } catch (e) {
-      // The prompt is still worth having without the village names.
+      // The prompt is still worth having without the names.
     }
-    const prompt = handoffPrompt(centre, eventSearch.when, radius, towns);
+    const prompt = handoffPrompt(centre, eventSearch.when, radius, towns, venues);
 
     placeModal.innerHTML = `
       <div class="modal-backdrop" data-close="1">
@@ -10552,9 +10586,9 @@ ${(() => {
           <button class="modal-close" data-close="1" aria-label="Close">${icon("close", { size: 17, cls: "ico-inline" })}</button>
           <div class="modal-body">
             <h2 class="modal-title">Ask somewhere else</h2>
-            <div class="modal-subtitle">One question covering all ${defaultAngles().length} kinds, for ${esc(
-              centre.name
-            )}</div>
+            <div class="modal-subtitle">${esc(
+              eventSearch.kinds.length ? picked.map((a) => a.label).join(", ") : `All ${picked.length} kinds`
+            )}, for ${esc(centre.name)}</div>
 
             <p class="settings-hint">
               Copy this, paste it into whichever assistant you use, then bring the answer back
@@ -12504,13 +12538,14 @@ ${(() => {
   async function absorbPastedEvents(text) {
     const centre = eventSearch.centre || loadAnchor() || derivedAnchor();
     if (!centre || centre.lat == null) return { ok: false, message: "Say where to look first." };
-    const list = extractJson(text);
+    let list = parseListingLines(text);
+    if (!list.length) list = extractJson(text);
     if (!Array.isArray(list) || !list.length) {
       return {
         ok: false,
         message:
-          "That didn't contain a list this could read. Paste the whole reply — " +
-          "including the square brackets — and it will find the JSON inside it.",
+          "That didn't contain a list this could read. Paste the whole reply — the lines " +
+          "starting with \"- name:\" — and it will read them.",
       };
     }
 
@@ -12537,7 +12572,11 @@ ${(() => {
 
     const before = eventSearch.results.length;
     eventsDropped = Object.assign({}, NO_DROPS);
-    const fresh = absorbAngle({ list, sources: [], angle: "pasted" }, ctx);
+    // One kind asked about is that kind answered: pasted films get the
+    // rating filter and "times not out yet" like the app's own search.
+    const picked = anglesForSearch();
+    const pastedAs = eventSearch.kinds.length === 1 && picked.length === 1 ? picked[0].key : "pasted";
+    const fresh = absorbAngle({ list, sources: [], angle: pastedAs }, ctx);
 
     // Placed one at a time through the same polite queue the search uses.
     const queue = makePlaceQueue(scheduleEventsRedraw);
@@ -21534,6 +21573,10 @@ ${(() => {
   // anything.
   window.__tripTest = {
     ASSISTANTS,
+    handoffPrompt: (miles) => {
+      const c = eventSearch.centre || loadAnchor() || derivedAnchor();
+      return handoffPrompt(c, eventSearch.when, (miles || 25) * 1609, ["Whiteley", "Fareham"], { films: ["Cineworld Whiteley"] });
+    },
     parseListingLines,
     scoreSearchModel,
     traceText: () => traceText(loadTrace()),
