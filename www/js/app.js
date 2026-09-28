@@ -4156,6 +4156,10 @@
                 Lite and flash tiers cost a fraction of pro and are plenty for naming
                 places and ordering a day. Tap the button above to refresh the list.
               </p>
+              <button class="modal-btn" id="testSearchBtn" style="margin-top:6px;" ${s.geminiModels.length ? "" : "disabled"}>
+                ${icon("search", { size: 16, cls: "ico-inline" })} Test search with this model
+              </button>
+              <pre class="settings-result" id="searchTestResult" hidden></pre>
             </div>
 
             <label class="settings-label">Who's travelling</label>
@@ -4670,6 +4674,8 @@ ${(() => {
           .join("");
         sel.disabled = false;
         wrap.hidden = false;
+        const ts = document.getElementById("testSearchBtn");
+        if (ts) ts.disabled = false;
       }
     });
 
@@ -4690,6 +4696,56 @@ ${(() => {
         btn.classList.toggle("on", at < 0);
       });
     });
+
+    // Whether the model in the picker actually searches the web, on this key,
+    // right now. Gemini decides for itself whether to use the search it is
+    // offered, and the lite models mostly decide not to - so this asks one
+    // question that cannot be answered well from memory and reports what
+    // happened. One request, with search, each tap.
+    const testSearch = document.getElementById("testSearchBtn");
+    if (testSearch) {
+      testSearch.addEventListener("click", async () => {
+        const out = document.getElementById("searchTestResult");
+        const key = (document.getElementById("setGeminiKey").value || "").trim() || loadTripSettings().geminiKey.trim();
+        const model = selectedGeminiModel();
+        out.hidden = false;
+        out.className = "settings-result";
+        if (!key || !model) {
+          out.textContent = "Add a key and tap \"Test key & find models\" first.";
+          return;
+        }
+        const place = (activeBoard().destination || loadTripSettings().destination || "London").trim();
+        const name = model.replace(/^models\//, "");
+        out.textContent = `Asking ${name}…`;
+        testSearch.disabled = true;
+        const t0 = Date.now();
+        try {
+          const answer = await callGemini(
+            key,
+            `Search the web and find one film showing at a cinema in or near ${place} this week. ` +
+              `Reply with one short line: the film, the cinema, and the website you found it on.`,
+            { grounded: true, model, timeoutMs: 90000 }
+          );
+          const secs = ((Date.now() - t0) / 1000).toFixed(1);
+          const q = answer.queries || [];
+          out.className = `settings-result ${answer.searched ? "ok" : "bad"}`;
+          out.textContent = answer.searched
+            ? `✓ ${name} searched the web, in ${secs}s.\n` +
+              `${q.length} Google search${q.length === 1 ? "" : "es"}${q.length ? `: ${q.join(" | ")}` : ""}, ` +
+              `${answer.sources.length} source${answer.sources.length === 1 ? "" : "s"}.\n\n` +
+              `Answer: ${String(answer.text || "").trim().slice(0, 400)}`
+            : `✗ ${name} answered from memory without searching, in ${secs}s.\n` +
+              `Event searches with this model will be set aside as unconfirmed.` +
+              (/lite/.test(name) ? " Lite models usually do this - try a full flash model." : "") +
+              `\n\nAnswer: ${String(answer.text || "").trim().slice(0, 400)}`;
+        } catch (e) {
+          out.className = "settings-result bad";
+          out.textContent = `The test didn't work: ${(e && e.message) || e}`;
+        } finally {
+          testSearch.disabled = false;
+        }
+      });
+    }
 
     // Changing the model takes effect immediately - waiting for Save would
     // mean the next search silently used the old one.
