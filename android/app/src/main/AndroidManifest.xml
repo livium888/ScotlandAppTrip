@@ -38,6 +38,17 @@
                 <data android:mimeType="text/plain" />
             </intent-filter>
 
+            <!-- The way back from signing in with OpenRouter: after approving,
+                 OpenRouter opens com.livium888.scotlandtrip://openrouter?code=...
+                 and this brings the app forward with it (singleTask, so the
+                 same app, not a second copy). -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="com.livium888.scotlandtrip" android:host="openrouter" />
+            </intent-filter>
+
         </activity>
 
         <provider
