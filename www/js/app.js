@@ -9138,6 +9138,7 @@ ${(() => {
   const NO_DROPS = {
     unplaced: 0, undated: 0, outside: 0, tooFar: 0, finished: 0, merged: 0, offRoute: 0,
     adultsOnly: 0, notForChildren: 0, forChildren: 0, ratedOut: 0, unrated: 0, tooOld: 0, tooYoung: 0,
+    unsearched: 0,
   };
 
   // Whether an event belongs in this mode, and if not, which count it goes
@@ -9520,6 +9521,7 @@ ${(() => {
       d.unrated ? `${d.unrated} ${d.unrated === 1 ? "film had" : "films had"} no rating given` : "",
       d.tooOld ? `${d.tooOld} ${d.tooOld === 1 ? "was" : "were"} for older children` : "",
       d.tooYoung ? `${d.tooYoung} ${d.tooYoung === 1 ? "was" : "were"} for younger children` : "",
+      d.unsearched ? `${d.unsearched} ${d.unsearched === 1 ? "was" : "were"} Gemini's memory rather than a search` : "",
       // Deliberately not counted here. A listing found by two angles and
       // merged into one row was not left out of anything - it is on the
       // screen. Saying "left out: 3 were the same thing found twice" reads
@@ -9621,12 +9623,26 @@ ${(() => {
 
     // One request per kind, and no quiet second one: an answer that was not
     // searched is not used, and the screen says so with a button to try again.
+    // Not thrown away - it was paid for - and not mixed in with what was
+    // found either. Kept aside under "couldn't be confirmed", each one
+    // marked as Gemini's memory rather than a listing.
     if (answer.searched === false) {
+      let aside = parseListingLines(answer.text);
+      if (!aside.length) aside = extractJson(answer.text);
+      const lite = /lite/.test(String(answer.model || model || ""));
+      traceKind(angle.key, { parsed: Array.isArray(aside) ? aside.length : 0 });
       return {
-        list: [],
+        list: Array.isArray(aside) ? aside : [],
         sources: [],
+        unsearched: true,
         angle: angle.key,
-        error: "Gemini answered from memory instead of searching the web, so nothing it said was used.",
+        error:
+          "Gemini answered from memory instead of searching the web" +
+          (Array.isArray(aside) && aside.length ? ", so what it said is set aside as unconfirmed" : "") +
+          "." +
+          (lite
+            ? ` ${String(answer.model || model).replace(/^models\//, "")} is a lite model, and lite models usually answer without searching. A full flash model chosen in Settings (for example gemini-3.5-flash) searches.`
+            : ""),
       };
     }
 
@@ -9673,20 +9689,50 @@ ${(() => {
   function parseListingLines(text, wholeOnly) {
     const lines = String(text || "").split(/\r?\n/);
     if (wholeOnly && !/\n$/.test(String(text || ""))) lines.pop();
+    const labelOf = (w) => LINE_LABELS[String(w || "").toLowerCase().replace(/[*_]/g, "").trim()];
     const out = [];
     lines.forEach((raw) => {
       const line = raw.replace(/^\s*(?:[-*•]|\d+[.)])\s+/, "");
-      if (line === raw && !/^\s*name\s*:/i.test(raw)) return;
+      if (line === raw && !/^\s*name\s*[:;(]/i.test(raw)) return;
       const item = {};
-      // Split on "; " only where a known label follows, so a semicolon inside
-      // a description does not break the line apart.
-      line.split(/;\s*(?=[A-Za-z][A-Za-z ]{1,20}:)/).forEach((part) => {
-        const m = /^\s*\**([A-Za-z][A-Za-z ]{0,20}?)\**\s*:\s*(.*)$/.exec(part);
-        if (!m) return;
-        const key = LINE_LABELS[m[1].toLowerCase().trim()];
-        const value = m[2].replace(/\**$/, "").trim();
-        if (!key || !value || /^(n\/?a|none given|unknown|not stated|-)$/i.test(value)) return;
-        item[key] = value;
+      const set = (key, value) => {
+        const v = String(value || "").replace(/^[*_\s]+|[*_\s]+$/g, "");
+        if (!key || !v || item[key] || /^(n\/?a|none given|unknown|not stated|-)$/i.test(v)) return;
+        item[key] = v;
+      };
+      // Models do not all write "label: value". Seen from a lite model on a
+      // phone: "name; PAW Patrol; venue; Vue Portsmouth" (label and value as
+      // alternate parts), "date (2026-10-02)" (value in brackets), and a bare
+      // name, venue and town with no labels at all. All three are read.
+      const parts = line.split(/\s*;\s*/).filter((x) => x !== "");
+      const loose = [];
+      for (let i = 0; i < parts.length; i++) {
+        const part = parts[i];
+        let m = /^([A-Za-z][A-Za-z ]{0,20}?)\s*:\s*(.+)$/.exec(part);
+        if (m && labelOf(m[1])) {
+          set(labelOf(m[1]), m[2]);
+          continue;
+        }
+        m = /^([A-Za-z][A-Za-z ]{0,20}?)\s*\((.+)\)$/.exec(part);
+        if (m && labelOf(m[1])) {
+          set(labelOf(m[1]), m[2]);
+          continue;
+        }
+        if (labelOf(part) && i + 1 < parts.length && !labelOf(parts[i + 1])) {
+          set(labelOf(part), parts[i + 1]);
+          i++;
+          continue;
+        }
+        // "what" comes last and may itself hold a semicolon.
+        if (item.what && !labelOf(part)) {
+          item.what += `; ${part}`;
+          continue;
+        }
+        loose.push(part);
+      }
+      // Unlabelled leading parts: name, then venue, then town.
+      ["name", "venue", "area"].forEach((key) => {
+        if (!item[key] && loose.length) set(key, loose.shift());
       });
       if (!item.name) return;
       // "name: No qualifying screenings found" is the model saying nothing
@@ -9694,10 +9740,11 @@ ${(() => {
       if (!item.date && /^(no\b|none\b|nothing\b|n\/a\b)/i.test(item.name)) return;
       if (item.times) item.times = item.times.split(/[,/]|\band\b/).map((t) => t.trim()).filter(Boolean);
       if (item.ages) {
-        const a = /(\d+)\s*(?:-|–|to)\s*(\d+)/.exec(item.ages);
+        const a = /(\d+)\s*(?:months?)?\s*(?:-|–|to)\s*(\d+)/.exec(item.ages);
+        const months = /^\s*\d+\s*months?/i.test(item.ages);
         const plus = /(\d+)\s*\+/.exec(item.ages);
         const under = /under\s*(\d+)/i.exec(item.ages);
-        if (a) { item.minAge = Number(a[1]); item.maxAge = Number(a[2]); }
+        if (a) { item.minAge = months ? 0 : Number(a[1]); item.maxAge = Number(a[2]); }
         else if (plus) item.minAge = Number(plus[1]);
         else if (under) item.maxAge = Number(under[1]) - 1;
         delete item.ages;
@@ -9705,7 +9752,6 @@ ${(() => {
       if (item.childFocus) item.childFocus = (/aimed|allowed|adults/i.exec(item.childFocus) || [""])[0].toLowerCase();
       if (item.booking) item.booking = (/required|advised|none/i.exec(item.booking) || [""])[0].toLowerCase();
       if (item.weekly) item.recurring = /^y/i.test(item.weekly);
-      if (item.link && /^https?:/i.test(item.link) && !item.tickets) item.tickets = "";
       out.push(item);
     });
     return out;
@@ -9998,6 +10044,12 @@ ${(() => {
     // do is throw away real answers to keep a list tidy. Fifty found is fifty
     // shown.
     (answer.list || []).forEach((item) => {
+      // A film "on release" that week has no one date - the question says to
+      // leave the times out when they are not published - so a film with no
+      // date is on across the days asked about, not undated.
+      if (answer.angle === "films" && item && !item.date) {
+        item = Object.assign({}, item, { date: isoDate(ctx.window.from), endDate: isoDate(ctx.window.to) });
+      }
       const event = normaliseEvent(item, ctx.window);
       const label = `${(item && item.name) || "(no name)"}${item && item.venue ? ` @ ${item.venue}` : ""}${
         item && item.date ? ` (${item.date}${item.endDate ? `–${item.endDate}` : ""})` : ""
@@ -11474,7 +11526,7 @@ ${(() => {
     const held = eventsHeldBack;
     if (!held.length || !eventSearch.showHeld) return "";
     let html = `<div class="section-label list-head"><span>Couldn't be confirmed</span><span class="list-head-count">${held.length}</span></div>`;
-    html += `<div class="card ev-leftout"><p class="settings-hint">These have a name and a date but nowhere confirmed to put them on the map. Worth checking the link before you go.</p></div>`;
+    html += `<div class="card ev-leftout"><p class="settings-hint">Each says why it couldn't be confirmed. Worth checking before you go.</p></div>`;
     held.forEach((e, i) => {
       html += `<div class="ev-held-why">${esc(e.why || "")}</div>`;
       html += eventRow(e, -1, false, { heldIndex: i });
@@ -11535,6 +11587,13 @@ ${(() => {
 
     if (eventSearch.status === "error") {
       html += `<div class="card"><p class="pick-status">${esc(eventSearch.error)}</p></div>`;
+      // Nothing confirmed is not nothing found. What was set aside - not
+      // placed on the map, or Gemini's memory rather than a search - was only
+      // reachable from under a list of confirmed results, so when there were
+      // none it could not be seen at all.
+      if (!eventSearch.results.length && eventsHeldBack.length) {
+        html += renderEventsLeftOutNote() + renderEventsHeld();
+      }
     }
 
     // Above the results, because when there are none this is the whole point
@@ -12183,6 +12242,11 @@ ${(() => {
   async function townsAround(centre, radiusMetres) {
     const key = `${centre.lat.toFixed(2)},${centre.lon.toFixed(2)},${Math.round(radiusMetres / 1609)}`;
     if (townsCache[key]) return townsCache[key];
+    const kept = areaCacheGet(`towns|${key}`);
+    if (kept) {
+      overpassLog.push(`towns: kept on this phone from an earlier search (${kept.length})`);
+      return (townsCache[key] = kept);
+    }
     const towns = await settlementsNear(centre.lat, centre.lon, radiusMetres);
     // The centre itself is already named in the prompt; repeating it in the
     // list of what the area covers reads as a mistake.
@@ -12194,7 +12258,10 @@ ${(() => {
     // that area its village names, for as long as the app is open. Exactly
     // the trap the geocode cache already documents: caching a miss means the
     // right answer can never be learned.
-    if (out.length) townsCache[key] = out;
+    if (out.length) {
+      townsCache[key] = out;
+      areaCacheSet(`towns|${key}`, out);
+    }
     return out;
   }
 
@@ -12331,11 +12398,24 @@ ${(() => {
     // failure. It used to be indistinguishable from a quiet town, and it cost
     // 90 seconds of silence to get there - callGemini waits AI_TIMEOUT_MS
     // twice - so it is worth saying which of the two happened.
-    eventSearch.angles[angle.key] = answer.list && answer.list.length ? "done" : "failed";
+    eventSearch.angles[angle.key] = answer.list && answer.list.length && !answer.unsearched ? "done" : "failed";
     eventSearch.angleErrors = eventSearch.angleErrors || {};
     eventSearch.angleErrors[angle.key] = answer.error || "";
 
     const fresh = absorbAngle(answer, ctx);
+    if (answer.unsearched) {
+      fresh.forEach((entry) => {
+        eventsDropped.unsearched = (eventsDropped.unsearched || 0) + 1;
+        eventsHeldBack.push(Object.assign({}, entry.event, {
+          kinds: entry.angles, sources: [], unsourced: true,
+          why: "not looked up - Gemini answered from memory; check it before going",
+        }));
+        traceItem(angle.key, entry.label || entry.event.name, "set aside: Gemini didn't search");
+      });
+      liveStage(angle.key, "done", { names: [] });
+      scheduleEventsRedraw();
+      return;
+    }
     let toPlace = fresh.length;
     liveStage(angle.key, toPlace ? "placing" : "done", { toPlace, names: [] });
     fresh.forEach((entry) => {
@@ -12602,6 +12682,7 @@ ${(() => {
       ratings: angles.some((a) => a.key === "films") ? chosenFilmRatings().join(", ") : "",
       towns: (ctx.towns || []).join(", "),
       venues: Object.keys(ctx.venues || {}).map((k) => `${k}: ${(ctx.venues[k] || []).join(", ") || "none found"}`).join("   "),
+      lookups: overpassLog.splice(0).join("\n  "),
       cache: "a new search",
     });
     // The key's models, once, for the trace: which one a search used only
@@ -13465,21 +13546,7 @@ ${(() => {
       `node["place"~"^(village|suburb)$"]["name"](around:${near},${lat},${lon});` +
       `);out 400;`;
 
-    let data = null;
-    for (const endpoint of OVERPASS_ENDPOINTS) {
-      try {
-        const res = await fetchWithTimeout(
-          endpoint,
-          { method: "POST", body: q, headers: { "Content-Type": "text/plain" } },
-          NET_TIMEOUT_SLOW_MS
-        );
-        if (!res.ok) continue;
-        data = await res.json();
-        break;
-      } catch (e) {
-        // Try the next mirror.
-      }
-    }
+    const data = await overpassJson(q, "towns");
     // Deliberately not a throw. A missing village list makes the prompt
     // slightly worse; it must never make the search fail.
     if (!data || !Array.isArray(data.elements)) return [];
@@ -13505,6 +13572,53 @@ ${(() => {
   // of places instead of a question.
   const SETTLEMENT_LIMIT = 18;
 
+  // Overpass, with a record of what each mirror said - a trace from a phone
+  // read "Venues named: none found" and had no towns at all, and nothing
+  // said whether that was a timeout, a refusal or an empty answer.
+  const overpassLog = [];
+  async function overpassJson(q, label) {
+    for (const endpoint of OVERPASS_ENDPOINTS) {
+      const host = endpoint.replace(/^https:\/\/|\/api.*$/g, "");
+      const t0 = Date.now();
+      try {
+        const res = await fetchWithTimeout(
+          endpoint,
+          { method: "POST", body: q, headers: { "Content-Type": "text/plain" } },
+          OVERPASS_LOOKUP_TIMEOUT_MS
+        );
+        if (!res.ok) {
+          overpassLog.push(`${label}: ${host} said ${res.status} after ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+          continue;
+        }
+        const data = await res.json();
+        overpassLog.push(`${label}: ${host} answered ${(data.elements || []).length} in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+        return data;
+      } catch (e) {
+        overpassLog.push(`${label}: ${host} failed after ${((Date.now() - t0) / 1000).toFixed(1)}s (${(e && e.message) || e})`);
+      }
+    }
+    return null;
+  }
+  // Longer than the everyday limit: a 25-mile question is a slow one, and a
+  // phone that gives up at fifteen seconds gets nothing at all.
+  const OVERPASS_LOOKUP_TIMEOUT_MS = 30000;
+
+  // The towns and venues of an area barely change, so once one is known it
+  // is kept on the phone rather than asked for on every search.
+  const AREA_CACHE_KEY = "area-cache-v1";
+  function areaCacheGet(key) {
+    const all = readJson(AREA_CACHE_KEY, {});
+    const hit = all && all[key];
+    return hit && Array.isArray(hit.v) && Date.now() - hit.at < 30 * 86400000 ? hit.v : null;
+  }
+  function areaCacheSet(key, v) {
+    const all = readJson(AREA_CACHE_KEY, {}) || {};
+    all[key] = { at: Date.now(), v };
+    const keys = Object.keys(all).sort((a, b) => all[b].at - all[a].at);
+    keys.slice(60).forEach((k) => delete all[k]);
+    store(AREA_CACHE_KEY, JSON.stringify(all));
+  }
+
   // The cinemas or theatres in the area, by name, from OpenStreetMap - free,
   // no key. "Films within 25 miles of Burridge" left the model to decide
   // whether to look at all, and it often decided not to; "what's on at
@@ -13515,24 +13629,15 @@ ${(() => {
   async function venuesNear(lat, lon, radiusMetres, kind) {
     const key = `${kind}|${lat.toFixed(2)},${lon.toFixed(2)},${Math.round(radiusMetres / 1609)}`;
     if (venueCache[key]) return venueCache[key];
+    const kept = areaCacheGet(key);
+    if (kept) {
+      overpassLog.push(`${kind}s: kept on this phone from an earlier search (${kept.length})`);
+      return (venueCache[key] = kept);
+    }
     const radius = Math.min(radiusMetres, OVERPASS_PLACES_RADIUS_M);
     const tag = kind === "cinema" ? `["amenity"="cinema"]` : `["amenity"~"^(theatre|arts_centre)$"]`;
     const q = `[out:json][timeout:25];(nwr${tag}["name"](around:${radius},${lat},${lon}););out center 120;`;
-    let data = null;
-    for (const endpoint of OVERPASS_ENDPOINTS) {
-      try {
-        const res = await fetchWithTimeout(
-          endpoint,
-          { method: "POST", body: q, headers: { "Content-Type": "text/plain" } },
-          NET_TIMEOUT_SLOW_MS
-        );
-        if (!res.ok) continue;
-        data = await res.json();
-        break;
-      } catch (e) {
-        // Try the next mirror.
-      }
-    }
+    const data = await overpassJson(q, `${kind}s`);
     if (!data || !Array.isArray(data.elements)) return [];
     const out = data.elements
       .map((el) => {
@@ -13547,7 +13652,10 @@ ${(() => {
       .filter((x, i, all) => all.findIndex((y) => y.label === x.label) === i)
       .slice(0, VENUE_LIMIT)
       .map((x) => x.label);
-    if (out.length) venueCache[key] = out;
+    if (out.length) {
+      venueCache[key] = out;
+      areaCacheSet(key, out);
+    }
     return out;
   }
 
@@ -19779,6 +19887,7 @@ ${(() => {
     if (t.towns) out.push(`Towns named: ${t.towns}`);
     if (t.keyModels) out.push(`Models on this key: ${t.keyModels}`);
     if (t.venues) out.push(`Venues named: ${t.venues}`);
+    if (t.lookups) out.push(`Map lookups:\n  ${t.lookups}`);
     Object.keys(t.kinds || {}).forEach((key) => {
       const k = t.kinds[key];
       out.push("");

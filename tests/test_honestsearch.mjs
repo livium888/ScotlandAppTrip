@@ -266,6 +266,49 @@ check('and "weekly: yes" is a weekly event', (parsed[1] || {}).recurring === tru
 check('and they go through the same filters: in adults mode, the evening is shown and the toddler class is not',
   JSON.stringify(await names()) === JSON.stringify(['Folk Evening']), JSON.stringify(await names()));
 
+// ---------- 6d. The fourth trace, word for word ----------
+// gemini-3.5-flash-lite chosen in Settings: 2.2 seconds, no search, and
+// lines written its own way. Before, both answers were binned and the
+// screen showed nothing at all.
+const LITE_FILM = '- name; PAW Patrol: The Dino Movie; venue; Vue Portsmouth (Gunwharf Quays); town; Portsmouth; rating; U; for children; aimed; booking; advised; link; https://www.pearlanddean.com/cinemas/vue-portsmouth-gunwharf-quays; what; dinosaur rescue adventure';
+const LITE_MUSIC = `- Once Upon a Tune Music Class; Whiteley Community Centre; Whiteley; date (${day}); times (10:15); ages (18 months-6 years); for children (aimed); booking (required); link (https://www.onceuponatune.org/book-now); what (toddler music class)`;
+check('a line written "label; value" is read', await page.evaluate((t) => {
+  const x = window.__tripTest.parseListingLines(t)[0] || {};
+  return x.name === 'PAW Patrol: The Dino Movie' && x.venue === 'Vue Portsmouth (Gunwharf Quays)' && x.rating === 'U' && x.booking === 'advised';
+}, LITE_FILM), JSON.stringify(await page.evaluate((t) => window.__tripTest.parseListingLines(t), LITE_FILM)));
+check('and so is one with bare name, venue and town and "label (value)"', await page.evaluate((t) => {
+  const x = window.__tripTest.parseListingLines(t)[0] || {};
+  return x.name === 'Once Upon a Tune Music Class' && x.venue === 'Whiteley Community Centre' && x.area === 'Whiteley' &&
+    x.time === undefined && x.times && x.times[0] === '10:15' && x.minAge === 0 && x.maxAge === 6 && /onceuponatune/.test(x.link);
+}, LITE_MUSIC), JSON.stringify(await page.evaluate((t) => window.__tripTest.parseListingLines(t), LITE_MUSIC)));
+
+await seed();
+await page.evaluate(() => {
+  const s = JSON.parse(localStorage.getItem('trip-settings-v1'));
+  localStorage.setItem('trip-settings-v1', JSON.stringify(Object.assign(s, {
+    mode: 'kids', geminiModel: 'models/gemini-3.5-flash-lite', geminiModelPinned: true })));
+  localStorage.setItem('people-v1', JSON.stringify([{ name: 'A', age: 38 }, { name: 'B', age: 4 }]));
+});
+await page.reload({ waitUntil: 'load' });
+await page.waitForTimeout(500);
+behaviour = ({ grounded }) => grounded ? { text: LITE_MUSIC } : { text: '[]' };
+await searchOne('kidsmusic');
+check('an answer Gemini gave from memory is not shown as a result', (await names()).length === 0, JSON.stringify(await names()));
+check('but it is not thrown away either: it is set aside, and offered', await page.evaluate(() =>
+  /Show the 1 it couldn't confirm/.test(document.getElementById('view').textContent)), (await view()).slice(0, 500));
+await page.evaluate(() => document.getElementById('evShowHeld')?.click());
+await page.waitForTimeout(400);
+check('marked as Gemini\'s memory, to check before going', /Once Upon a Tune/.test(await view()) &&
+  /not looked up - Gemini answered from memory/.test(await view()), (await view()).slice(0, 600));
+check('and the screen says why, and what would search', /lite model, and lite models usually answer without searching/.test(await view()) &&
+  /gemini-3\.5-flash/.test(await view()), (await view()).slice(0, 600));
+await page.evaluate(() => document.getElementById('evTrace')?.click());
+await page.waitForTimeout(300);
+const tr4 = await page.evaluate(() => document.querySelector('#placeModal .trace-text')?.textContent || '');
+check('the trace records it as set aside', /Once Upon a Tune.*set aside: Gemini didn't search/.test(tr4), tr4.slice(0, 600));
+check('and what the map lookups did', /Map lookups:/.test(tr4) && /towns:/.test(tr4), (tr4.match(/Map lookups:[\s\S]{0,200}/) || [''])[0]);
+await page.evaluate(() => document.querySelector('#placeModal .modal-close')?.click());
+
 // ---------- 7. Neither searched: nothing shown, and said plainly ----------
 await seed();
 behaviour = ({ grounded }) => grounded ? { text: JSON.stringify([listing('Remembered Gala')]) } : { text: '[]' };
