@@ -242,12 +242,6 @@
       aiBaseUrl: stored.aiBaseUrl || "",
       aiModel: stored.aiModel || "",
       aiKey: stored.aiKey || "",
-      // OpenRouter, signed in: a key that belongs to the user's own OpenRouter
-      // account, and the model they chose there. Kept apart from aiKey so
-      // switching between providers never mixes one service's key into
-      // another's requests.
-      openrouterKey: typeof stored.openrouterKey === "string" ? stored.openrouterKey : "",
-      openrouterModel: typeof stored.openrouterModel === "string" ? stored.openrouterModel : "",
       // Whether the endpoint named above searches the web. Off by default:
       // assuming it does and being wrong is how invented events reach the
       // screen, and the citation check is a safety net rather than a licence.
@@ -1026,16 +1020,6 @@
         "is turned off rather than answered from memory. Ticking it wrongly is not dangerous: " +
         "results that come back with nothing to link to are marked as unchecked either way.",
     },
-    openrouter: {
-      label: "OpenRouter — sign in",
-      canGround: true,
-      needsKey: true,
-      needsBaseUrl: false,
-      fixedBaseUrl: "https://openrouter.ai/api/v1",
-      note:
-        "Sign in with your OpenRouter account instead of pasting a key. What you use comes out of " +
-        "your OpenRouter credit, and web search is switched on for finding what's on.",
-    },
     ollama: {
       label: "Ollama on this network",
       canGround: false,
@@ -1085,28 +1069,15 @@
   function aiReady() {
     const p = aiProvider();
     const s = loadTripSettings();
-    if (p.needsKey && !providerKey()) return false;
+    if (p.needsKey && !(aiProviderKey() === "gemini" ? s.geminiKey : s.aiKey).trim()) return false;
     if (p.needsBaseUrl && !aiBaseUrl()) return false;
     return true;
   }
 
   function aiBaseUrl() {
     const s = loadTripSettings();
-    if (aiProvider().fixedBaseUrl) return aiProvider().fixedBaseUrl;
     return (s.aiBaseUrl || aiProvider().defaultBaseUrl || "").replace(/\/+$/, "");
   }
-
-  // The key for whichever provider is chosen.
-  function providerKey() {
-    const s = loadTripSettings();
-    const which = aiProviderKey();
-    if (which === "gemini") return s.geminiKey.trim();
-    if (which === "openrouter") return s.openrouterKey.trim();
-    return (s.aiKey || "").trim();
-  }
-
-  // A good all-rounder that is cheap per request; the Settings field changes it.
-  const OPENROUTER_DEFAULT_MODEL = "google/gemini-2.5-flash";
 
   // One entry point for every AI call in the app. It keeps callGemini's
   // contract exactly - { text, sources } - so nothing downstream has to know
@@ -1127,8 +1098,7 @@
     lastAiPrompt = prompt;
     const s = loadTripSettings();
     const base = aiBaseUrl();
-    const openrouter = aiProviderKey() === "openrouter";
-    const model = openrouter ? s.openrouterModel || OPENROUTER_DEFAULT_MODEL : s.aiModel || "";
+    const model = s.aiModel || "";
     if (!base) throw new Error("No address set for the model — Settings has a field for it.");
     if (!model) throw new Error("No model name set — Settings has a field for it.");
 
@@ -1145,20 +1115,12 @@
     // because a searching model answers in prose with citations attached.
     // extractJson is tolerant enough to find the array inside either.
     if (json && !grounded) body.response_format = { type: "json_object" };
-    // OpenRouter searches when asked to, for any model: its web plugin runs
-    // the search and hands the results to the model. (The ":online" suffix
-    // is the old way of asking and is deprecated.)
-    const webPlugin = grounded && /openrouter\.ai/.test(base);
-    if (webPlugin) body.plugins = [{ id: "web" }];
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), limit);
     const headers = { "Content-Type": "application/json" };
-    const key = providerKey();
+    const key = (s.aiKey || "").trim();
     if (key) headers.Authorization = `Bearer ${key}`;
-    // OpenRouter asks apps to say who they are; it shows on the user's
-    // activity page, so they can see which app spent their credit.
-    if (openrouter) headers["X-Title"] = "Wayfare";
     let res;
     try {
       res = await fetch(`${base}/chat/completions`, {
@@ -1212,9 +1174,7 @@
       { grounded, model: `${aiProviderKey()}/${model}` }
     );
 
-    // With OpenRouter's web plugin the search runs on their side before the
-    // model answers, so the answer was looked up whether or not it cites.
-    return { text, sources: openAiCitations(data, choice), searched: webPlugin ? true : undefined, model };
+    return { text, sources: openAiCitations(data, choice) };
   }
 
   // Where the citations are, for hosts that produce them. They do not agree:
@@ -3452,7 +3412,6 @@
       // The key for another provider is as secret as the other two, and was
       // being written into every backup file.
       delete s.aiKey;
-      delete s.openrouterKey;
       return JSON.stringify(s);
     } catch (e) {
       return rawSettings;
@@ -4079,123 +4038,6 @@
     showView(firstVisibleTab());
   }
 
-  // ---------- Signing in with OpenRouter ----------
-  // OpenRouter's own sign-in (OAuth with PKCE): the app opens OpenRouter,
-  // the person signs in and approves, OpenRouter sends them back with a
-  // one-time code, and the app swaps that code for a key that belongs to
-  // their OpenRouter account. No key to find or paste, and what they use
-  // comes out of their own OpenRouter credit. The verifier never leaves the
-  // phone; only its hash goes to OpenRouter up front.
-  const OPENROUTER_PENDING_KEY = "openrouter-pending-v1";
-  const OPENROUTER_RETURN = "com.livium888.scotlandtrip://openrouter";
-
-  function base64Url(bytes) {
-    let bin = "";
-    bytes.forEach((b) => (bin += String.fromCharCode(b)));
-    return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-  }
-
-  async function pkcePair() {
-    const verifier = base64Url(crypto.getRandomValues(new Uint8Array(48)));
-    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
-    return { verifier, challenge: base64Url(new Uint8Array(digest)) };
-  }
-
-  function openRouterCallbackUrl() {
-    return nativePlugin("App")
-      ? OPENROUTER_RETURN
-      : `${location.origin}${location.pathname}?openrouter=1`;
-  }
-
-  // showCode: the fallback when coming back to the app does not work -
-  // OpenRouter then shows the code on its own page to be pasted in here.
-  async function startOpenRouterSignIn(showCode) {
-    const { verifier, challenge } = await pkcePair();
-    store(OPENROUTER_PENDING_KEY, JSON.stringify({ verifier, at: Date.now() }));
-    const params = new URLSearchParams({ code_challenge: challenge, code_challenge_method: "S256" });
-    if (!showCode) params.set("callback_url", openRouterCallbackUrl());
-    const url = `https://openrouter.ai/auth?${params.toString()}`;
-    const browser = nativePlugin("Browser");
-    if (browser && browser.open) {
-      await browser.open({ url });
-    } else if (showCode) {
-      window.open(url, "_blank");
-    } else {
-      location.href = url;
-    }
-  }
-
-  async function finishOpenRouterSignIn(code) {
-    const pending = readJson(OPENROUTER_PENDING_KEY, null);
-    if (!code || !pending || !pending.verifier) {
-      return { ok: false, message: "That sign-in had expired. Tap Sign in with OpenRouter again." };
-    }
-    try {
-      const res = await fetchWithTimeout(
-        "https://openrouter.ai/api/v1/auth/keys",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ code: code.trim(), code_verifier: pending.verifier, code_challenge_method: "S256" }),
-        },
-        AI_TIMEOUT_MS
-      );
-      const data = await res.json().catch(() => null);
-      if (!res.ok || !data || !data.key) {
-        const why = (data && data.error && (data.error.message || data.error)) || `status ${res.status}`;
-        return { ok: false, message: `OpenRouter didn't accept that sign-in (${why}). Try again.` };
-      }
-      localStorage.removeItem(OPENROUTER_PENDING_KEY);
-      saveTripSettings({ openrouterKey: data.key, aiProvider: "openrouter" });
-      return { ok: true, message: "Signed in to OpenRouter." };
-    } catch (e) {
-      return { ok: false, message: `Couldn't reach OpenRouter: ${(e && e.message) || e}` };
-    }
-  }
-
-  // Coming back: from the browser tab on a phone, or with ?code= on the page.
-  async function handleOpenRouterReturn(url) {
-    let code = "";
-    try {
-      code = new URL(url).searchParams.get("code") || "";
-    } catch (e) {
-      code = "";
-    }
-    if (!code) return;
-    const browser = nativePlugin("Browser");
-    if (browser && browser.close) browser.close().catch(() => {});
-    const res = await finishOpenRouterSignIn(code);
-    toast(res.message);
-    if (res.ok && placeModal.classList.contains("open")) openSettings();
-  }
-
-  async function openRouterCredit(key) {
-    try {
-      const res = await fetchWithTimeout("https://openrouter.ai/api/v1/key", { headers: { Authorization: `Bearer ${key}` } }, 15000);
-      if (!res.ok) return "";
-      const d = ((await res.json()) || {}).data || {};
-      const used = typeof d.usage === "number" ? `$${d.usage.toFixed(2)} used` : "";
-      const left = typeof d.limit_remaining === "number" ? `, $${d.limit_remaining.toFixed(2)} left on this key` : "";
-      return used + left;
-    } catch (e) {
-      return "";
-    }
-  }
-
-  // The model list, once, for suggestions under the model field.
-  let openRouterModels = null;
-  async function loadOpenRouterModels() {
-    if (openRouterModels) return openRouterModels;
-    try {
-      const res = await fetchWithTimeout("https://openrouter.ai/api/v1/models", {}, 20000);
-      const d = await res.json();
-      openRouterModels = ((d && d.data) || []).map((m) => m.id).filter(Boolean).slice(0, 400);
-    } catch (e) {
-      openRouterModels = [];
-    }
-    return openRouterModels;
-  }
-
   function openSettings() {
     const s = loadTripSettings();
     placeModal.innerHTML = `
@@ -4255,30 +4097,7 @@
                 : ""
             }
             ${
-              aiProviderKey() === "openrouter"
-                ? s.openrouterKey
-                  ? `<div class="or-signed-in">
-                       <p class="settings-hint"><b>Signed in to OpenRouter</b> · key ending …${esc(s.openrouterKey.slice(-4))}
-                         <span id="orCredit"></span></p>
-                       <label class="settings-label" for="setOrModel">Model</label>
-                       <input class="settings-input" type="text" id="setOrModel" list="orModels"
-                              value="${esc(s.openrouterModel || OPENROUTER_DEFAULT_MODEL)}" autocomplete="off" />
-                       <datalist id="orModels"></datalist>
-                       <p class="settings-hint">Any model on OpenRouter. Searches for what's on use OpenRouter's web search with it.</p>
-                       <button class="modal-btn" id="orSignOut">Sign out of OpenRouter</button>
-                     </div>`
-                  : `<button class="modal-btn modal-btn-primary" id="orSignIn" style="width:100%;">Sign in with OpenRouter</button>
-                     <p class="settings-hint">Opens OpenRouter to sign in and approve Wayfare, then comes back here.
-                       No key to copy. <button class="link-btn" id="orShowCode">Didn't come back? Get a code instead</button></p>
-                     <div id="orCodeWrap" hidden>
-                       <input class="settings-input" type="text" id="orCode" placeholder="Paste the code OpenRouter shows" autocomplete="off" />
-                       <button class="modal-btn" id="orUseCode">Use this code</button>
-                     </div>
-                     <p class="settings-result" id="orResult" hidden></p>`
-                : ""
-            }
-            ${
-              aiProvider().needsKey && aiProviderKey() !== "gemini" && aiProviderKey() !== "openrouter"
+              aiProvider().needsKey && aiProviderKey() !== "gemini"
                 ? `<label class="settings-label" for="setAiKey">Key for that service</label>
                    <input class="settings-input" type="text" id="setAiKey" value="${esc(s.aiKey)}"
                           placeholder="Paste key" autocomplete="off" />`
@@ -4561,52 +4380,6 @@ ${(() => {
           aiKey: ((document.getElementById("setAiKey") || {}).value || "").trim(),
         });
         openSettings();
-      });
-    }
-
-    const orIn = document.getElementById("orSignIn");
-    if (orIn) orIn.addEventListener("click", () => startOpenRouterSignIn(false));
-    const orShow = document.getElementById("orShowCode");
-    if (orShow) {
-      orShow.addEventListener("click", () => {
-        document.getElementById("orCodeWrap").hidden = false;
-        startOpenRouterSignIn(true);
-      });
-    }
-    const orUse = document.getElementById("orUseCode");
-    if (orUse) {
-      orUse.addEventListener("click", async () => {
-        const out = document.getElementById("orResult");
-        const res = await finishOpenRouterSignIn(document.getElementById("orCode").value);
-        out.hidden = false;
-        out.className = `settings-result ${res.ok ? "ok" : "bad"}`;
-        out.textContent = res.message;
-        if (res.ok) openSettings();
-      });
-    }
-    const orOut = document.getElementById("orSignOut");
-    if (orOut) {
-      orOut.addEventListener("click", () => {
-        // The key itself can be deleted on OpenRouter's keys page; here it is
-        // forgotten, so this phone can no longer spend from that account.
-        saveTripSettings({ openrouterKey: "" });
-        toast("Signed out of OpenRouter");
-        openSettings();
-      });
-    }
-    const orModel = document.getElementById("setOrModel");
-    if (orModel) {
-      orModel.addEventListener("change", () => {
-        saveTripSettings({ openrouterModel: orModel.value.trim() });
-        toast(`Using ${orModel.value.trim() || OPENROUTER_DEFAULT_MODEL}`);
-      });
-      loadOpenRouterModels().then((ids) => {
-        const list = document.getElementById("orModels");
-        if (list) list.innerHTML = ids.map((id) => `<option value="${esc(id)}"></option>`).join("");
-      });
-      openRouterCredit(loadTripSettings().openrouterKey).then((line) => {
-        const el = document.getElementById("orCredit");
-        if (el && line) el.textContent = ` · ${line}`;
       });
     }
 
@@ -21386,20 +21159,6 @@ ${(() => {
   // closing the activity by itself and hands the press over - which is the
   // only way to put a question in front of it.
   const capApp = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App;
-  // OpenRouter sends the phone back to com.livium888.scotlandtrip://openrouter
-  // with the one-time code once the person has approved.
-  if (capApp && capApp.addListener) {
-    capApp.addListener("appUrlOpen", (event) => {
-      const url = (event && event.url) || "";
-      if (url.indexOf(OPENROUTER_RETURN) === 0) handleOpenRouterReturn(url);
-    });
-  }
-  // In a browser the return is this page, with ?openrouter=1&code=...
-  if (/[?&]openrouter=1/.test(location.search) && /[?&]code=/.test(location.search)) {
-    const back = location.href;
-    history.replaceState(null, "", location.pathname);
-    handleOpenRouterReturn(back);
-  }
   if (capApp && capApp.addListener) {
     capApp.addListener("backButton", () => {
       if (exitConfirmOpen) return; // the sheet is already asking
@@ -21814,7 +21573,6 @@ ${(() => {
   // anything.
   window.__tripTest = {
     ASSISTANTS,
-    startOpenRouterSignIn,
     handoffPrompt: (miles) => {
       const c = eventSearch.centre || loadAnchor() || derivedAnchor();
       return handoffPrompt(c, eventSearch.when, (miles || 25) * 1609, ["Whiteley", "Fareham"], { films: ["Cineworld Whiteley"] });

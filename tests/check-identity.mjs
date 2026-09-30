@@ -70,10 +70,6 @@ const KEEP = [
   "scotland-trip-backup",
   "b-scotland",
   "^scotland-trip-",
-  // The app's own link scheme, which Android matches against the package
-  // id: OpenRouter's sign-in comes back through it. It has to be exactly the
-  // applicationId, which is exactly what must never change.
-  "com.livium888.scotlandtrip://openrouter",
 ];
 let stripped = appJs;
 KEEP.forEach((k) => {
