@@ -1105,8 +1105,69 @@
     return (s.aiKey || "").trim();
   }
 
-  // A good all-rounder that is cheap per request; the Settings field changes it.
-  const OPENROUTER_DEFAULT_MODEL = "google/gemini-2.5-flash";
+  // Only free models are offered, and only free models are used. OpenRouter's
+  // own "free router" picks one of them when the list can't be fetched.
+  const OPENROUTER_DEFAULT_MODEL = "openrouter/free";
+
+  // Free means both halves of the price are zero. Every free model's id ends
+  // in ":free" as well, which lets a saved choice be checked without a
+  // network call.
+  function isFreeOpenRouterModel(m) {
+    const price = (v) => Number(v == null ? NaN : v);
+    const p = m && m.pricing;
+    return !!p && price(p.prompt) === 0 && price(p.completion) === 0;
+  }
+  function isFreeOpenRouterId(id) {
+    return id === OPENROUTER_DEFAULT_MODEL || /:free$/.test(id || "");
+  }
+
+  // What OpenRouter says about each free model, turned into a score for this
+  // app. Wayfare's requests carry pasted search results and long listings, so
+  // room for them matters most; then whether the model promises structured
+  // answers and tool use, and whether it is recent. Nothing here is guessed
+  // from a model's name - it is all fields from OpenRouter's own model list.
+  function rankFreeOpenRouterModels(raw) {
+    const yearAgo = Date.now() / 1000 - 365 * 86400;
+    const free = (raw || []).filter((m) => {
+      const out = (m.architecture && m.architecture.output_modalities) || ["text"];
+      return m.id && isFreeOpenRouterModel(m) && out.includes("text");
+    });
+    const list = free.map((m) => {
+      const params = m.supported_parameters || [];
+      const ctx = m.context_length || 0;
+      const why = [];
+      let score = 0;
+      if (ctx >= 128000) {
+        score += 3;
+        why.push(`${Math.round(ctx / 1000)}k context`);
+      } else if (ctx >= 32000) {
+        score += 2;
+        why.push(`${Math.round(ctx / 1000)}k context`);
+      } else if (ctx >= 16000) {
+        score += 1;
+      } else {
+        score -= 3;
+      }
+      if (params.includes("structured_outputs")) {
+        score += 2;
+        why.push("structured answers");
+      } else if (params.includes("response_format")) {
+        score += 1;
+      }
+      if (params.includes("tools")) {
+        score += 1;
+        why.push("tool use");
+      }
+      if ((m.created || 0) > yearAgo) {
+        score += 1;
+        why.push("recent");
+      }
+      return { id: m.id, name: m.name || m.id, context: ctx, score, why, best: false };
+    });
+    list.sort((a, b) => b.score - a.score || b.context - a.context || (a.id < b.id ? -1 : 1));
+    list.filter((m) => m.score >= 4).slice(0, 3).forEach((m) => (m.best = true));
+    return list;
+  }
 
   // One entry point for every AI call in the app. It keeps callGemini's
   // contract exactly - { text, sources } - so nothing downstream has to know
@@ -1128,7 +1189,7 @@
     const s = loadTripSettings();
     const base = aiBaseUrl();
     const openrouter = aiProviderKey() === "openrouter";
-    const model = openrouter ? s.openrouterModel || OPENROUTER_DEFAULT_MODEL : s.aiModel || "";
+    const model = openrouter ? await pickOpenRouterModel(s.openrouterModel) : s.aiModel || "";
     if (!base) throw new Error("No address set for the model — Settings has a field for it.");
     if (!model) throw new Error("No model name set — Settings has a field for it.");
 
@@ -1194,7 +1255,11 @@
     }
     if (!res.ok) {
       const detail = (data && data.error && (data.error.message || data.error)) || raw.slice(0, 200);
-      const err = new Error(`The model refused that (${res.status}): ${detail}`);
+      const err = new Error(
+        openrouter && res.status === 402
+          ? `OpenRouter wants credit for this request. The model is free, but its web search is charged (about 2 cents a search) - add a little credit at openrouter.ai/credits. ${detail}`
+          : `The model refused that (${res.status}): ${detail}`
+      );
       err.status = res.status;
       throw err;
     }
@@ -4182,18 +4247,29 @@
     }
   }
 
-  // The model list, once, for suggestions under the model field.
+  // The free models, ranked, fetched once. The list is public, so no key.
   let openRouterModels = null;
   async function loadOpenRouterModels() {
     if (openRouterModels) return openRouterModels;
     try {
       const res = await fetchWithTimeout("https://openrouter.ai/api/v1/models", {}, 20000);
       const d = await res.json();
-      openRouterModels = ((d && d.data) || []).map((m) => m.id).filter(Boolean).slice(0, 400);
+      openRouterModels = rankFreeOpenRouterModels((d && d.data) || []);
     } catch (e) {
       openRouterModels = [];
     }
     return openRouterModels;
+  }
+
+  // The model a request uses: the one chosen in Settings if it is free, else
+  // the best free one, else OpenRouter's free router. A paid model saved
+  // earlier is never sent.
+  async function pickOpenRouterModel(chosen) {
+    if (chosen && isFreeOpenRouterId(chosen)) return chosen;
+    const list = await loadOpenRouterModels();
+    if (chosen && list.some((m) => m.id === chosen)) return chosen;
+    const best = list.find((m) => m.best) || list[0];
+    return best ? best.id : OPENROUTER_DEFAULT_MODEL;
   }
 
   function openSettings() {
@@ -4260,11 +4336,14 @@
                   ? `<div class="or-signed-in">
                        <p class="settings-hint"><b>Signed in to OpenRouter</b> · key ending …${esc(s.openrouterKey.slice(-4))}
                          <span id="orCredit"></span></p>
-                       <label class="settings-label" for="setOrModel">Model</label>
-                       <input class="settings-input" type="text" id="setOrModel" list="orModels"
-                              value="${esc(s.openrouterModel || OPENROUTER_DEFAULT_MODEL)}" autocomplete="off" />
-                       <datalist id="orModels"></datalist>
-                       <p class="settings-hint">Any model on OpenRouter. Searches for what's on use OpenRouter's web search with it.</p>
+                       <label class="settings-label" for="setOrModel">Free model</label>
+                       <select class="settings-input" id="setOrModel">
+                         <option value="${esc(s.openrouterModel && isFreeOpenRouterId(s.openrouterModel) ? s.openrouterModel : OPENROUTER_DEFAULT_MODEL)}">Loading free models…</option>
+                       </select>
+                       <p class="settings-hint" id="orModelNote"></p>
+                       <p class="settings-hint">Only free models are offered. Web search for what's on is OpenRouter's own
+                         and is charged to your credit (about 2 cents a search) even with a free model; free models
+                         also have daily limits.</p>
                        <button class="modal-btn" id="orSignOut">Sign out of OpenRouter</button>
                      </div>`
                   : `<button class="modal-btn modal-btn-primary" id="orSignIn" style="width:100%;">Sign in with OpenRouter</button>
@@ -4596,13 +4675,37 @@ ${(() => {
     }
     const orModel = document.getElementById("setOrModel");
     if (orModel) {
+      const orNote = () => {
+        const m = (openRouterModels || []).find((x) => x.id === orModel.value);
+        const el = document.getElementById("orModelNote");
+        if (el) {
+          el.textContent = m
+            ? `${m.best ? "Recommended for Wayfare. " : ""}${m.why.length ? `Offers ${m.why.join(", ")}.` : ""}`
+            : "";
+        }
+      };
       orModel.addEventListener("change", () => {
-        saveTripSettings({ openrouterModel: orModel.value.trim() });
-        toast(`Using ${orModel.value.trim() || OPENROUTER_DEFAULT_MODEL}`);
+        saveTripSettings({ openrouterModel: orModel.value });
+        toast(`Using ${orModel.value}`);
+        orNote();
       });
-      loadOpenRouterModels().then((ids) => {
-        const list = document.getElementById("orModels");
-        if (list) list.innerHTML = ids.map((id) => `<option value="${esc(id)}"></option>`).join("");
+      loadOpenRouterModels().then((list) => {
+        if (!document.body.contains(orModel)) return;
+        if (!list.length) {
+          orModel.innerHTML = `<option value="${OPENROUTER_DEFAULT_MODEL}">OpenRouter's free router (couldn't load the list)</option>`;
+          return;
+        }
+        const saved = loadTripSettings().openrouterModel;
+        const current = list.some((m) => m.id === saved) ? saved : (list.find((m) => m.best) || list[0]).id;
+        const opt = (m) =>
+          `<option value="${esc(m.id)}"${m.id === current ? " selected" : ""}>${esc(m.name)} · ${Math.round(m.context / 1000)}k</option>`;
+        const best = list.filter((m) => m.best);
+        const rest = list.filter((m) => !m.best);
+        orModel.innerHTML =
+          (best.length ? `<optgroup label="Best for Wayfare">${best.map(opt).join("")}</optgroup>` : "") +
+          `<optgroup label="Other free models (${rest.length})">${rest.map(opt).join("")}</optgroup>`;
+        if (saved !== current) saveTripSettings({ openrouterModel: current });
+        orNote();
       });
       openRouterCredit(loadTripSettings().openrouterKey).then((line) => {
         const el = document.getElementById("orCredit");
