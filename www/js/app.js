@@ -2,6 +2,7 @@ import { esc, safeUrl, cityColor } from "./lib/text.js";
 import { createStorage } from "./lib/storage.js";
 import { createBudgetScreen } from "./screens/budget.js";
 import { createTipsScreen } from "./screens/tips.js";
+import { createPickList } from "./screens/picklist.js";
 import { extractJson, partialListings, lineFormat, parseListingLines } from "./lib/listings.js";
 
 import { haversineKm, MILES_PER_KM, toMiles, formatDistance, formatDuration, legLabel, DETOUR_FACTOR, WALK_MAX_KM, DRIVE_KMH, ROAD_FACTOR, WALK_KMH_CHILD, WALK_KMH_ADULT } from "./lib/geo.js";
@@ -9,6 +10,7 @@ import { timeToMinutes, formatTime, labelForDate, DAY_NAMES, dayCodeFromLabel, c
 import { ICS_LINE_END, icsEscape, icsFold, icsStamp, icsDay } from "./lib/ics.js";
 import { describeGeminiError, chooseGeminiModel, scoreSearchModel, rateForModel, money4, openAiCitations, readGeminiStream } from "./lib/ai.js";
 import { isForKids, KID_SEARCHES, kidsTitleFor, forOurKids as forKidsOfAge } from "./lib/kids.js";
+import { planItems, itemsInDayOrder, nextItemIndex } from "./lib/plan.js";
 (function () {
   "use strict";
 
@@ -4744,42 +4746,6 @@ ${(() => {
     rescheduleTimer = setTimeout(() => rescheduleNotifications(), 1200);
   }
 
-  function planItems(plan, dayId) {
-    return plan.items[dayId] || [];
-  }
-
-  // A day reads in the order you will walk it, not the order things happened
-  // to be added. Anything without a time keeps its position at the end: an
-  // unscheduled stop is a loose end, and sorting it into the middle of the day
-  // would imply a decision nobody made.
-  function itemsInDayOrder(items) {
-    return items
-      .map((it, i) => ({ it, i, mins: timeToMinutes(it.time) }))
-      .sort((a, b) => {
-        if (a.mins == null && b.mins == null) return a.i - b.i;
-        if (a.mins == null) return 1;
-        if (b.mins == null) return -1;
-        return a.mins - b.mins || a.i - b.i;
-      })
-      .map((x) => x.it);
-  }
-
-  // Which stop "NEXT" should point at. Only meaningful on the day itself -
-  // on any other day the first stop is the next one you will do.
-  function nextItemIndex(ordered, isToday, now) {
-    if (!isToday) return ordered.length ? 0 : -1;
-    const minsNow = now.getHours() * 60 + now.getMinutes();
-    // A stop counts as still ahead for a while after its time: standing
-    // outside somewhere at 10:05 for a 10:00 booking, the next thing is
-    // still that booking.
-    const GRACE_MINS = 60;
-    const idx = ordered.findIndex((it) => {
-      const m = timeToMinutes(it.time);
-      return m == null || m + GRACE_MINS >= minsNow;
-    });
-    return idx;
-  }
-
   function addToPlan(dayId, pickId) {
     const plan = loadPlan();
     const list = planItems(plan, dayId).slice();
@@ -6290,289 +6256,14 @@ ${(() => {
   // The list was in whatever order things happened to be saved, which is the
   // one order that means nothing by the time there are twenty of them.
   const SORT_KEY = "places-sort-v1";
-  // Ordering used to be two systems fighting each other. Places were grouped
-  // into sections by town, in whatever order the folders happened to be
-  // created, and *then* sorted inside each section by a separate chip. So
-  // "Nearest" meant nearest within a town, while the towns themselves sat in
-  // an arbitrary order; "By day" scattered Monday's stops across five
-  // sections; and the chip was a saved preference, so the list came back in a
-  // different order from the one you left it in, for no visible reason.
-  //
-  // One control now, and the chosen order decides the sections as well as the
-  // rows - so what you pick is what you see, top to bottom, with nothing else
-  // quietly rearranging it underneath.
-  const SORTS = [
-    { key: "area", label: "By area", note: "Grouped by town, A–Z inside" },
-    { key: "day", label: "By day", note: "In the order you'll do them" },
-    { key: "near", label: "Nearest", note: "One list, closest first" },
-    { key: "recent", label: "Just added", note: "One list, newest first" },
-  ];
-
-  let sortOpen = false;
-
-  function loadSort() {
-    const v = readJson(SORT_KEY, "area");
-    // "name" was a mode of its own before ordering and grouping were the same
-    // decision; it is how every grouped list is sorted inside a section now.
-    if (v === "name") return "area";
-    return SORTS.some((s) => s.key === v) ? v : "area";
-  }
-
-  function saveSort(key) {
-    store(SORT_KEY, JSON.stringify(key));
-  }
-
-  // "Nearest" needs somewhere to be near. The first scheduled stop is the
-  // best answer - that's where the day starts - then anything saved with
-  // coordinates, then the board's own destination.
-  function sortOrigin() {
-    const plan = loadPlan();
-    const picks = loadPicks();
-    const byId = {};
-    picks.forEach((p) => (byId[p.id] = p));
-    for (const day of plan.days) {
-      for (const it of plan.items[day.id] || []) {
-        const p = byId[it.pickId];
-        if (p && p.lat != null) return p;
-      }
-    }
-    return picks.find((p) => p.lat != null) || destinationAnchor(null);
-  }
-
-  function sortPicks(list, sortKey, origin) {
-    const copy = list.slice();
-    if (sortKey === "name") {
-      return copy.sort((a, b) => a.name.localeCompare(b.name, "en-GB"));
-    }
-    if (sortKey === "near" && origin) {
-      return copy.sort((a, b) => {
-        // Anything without coordinates sinks rather than pretending to be
-        // nearby - it genuinely isn't known.
-        if (a.lat == null) return 1;
-        if (b.lat == null) return -1;
-        return (
-          haversineKm(origin.lat, origin.lon, a.lat, a.lon) -
-          haversineKm(origin.lat, origin.lon, b.lat, b.lon)
-        );
-      });
-    }
-    if (sortKey === "day") {
-      const plan = loadPlan();
-      const dayIndex = {};
-      plan.days.forEach((d, i) => {
-        (plan.items[d.id] || []).forEach((it) => {
-          if (dayIndex[it.pickId] === undefined) dayIndex[it.pickId] = i;
-        });
-      });
-      // Scheduled things first, in the order you'll do them; everything not
-      // yet placed collects at the bottom, which is where the work is.
-      return copy.sort((a, b) => {
-        const ai = dayIndex[a.id] === undefined ? 999 : dayIndex[a.id];
-        const bi = dayIndex[b.id] === undefined ? 999 : dayIndex[b.id];
-        return ai - bi || a.name.localeCompare(b.name, "en-GB");
-      });
-    }
-    return copy.sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0));
-  }
-
-  // ---------- One list, ordered one way ----------
-  // Both Picks and Kids are a list of saved places, and both were arranging
-  // them differently and badly. This is the single answer: given a list and a
-  // chosen order, hand back the sections to draw, in the order to draw them.
-  //
-  // Two of the four modes have no sections at all, and that is the point - a
-  // flat list is what "nearest" and "just added" mean. Cutting either into
-  // towns would put a place 2 miles away below a heading three screens down.
-  function groupPicks(list, mode, options) {
-    const opts = options || {};
-    const origin = mode === "near" ? opts.origin || sortOrigin() : null;
-    const away = (p) =>
-      origin && p.lat != null && p.id !== origin.id
-        ? formatDistance(haversineKm(origin.lat, origin.lon, p.lat, p.lon))
-        : null;
-    const byName = (a, b) => a.name.localeCompare(b.name, "en-GB");
-
-    if (mode === "near") {
-      const sorted = list.slice().sort((a, b) => {
-        // Somewhere with no coordinates is not nearby, it is unknown, so it
-        // sinks rather than claiming a place in the order.
-        if (a.lat == null) return b.lat == null ? byName(a, b) : 1;
-        if (b.lat == null) return -1;
-        return (
-          haversineKm(origin.lat, origin.lon, a.lat, a.lon) -
-          haversineKm(origin.lat, origin.lon, b.lat, b.lon)
-        );
-      });
-      return [
-        {
-          label: origin ? `Closest to ${origin.name}` : "Closest first",
-          count: sorted.length,
-          rows: sorted.map((p) => ({ pick: p, away: away(p), meta: p.city })),
-        },
-      ];
-    }
-
-    if (mode === "recent") {
-      const sorted = list.slice().sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0));
-      return [
-        {
-          label: "Newest first",
-          count: sorted.length,
-          rows: sorted.map((p) => ({ pick: p, meta: p.city })),
-        },
-      ];
-    }
-
-    if (mode === "day") {
-      const plan = loadPlan();
-      const placed = {};
-      const sections = plan.days.map((d) => {
-        const items = itemsInDayOrder(planItems(plan, d.id));
-        const rows = [];
-        items.forEach((it) => {
-          const p = list.find((x) => x.id === it.pickId);
-          if (!p) return;
-          placed[p.id] = true;
-          rows.push({ pick: p, meta: [it.time, p.city].filter(Boolean).join(" · ") });
-        });
-        return { label: shortDayLabel(d.label), full: d.label, count: rows.length, rows };
-      });
-      // Everything not on a day yet, last - which is where the work is, and
-      // the reason to be on this screen at all.
-      const loose = list.filter((p) => !placed[p.id]).sort(byName);
-      if (loose.length) {
-        sections.push({
-          label: "Not on a day yet",
-          count: loose.length,
-          rows: loose.map((p) => ({ pick: p, meta: p.city })),
-          loose: true,
-        });
-      }
-      return sections.filter((s) => s.rows.length);
-    }
-
-    // By area. Sections follow the folders list so a renamed or reordered
-    // folder stays put, then any town value predating folders, then Unsorted.
-    const order = loadFolders().slice();
-    list.forEach((p) => {
-      if (p.city && !order.includes(p.city)) order.push(p.city);
-    });
-    order.push("Unsorted");
-    const groups = {};
-    order.forEach((c) => (groups[c] = []));
-    list.forEach((p) => (groups[p.city] || groups.Unsorted).push(p));
-    return order
-      .filter((c) => groups[c] && groups[c].length)
-      .map((c) => ({
-        label: c,
-        area: c,
-        count: groups[c].length,
-        rows: groups[c].sort(byName).map((p) => ({ pick: p, meta: p.category })),
-      }));
-  }
-
-  // ---------- Folding a long list ----------
-  // With five saved places the sections are a nicety. With fifty they are the
-  // only thing between you and a scroll that never ends, so they fold - and
-  // which ones you folded is remembered, because a list you have tidied
-  // should stay tidy.
-  function loadCollapsed() {
-    const v = readJson(boardKey(activeBoard().id, "collapsed"), []);
-    return Array.isArray(v) ? v : [];
-  }
-
-  function toggleCollapsed(label) {
-    const list = loadCollapsed();
-    const i = list.indexOf(label);
-    if (i < 0) list.push(label);
-    else list.splice(i, 1);
-    store(boardKey(activeBoard().id, "collapsed"), JSON.stringify(list));
-  }
-
-  function setAllCollapsed(labels, collapsed) {
-    store(boardKey(activeBoard().id, "collapsed"), JSON.stringify(collapsed ? labels : []));
-  }
-
-  // A heading you can fold, with the count still on it - the count is what
-  // makes a folded section useful rather than just hidden.
-  function sectionHead(label, count, folded) {
-    return `
-      <button class="section-label list-head section-fold${folded ? " folded" : ""}"
-              data-fold="${esc(label)}" aria-expanded="${folded ? "false" : "true"}">
-        <span class="fold-caret">${icon(folded ? "forward" : "down", { size: 15 })}</span>
-        <span class="fold-label">${esc(label)}</span>
-        <span class="list-head-count">${count}</span>
-      </button>
-    `;
-  }
-
-  // Only worth offering past the point where scrolling becomes the problem.
-  function foldAllBar(labels) {
-    if (labels.length < 3) return "";
-    const collapsed = loadCollapsed();
-    const allFolded = labels.every((l) => collapsed.includes(l));
-    return `
-      <div class="fold-all">
-        <button class="link-btn" data-fold-all="${allFolded ? "open" : "close"}">
-          ${allFolded ? "Open all" : "Fold all"}
-        </button>
-      </div>
-    `;
-  }
-
-  // The control that chooses it. One row, always visible, always saying which
-  // one is on - it was a saved preference with no label, so the list order
-  // changed between visits with nothing on screen to explain why.
-  // Folded to a single button that names the order it is in. The visibility
-  // that rule was written for is kept - you can still read the current order
-  // without tapping anything - it just no longer costs four chips and a
-  // caption on a screen that already carries a search field, an explore row
-  // and the kind filter above it.
-  // Both Picks and Kids carry this control and share the saved choice, so
-  // they share the wiring too. Picking an order folds the picker again: the
-  // button then names what you just chose, which is the whole point of it.
-  function wireSortRow(redraw) {
-    const toggle = document.getElementById("sortToggle");
-    if (toggle) {
-      toggle.addEventListener("click", () => {
-        sortOpen = true;
-        redraw();
-      });
-    }
-    view.querySelectorAll("[data-sort]").forEach((btn) =>
-      btn.addEventListener("click", () => {
-        saveSort(btn.getAttribute("data-sort"));
-        sortOpen = false;
-        redraw();
-      })
-    );
-  }
-
-  function renderSortRow(mode) {
-    const current = SORTS.find((s) => s.key === mode) || SORTS[0];
-    if (!sortOpen) {
-      return `
-        <div class="order-bar folded">
-          <button class="order-toggle" id="sortToggle">
-            ${icon("list", { size: 15, cls: "ico-inline" })} ${esc(current.label)}
-          </button>
-        </div>
-      `;
-    }
-    return `
-      <div class="order-bar">
-        <div class="order-chips">
-          ${SORTS.map(
-            (s) =>
-              `<button class="order-chip${s.key === mode ? " on" : ""}" data-sort="${s.key}">${esc(
-                s.label
-              )}</button>`
-          ).join("")}
-        </div>
-        <p class="order-note">${esc(current.note)}</p>
-      </div>
-    `;
-  }
+  // The list machinery Saved and Kids share (the four orders, sections,
+  // folding, the order control) lives in screens/picklist.js.
+  const pickList = createPickList({
+    view, storage, boardKey, activeBoard, loadPlan, loadPicks, loadFolders, destinationAnchor,
+    sortKey: SORT_KEY,
+  });
+  const { loadSort, group: groupPicks, loadCollapsed, toggleCollapsed, setAllCollapsed, sectionHead, foldAllBar, renderSortRow, wireSortRow } =
+    pickList;
 
   // renderPlaces / renderEats / renderPlaceTab lived here. They rendered the
   // same saved list the Picks tab does, filtered by kind, with their own
