@@ -3,6 +3,8 @@ import { createStorage } from "./lib/storage.js";
 import { createExchangeLog, reportText, exchangeText } from "./lib/exchangelog.js";
 import { runChecks } from "./lib/diagnostics.js";
 import { planShareText } from "./lib/shareplan.js";
+import { agoWords, searchAge, foundNote } from "./lib/freshness.js";
+import { addHidden, removeHidden, isHidden, pruneHidden } from "./lib/hidden.js";
 import { rainPlan, rainBannerHtml, rainCategoryKey } from "./lib/rain.js";
 import { viewboxFor, parseNominatimVenues, venuesLine as venuesLineFor, firstNonEmpty } from "./lib/venues.js";
 import { createBudgetScreen } from "./screens/budget.js";
@@ -8594,6 +8596,7 @@ ${(() => {
     // When these results were originally found, if they came from the cache
     // rather than from nine fresh requests. Zero means they are new.
     fromCache: 0,
+    searchedAt: 0,
     // Which of the six have reported: waiting | running | done | failed |
     // stopped. The one piece of state this object never had, and the reason
     // a search could only ever say "this takes a few seconds".
@@ -8609,7 +8612,6 @@ ${(() => {
     // Results you have thrown out. A list of forty is only useful if the ones
     // you have looked at and rejected stop taking up room in it - and a pasted
     // answer can arrive with things you can see at a glance are wrong.
-    dismissed: [],
   };
 
   function savedEvents() {
@@ -8804,15 +8806,6 @@ ${(() => {
     `;
   }
 
-  function agoWords(at) {
-    const mins = Math.round((Date.now() - at) / 60000);
-    if (mins < 1) return "just now";
-    if (mins < 60) return `${mins} min ago`;
-    const hours = Math.round(mins / 60);
-    if (hours < 24) return `${hours} h ago`;
-    const days = Math.round(hours / 24);
-    return days === 1 ? "yesterday" : `${days} days ago`;
-  }
 
   // The searches of the last week, on the screen rather than only in the
   // cache. Kept above the results so it is the first thing you see when you
@@ -9792,8 +9785,22 @@ ${(() => {
     return e.setting !== "outdoor";
   }
 
+  // Hidden as wrong, and remembered: it used to last only until the next
+  // search, so the same wrong event came straight back. Kept in memory once
+  // read, and written through (see lib/hidden.js).
+  const HIDDEN_KEY = "hidden-events-v1";
+  let hiddenEvents = null;
+  function hiddenList() {
+    if (!hiddenEvents) hiddenEvents = pruneHidden(readJson(HIDDEN_KEY, []));
+    return hiddenEvents;
+  }
+  function setHidden(list) {
+    hiddenEvents = list;
+    store(HIDDEN_KEY, JSON.stringify(list));
+  }
+
   function isDismissed(e) {
-    return eventSearch.dismissed.indexOf(eventFingerprint(e)) >= 0;
+    return isHidden(hiddenList(), eventFingerprint(e));
   }
 
   // Six searches, named, each saying where it has got to. The old version was
@@ -10068,8 +10075,22 @@ ${(() => {
           mins < 60 ? `${mins || 1} min ago` : mins < 1440 ? `${Math.round(mins / 60)} h ago` : `${Math.round(mins / 1440)} days ago`;
         html += `<p class="settings-hint ev-note">Remembered from ${esc(when)} — no requests used.
           <button class="link-btn" id="evFresh">Look again</button></p>`;
+      } else {
+        // A search leaves its age on the screen: an app left in the background
+        // for hours looked exactly as current as one a minute old.
+        const age = searchAge({ at: eventSearch.searchedAt });
+        if (age) {
+          html += `<p class="settings-hint ev-note">${esc(age.text)}${
+            age.stale ? ` - listings change. <button class="link-btn" id="evFresh">Look again</button>` : ""
+          }</p>`;
+        }
       }
       html += renderEventsLeftOutNote();
+      const hiddenNow = eventSearch.results.filter(isDismissed).length;
+      if (hiddenNow) {
+        html += `<p class="settings-hint ev-note">${hiddenNow} hidden by you.
+          <button class="link-btn" id="evShowHidden">Show ${hiddenNow === 1 ? "it" : "them"} again</button></p>`;
+      }
 
       // Said once, above everything, because a badge per row is easy to skim
       // past and the number is the part that tells you how much to trust the
@@ -10404,12 +10425,13 @@ ${(() => {
     view.querySelectorAll("[data-drop-result]").forEach((b) =>
       b.addEventListener("click", () => {
         const id = b.getAttribute("data-drop-result");
-        if (eventSearch.dismissed.indexOf(id) < 0) eventSearch.dismissed.push(id);
+        const hit = eventSearch.results.find((x) => eventFingerprint(x) === id);
+        setHidden(addHidden(hiddenList(), id, hit ? String(hit.startsAt || "").slice(0, 10) : ""));
         renderEvents();
         // Undoable, because a mis-tap on a small button beside a row you
         // wanted is otherwise unrecoverable without searching again.
-        toastWithAction("Hidden", "Undo", () => {
-          eventSearch.dismissed = eventSearch.dismissed.filter((x) => x !== id);
+        toastWithAction("Hidden - it won't come back in later searches", "Undo", () => {
+          setHidden(removeHidden(hiddenList(), id));
           renderEvents();
         });
       })
@@ -10454,6 +10476,16 @@ ${(() => {
       });
     }
 
+    const showHidden = document.getElementById("evShowHidden");
+    if (showHidden) {
+      showHidden.addEventListener("click", () => {
+        let list = hiddenList();
+        eventSearch.results.filter(isDismissed).forEach((e) => (list = removeHidden(list, eventFingerprint(e))));
+        setHidden(list);
+        renderEvents();
+      });
+    }
+
     const freshBtn = document.getElementById("evFresh");
     if (freshBtn) freshBtn.addEventListener("click", () => runEventSearch({ fresh: true }));
 
@@ -10494,7 +10526,8 @@ ${(() => {
         // question worth asking about a thing that is on for one afternoon.
         const folder = confidentFolderFor(e.lat, e.lon) || e.area || "Unsorted";
         confirmAddCandidate(e, folder);
-        updatePick(pickId("custom", e.name), { kind: "event" });
+        // When the search that found it ran: the listing may change after.
+        updatePick(pickId("custom", e.name), { kind: "event", foundAt: eventSearch.fromCache || eventSearch.searchedAt || Date.now() });
         renderEvents();
       })
     );
@@ -10610,7 +10643,6 @@ ${(() => {
     eventSearch.showHeld = false;
     eventSearch.showKind = null;
     eventSearch.indoorOnly = false;
-    eventSearch.dismissed = [];
     eventSearch.status = "done";
     if (!(opts && opts.quiet) || view.dataset.activeTab === "events") renderEvents();
   }
@@ -11024,7 +11056,6 @@ ${(() => {
     eventSearch.showHeld = false;
     eventSearch.showKind = null;
     eventSearch.indoorOnly = false;
-    eventSearch.dismissed = [];
     eventSearch.stopped = false;
     eventSearch.angles = {};
     eventsDropped = Object.assign({}, NO_DROPS);
@@ -11183,6 +11214,7 @@ ${(() => {
         : `Nothing found on ${window.label} near ${centre.name}.`;
     } else {
       eventSearch.status = "done";
+      eventSearch.searchedAt = Date.now();
     }
     renderEvents();
   }
@@ -12289,6 +12321,10 @@ ${(() => {
               [p.category, p.city].filter(Boolean).join(" · ")
             )}${p.rating != null ? ` · ${icon('star', { size: 13, cls: 'ico-inline' })} ${esc(String(p.rating))}` : ""}</div>
 
+            ${(() => {
+              const f = p.kind === "event" ? foundNote({ foundAt: p.foundAt, startsAt: p.startsAt }) : null;
+              return f ? `<div class="place-fact${f.check ? " doubt-fact" : ""}">${icon(f.check ? "alert" : "info", { size: 16, cls: "ico-inline" })} ${esc(f.text)}</div>` : "";
+            })()}
             ${description ? `<p class="place-notes" style="margin-top:10px;">${esc(description)}</p>` : ""}
 
             ${p.address ? `<div class="place-fact">${icon('pin', { size: 16, cls: 'ico-inline' })} ${esc(p.address)}</div>` : ""}
