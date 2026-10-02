@@ -138,7 +138,7 @@ check('the model is told the radius, not just the country',
 check('and told to leave out anywhere further, rather than pad the list',
   aiPrompts.some((p) => /Do not include somewhere further away/.test(p)));
 check('and asked for a postcode it can be pinned by',
-  aiPrompts.some((p) => /"postcode"/.test(p)));
+  aiPrompts.some((p) => /postcode \(if you know it/.test(p)));
 
 check('the lookup is bounded to a box, not just seasoned with a region name',
   geoCalls.some((c) => c.bounded && c.viewbox), JSON.stringify(geoCalls.slice(0, 3)));

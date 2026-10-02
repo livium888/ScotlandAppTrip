@@ -149,7 +149,9 @@ await page.click('#exploreRunBtn');
 await page.waitForFunction(() => !/Looking for/.test(document.getElementById('view').textContent), { timeout: 20000 });
 check('the reworded question is what gets asked', prompts.some((p) => /poke bowls and salad bars only/.test(p)), (prompts[0] || '').slice(0, 200));
 check('the old wording is gone', !prompts.some((p) => /grain bowls/.test(p)));
-check('the formatting rules are still added by the app', prompts.every((p) => /ONLY a JSON array/.test(p)));
+// Plain lines, not JSON: on the Gemini 3 models any mention of JSON silently
+// switches Google Search off, so the format rules ask for a list of lines.
+check('the formatting rules are still added by the app, as plain lines', prompts.every((p) => /one listing per line/.test(p) && !/json/i.test(p)));
 check('and the radius still is too', prompts.some((p) => /\b\d+ miles\b/.test(p)), (prompts[0] || '').slice(0, 200));
 
 check('the rewrite is stored', await page.evaluate(() =>
@@ -182,7 +184,7 @@ await page.waitForSelector('#exploreShowPrompt', { timeout: 3000 });
 await page.click('#exploreShowPrompt');
 await page.waitForTimeout(300);
 const openText = await page.evaluate(() => document.getElementById('view').textContent);
-check('the exact question can be read back', /ONLY a JSON array/.test(openText) && /no chains/.test(openText), openText.slice(0, 200));
+check('the exact question can be read back', /one listing per line/.test(openText) && /no chains/.test(openText), openText.slice(0, 200));
 await page.click('#exploreShowPrompt');
 await page.waitForTimeout(300);
 check('and hidden again', !/ONLY a JSON array/.test(await page.evaluate(() => document.getElementById('view').textContent)));

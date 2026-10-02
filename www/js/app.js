@@ -4,7 +4,7 @@ import { createBudgetScreen } from "./screens/budget.js";
 import { createTipsScreen } from "./screens/tips.js";
 import { createPickList } from "./screens/picklist.js";
 import { createPickRows, categoryIcon, findInPicks } from "./screens/pickrows.js";
-import { extractJson, partialListings, lineFormat, parseListingLines } from "./lib/listings.js";
+import { extractJson, partialListings, lineFormat, parseListingLines, PLACE_LINE_FIELDS, NEARBY_LINE_FIELDS, BACKFILL_LINE_FIELDS, readPlaceAnswer, readNearbyAnswer, readBackfillAnswer } from "./lib/listings.js";
 
 import { haversineKm, MILES_PER_KM, toMiles, formatDistance, formatDuration, legLabel, DETOUR_FACTOR, WALK_MAX_KM, DRIVE_KMH, ROAD_FACTOR, WALK_KMH_CHILD, WALK_KMH_ADULT } from "./lib/geo.js";
 import { timeToMinutes, formatTime, labelForDate, DAY_NAMES, dayCodeFromLabel, clockOf, shortDayLabel, isoDate } from "./lib/time.js";
@@ -1336,14 +1336,13 @@ import { planItems, itemsInDayOrder, nextItemIndex } from "./lib/plan.js";
         ? `Every place must genuinely be within ${anchorMiles(anchor)} miles of ${anchor.name}. ` +
           `Do not include somewhere further away because it is well known - leave it out instead.\n\n`
         : "") +
-      `Use search to check they exist and are still trading. Reply with ONLY a JSON array, ` +
-      `each item: {"name": exact official name, "area": town or village it is in, ` +
-      `"postcode": its postcode if you know it, otherwise "", ` +
-      `"why": one short sentence on why it fits}. No other text.`;
+      // Plain lines, not JSON: on the Gemini 3 models any mention of JSON
+      // silently switches search off (see lineFormat).
+      `Use search to check they exist and are still trading.\n\n${lineFormat(PLACE_LINE_FIELDS)}`;
 
     const { text, sources } = await callModel(prompt, { grounded: true });
-    const parsed = extractJson(text);
-    if (!Array.isArray(parsed) || !parsed.length) throw new Error("gemini returned no usable places");
+    const parsed = readPlaceAnswer(text);
+    if (!parsed.length) throw new Error("gemini returned no usable places");
 
     // Names come back in one response; positions take a lookup each, against a
     // service that asks for about a request a second. Waiting for all of them
@@ -6749,21 +6748,16 @@ ${(() => {
       (loadTripSettings().preferences.trim()
         ? ""
         : `Prefer independent, well-regarded places over chains. `) +
-      `Reply with ONLY a JSON array, each item ` +
-      `{"name": exact official name, "area": street or neighbourhood, ` +
-      `"why": one short sentence saying why it fits, ` +
-      // Asked for, but never trusted: ratings move, and a model reporting one
-      // from memory is a guess wearing a number. Null is an acceptable answer
-      // and a better one than an invention, so it's asked for explicitly.
-      `"rating": the review score out of 5 if you can confirm one from search, otherwise null, ` +
-      `"ratingCount": roughly how many reviews that score is based on, otherwise null, ` +
-      `"price": one of "£", "££", "£££" if it costs money, otherwise null, ` +
-      `"booking": true only if booking ahead is normally needed, otherwise false}. ` +
-      `Do not invent a rating. No other text.`;
+      // Plain lines, not JSON: on the Gemini 3 models any mention of JSON
+      // silently switches search off (see lineFormat). A rating is asked for
+      // but never trusted: ratings move, and a model reporting one from
+      // memory is a guess wearing a number, so leaving it out is the
+      // better answer and is asked for explicitly.
+      `Do not invent a rating.\n\n${lineFormat(NEARBY_LINE_FIELDS)}`;
 
     const { text, sources } = await callModel(prompt, { grounded: true });
-    const parsed = extractJson(text);
-    if (!Array.isArray(parsed) || !parsed.length) throw new Error("Gemini returned no usable places");
+    const parsed = readNearbyAnswer(text);
+    if (!parsed.length) throw new Error("Gemini returned no usable places");
 
     // Geocoded one at a time with a gap: Nominatim is a free community
     // service that asks for about one request a second, and firing a burst at
@@ -7877,11 +7871,15 @@ ${(() => {
       }`)
       .join("\n");
 
-    const prompt =
+    const ask =
       `For each of these events, say what its listing states. Answer only these ` +
       `questions - do not correct the name, the date or the place, and leave a field ` +
-      `empty rather than guessing.\n\n${lines}\n\n` +
-      `Reply with ONLY a JSON array of ${todo.length} items in the same order, each ` +
+      `empty rather than guessing.\n\n${lines}\n\n`;
+    // With search on, plain lines (JSON wording would switch search off on the
+    // Gemini 3 models); without it, the API's own JSON mode as a second try.
+    const askLines = `${ask}${lineFormat(BACKFILL_LINE_FIELDS)}`;
+    const askJson =
+      `${ask}Reply with ONLY a JSON array of ${todo.length} items in the same order, each ` +
       `{"n": the number above, ` +
       `"setting": "indoor", "outdoor", "both" or "", ` +
       `"minAge": number or null, "maxAge": number or null, ` +
@@ -7889,11 +7887,14 @@ ${(() => {
       `"booking": "required", "advised", "none" or ""}. No other text.`;
 
     let answer = null;
-    for (const attempt of [{ grounded: true, maxTokens: 8192 }, { json: true, maxTokens: 8192 }]) {
+    for (const attempt of [
+      { grounded: true, maxTokens: 8192, prompt: askLines },
+      { json: true, maxTokens: 8192, prompt: askJson },
+    ]) {
       try {
-        const res = await callModel(prompt, attempt);
-        const list = extractJson(res.text);
-        if (Array.isArray(list) && list.length) {
+        const res = await callModel(attempt.prompt, { grounded: attempt.grounded, json: attempt.json, maxTokens: attempt.maxTokens });
+        const list = readBackfillAnswer(res.text);
+        if (list.length) {
           answer = list;
           break;
         }

@@ -114,14 +114,22 @@ const LINE_LABELS = {
   weekly: "weekly", what: "what", description: "what",
 };
 
-export function parseListingLines(text, wholeOnly) {
+// The reader behind every labelled-lines answer. Which labels mean what, which
+// field comes last (and may hold a semicolon), which unlabelled leading parts
+// are read in what order, and which field a line must have to count at all
+// are all parameters, so each search shares the tolerance learned from real
+// answers; `finish` turns the strings into the shape the search wants, and
+// may return null to drop a line.
+export function readLabelledLines(text, labels, options) {
+  const { wholeOnly = false, lastKey = "", looseKeys = ["name"], required = "name", finish = (x) => x } = options || {};
+  const startsWithRequired = new RegExp(`^\\s*${required}\\s*[:;(]`, "i");
   const lines = String(text || "").split(/\r?\n/);
   if (wholeOnly && !/\n$/.test(String(text || ""))) lines.pop();
-  const labelOf = (w) => LINE_LABELS[String(w || "").toLowerCase().replace(/[*_]/g, "").trim()];
+  const labelOf = (w) => labels[String(w || "").toLowerCase().replace(/[*_]/g, "").trim()];
   const out = [];
   lines.forEach((raw) => {
     const line = raw.replace(/^\s*(?:[-*•]|\d+[.)])\s+/, "");
-    if (line === raw && !/^\s*name\s*[:;(]/i.test(raw)) return;
+    if (line === raw && !startsWithRequired.test(raw)) return;
     const item = {};
     const set = (key, value) => {
       const v = String(value || "").replace(/^[*_\s]+|[*_\s]+$/g, "");
@@ -151,38 +159,181 @@ export function parseListingLines(text, wholeOnly) {
         i++;
         continue;
       }
-      // "what" comes last and may itself hold a semicolon.
-      if (item.what && !labelOf(part)) {
-        item.what += `; ${part}`;
+      // The last field comes last and may itself hold a semicolon.
+      if (lastKey && item[lastKey] && !labelOf(part)) {
+        item[lastKey] += `; ${part}`;
         continue;
       }
       loose.push(part);
     }
-    // Unlabelled leading parts: name, then venue, then town.
-    ["name", "venue", "area"].forEach((key) => {
+    // Unlabelled leading parts, in the order the search lists its fields.
+    looseKeys.forEach((key) => {
       if (!item[key] && loose.length) set(key, loose.shift());
     });
-    if (!item.name) return;
-    // "name: No qualifying screenings found" is the model saying nothing
-    // was found, not a listing called that.
-    if (!item.date && /^(no\b|none\b|nothing\b|n\/a\b)/i.test(item.name)) return;
-    if (item.times) item.times = item.times.split(/[,/]|\band\b/).map((t) => t.trim()).filter(Boolean);
-    if (item.ages) {
-      const a = /(\d+)\s*(?:months?)?\s*(?:-|–|to)\s*(\d+)/.exec(item.ages);
-      const months = /^\s*\d+\s*months?/i.test(item.ages);
-      const plus = /(\d+)\s*\+/.exec(item.ages);
-      const under = /under\s*(\d+)/i.exec(item.ages);
-      if (a) { item.minAge = months ? 0 : Number(a[1]); item.maxAge = Number(a[2]); }
-      else if (plus) item.minAge = Number(plus[1]);
-      else if (under) item.maxAge = Number(under[1]) - 1;
-      delete item.ages;
-    }
-    if (item.childFocus) item.childFocus = (/aimed|allowed|adults/i.exec(item.childFocus) || [""])[0].toLowerCase();
-    if (item.booking) item.booking = (/required|advised|none/i.exec(item.booking) || [""])[0].toLowerCase();
-    if (item.weekly) item.recurring = /^y/i.test(item.weekly);
-    out.push(item);
+    if (!item[required]) return;
+    const done = finish(item);
+    if (done) out.push(done);
   });
   return out;
+}
+
+export function parseListingLines(text, wholeOnly) {
+  return readLabelledLines(text, LINE_LABELS, {
+    wholeOnly,
+    lastKey: "what",
+    looseKeys: ["name", "venue", "area"],
+    finish: finishEventLine,
+  });
+}
+
+// "2-4", "8+", "under 5", "6 months to 3": the ages a listing states, as the
+// numbers the app filters on. Anything it does not state is left out.
+export function readAges(text) {
+  const out = {};
+  const s = String(text || "");
+  const range = /(\d+)\s*(?:months?)?\s*(?:-|–|to)\s*(\d+)/.exec(s);
+  const months = /^\s*\d+\s*months?/i.test(s);
+  const plus = /(\d+)\s*\+/.exec(s);
+  const under = /under\s*(\d+)/i.exec(s);
+  if (range) {
+    out.minAge = months ? 0 : Number(range[1]);
+    out.maxAge = Number(range[2]);
+  } else if (plus) out.minAge = Number(plus[1]);
+  else if (under) out.maxAge = Number(under[1]) - 1;
+  return out;
+}
+
+const oneOf = (text, words) => (new RegExp(words, "i").exec(text) || [""])[0].toLowerCase();
+
+// Events: the strings a model wrote, turned into the fields the app uses.
+function finishEventLine(item) {
+  // "name: No qualifying screenings found" is the model saying nothing
+  // was found, not a listing called that.
+  if (!item.date && /^(no\b|none\b|nothing\b|n\/a\b)/i.test(item.name)) return null;
+  if (item.times) item.times = item.times.split(/[,/]|\band\b/).map((t) => t.trim()).filter(Boolean);
+  if (item.ages) {
+    Object.assign(item, readAges(item.ages));
+    delete item.ages;
+  }
+  if (item.childFocus) item.childFocus = oneOf(item.childFocus, "aimed|allowed|adults");
+  if (item.booking) item.booking = oneOf(item.booking, "required|advised|none");
+  if (item.weekly) item.recurring = /^y/i.test(item.weekly);
+  return item;
+}
+
+// ---------- The other searches that ask for lines ----------
+// The fields each asks for, said once, so the question and the reader cannot
+// drift apart. None of them may mention JSON: see lineFormat.
+export const PLACE_LINE_FIELDS =
+  `name (exact official name); area (the town or village it is in); ` +
+  `postcode (if you know it, otherwise leave out); why (one short sentence on why it fits, last)`;
+
+export const NEARBY_LINE_FIELDS =
+  `name (exact official name); area (street or neighbourhood); ` +
+  `rating (the review score out of 5, only if you can confirm one from search, otherwise leave out); ` +
+  `reviews (roughly how many reviews that score is based on, otherwise leave out); ` +
+  `price (£, ££ or £££ if it costs money); booking (yes only if booking ahead is normally needed); ` +
+  `why (one short sentence saying why it fits, last)`;
+
+export const BACKFILL_LINE_FIELDS =
+  `n (the number above); setting (indoor, outdoor or both); ages (e.g. 2-4, 8+); ` +
+  `for children (aimed if put on for children or families, allowed, or adults if adults-only); ` +
+  `booking (required, advised or none). Leave out anything the listing does not state`;
+
+const PLACE_LABELS = {
+  name: "name", title: "name", place: "name",
+  area: "area", town: "area", village: "area", location: "area", neighbourhood: "area", neighborhood: "area", street: "area",
+  postcode: "postcode", "post code": "postcode", postal: "postcode",
+  why: "why", reason: "why", what: "why", description: "why",
+};
+
+const NEARBY_LABELS = {
+  ...PLACE_LABELS,
+  rating: "rating", score: "rating",
+  reviews: "ratingCount", "review count": "ratingCount", ratings: "ratingCount",
+  price: "price", cost: "price",
+  booking: "booking", "book ahead": "booking",
+};
+
+const BACKFILL_LABELS = {
+  n: "n", no: "n", number: "n",
+  setting: "setting", ages: "ages", age: "ages",
+  "for children": "childFocus", children: "childFocus",
+  booking: "booking",
+};
+
+// Lines first. A model asked for lines may still send JSON, and a model that
+// was given no choice (no search) may be asked for JSON on purpose, so a
+// JSON array is accepted whenever no line could be read.
+function linesOrJson(text, readLines, fromJson) {
+  const lines = readLines(text);
+  if (lines.length) return lines;
+  const parsed = extractJson(text);
+  return Array.isArray(parsed) ? parsed.filter((x) => x && typeof x === "object").map(fromJson).filter(Boolean) : [];
+}
+
+const clean = (v) => (v == null ? "" : String(v).trim());
+
+export function readPlaceAnswer(text) {
+  return linesOrJson(
+    text,
+    (t) => readLabelledLines(t, PLACE_LABELS, { lastKey: "why", looseKeys: ["name", "area"] }),
+    (x) => {
+      if (!clean(x.name)) return null;
+      const out = { name: clean(x.name) };
+      if (clean(x.area)) out.area = clean(x.area);
+      if (clean(x.postcode)) out.postcode = clean(x.postcode);
+      if (clean(x.why)) out.why = clean(x.why);
+      return out;
+    }
+  );
+}
+
+const count = (v) => {
+  const n = Number(String(v == null ? "" : v).replace(/[^0-9.]/g, ""));
+  return Number.isFinite(n) && n > 0 ? Math.round(n) : null;
+};
+const score = (v) => {
+  const m = /(\d+(?:\.\d+)?)/.exec(String(v == null ? "" : v));
+  const n = m ? Number(m[1]) : NaN;
+  return Number.isFinite(n) && n > 0 && n <= 5 ? n : null;
+};
+const pounds = (v) => (/^£{1,3}$/.test(clean(v)) ? clean(v) : null);
+const yes = (v) => v === true || /^(y|yes|true|required|advised)\b/i.test(clean(v));
+
+function finishNearby(item) {
+  return {
+    ...item,
+    rating: score(item.rating),
+    ratingCount: count(item.ratingCount),
+    price: pounds(item.price),
+    booking: yes(item.booking),
+  };
+}
+
+export function readNearbyAnswer(text) {
+  return linesOrJson(
+    text,
+    (t) => readLabelledLines(t, NEARBY_LABELS, { lastKey: "why", looseKeys: ["name", "area"], finish: finishNearby }),
+    (x) => (clean(x.name) ? finishNearby({ name: clean(x.name), area: clean(x.area), why: clean(x.why), rating: x.rating, ratingCount: x.ratingCount, price: x.price, booking: x.booking }) : null)
+  );
+}
+
+export function readBackfillAnswer(text) {
+  const finish = (item) => {
+    const out = { n: Number(item.n) };
+    if (!Number.isFinite(out.n)) return null;
+    if (item.setting) out.setting = oneOf(item.setting, "indoor|outdoor|both");
+    if (item.ages) Object.assign(out, readAges(item.ages));
+    if (item.childFocus) out.childFocus = oneOf(item.childFocus, "aimed|allowed|adults");
+    if (item.booking) out.booking = oneOf(item.booking, "required|advised|none");
+    return out;
+  };
+  return linesOrJson(
+    text,
+    (t) => readLabelledLines(t, BACKFILL_LABELS, { looseKeys: [], required: "n", finish }),
+    (x) => ({ n: Number(x.n), setting: x.setting || "", minAge: x.minAge, maxAge: x.maxAge, childFocus: x.childFocus || "", booking: x.booking || "" })
+  );
 }
 
 // The listings finished so far in an answer still being written: every
