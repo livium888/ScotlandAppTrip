@@ -49,10 +49,10 @@ export default [
   },
 
   {
-    files: ["www/js/app.js"],
+    files: ["www/js/app.js", "www/js/lib/*.js"],
     languageOptions: {
       ecmaVersion: 2022,
-      sourceType: "script",
+      sourceType: "module",
       globals: { ...globals.browser, ...ownGlobals, ...vendorGlobals },
     },
     rules: {
