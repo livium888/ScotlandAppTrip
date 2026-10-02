@@ -10566,18 +10566,12 @@ ${(() => {
       return;
     }
     const radius = (centre.miles || DEFAULT_ANCHOR_MILES) * 1609;
-    let towns = [];
-    const venues = {};
     const picked = anglesForSearch();
-    try {
-      if (picked.some((a) => !a.session)) towns = await townsAround(centre, radius);
-      for (const [kindKey, osm] of [["films", "cinema"], ["theatre", "theatre"]]) {
-        if (picked.some((a) => a.key === kindKey)) venues[kindKey] = await venuesNear(centre.lat, centre.lon, radius, osm);
-      }
-    } catch (e) {
-      // The prompt is still worth having without the names.
-    }
-    const prompt = handoffPrompt(centre, eventSearch.when, radius, towns, venues);
+    // The sheet opens at once with a question that is already usable. The map
+    // lookups for town and cinema names go to servers that can take half a
+    // minute or fail, and waiting for them first meant tapping the button
+    // appeared to do nothing at all.
+    let prompt = handoffPrompt(centre, eventSearch.when, radius, [], {});
 
     placeModal.innerHTML = `
       <div class="modal-backdrop" data-close="1">
@@ -10596,6 +10590,7 @@ ${(() => {
               better model than the free tier, this is how to point it at your trip.
             </p>
             <textarea class="settings-input notes-box" id="handoffPrompt" rows="6" readonly>${esc(prompt)}</textarea>
+            <p class="settings-hint" id="handoffLookup">Looking up nearby towns and venues to name in it…</p>
             <div class="settings-btn-row" style="margin-top:10px;">
               <button class="modal-btn modal-btn-primary" id="handoffCopy">Copy the question</button>
             </div>
@@ -10637,7 +10632,7 @@ ${(() => {
       let copied = false;
       if (navigator.clipboard && navigator.clipboard.writeText) {
         try {
-          await navigator.clipboard.writeText(prompt);
+          await navigator.clipboard.writeText(box.value || prompt);
           copied = true;
         } catch (e) {
           // Falls through to selecting it, which a long-press can copy.
@@ -10664,6 +10659,30 @@ ${(() => {
         openInOwningApp(a.url);
       })
     );
+
+    // Names of nearby towns and cinemas make the question better; they are
+    // added when they arrive, and the question works without them.
+    (async () => {
+      const note = document.getElementById("handoffLookup");
+      const withTimeout = (p, ms) => Promise.race([p, new Promise((r) => setTimeout(() => r(null), ms))]);
+      try {
+        let towns = [];
+        const venues = {};
+        if (picked.some((a) => !a.session)) towns = (await withTimeout(townsAround(centre, radius), 12000)) || [];
+        for (const [kindKey, osm] of [["films", "cinema"], ["theatre", "theatre"]]) {
+          if (picked.some((a) => a.key === kindKey)) {
+            venues[kindKey] = (await withTimeout(venuesNear(centre.lat, centre.lon, radius, osm), 12000)) || [];
+          }
+        }
+        if (!document.body.contains(note)) return;
+        prompt = handoffPrompt(centre, eventSearch.when, radius, towns, venues);
+        document.getElementById("handoffPrompt").value = prompt;
+        const found = towns.length + Object.values(venues).reduce((n, v) => n + v.length, 0);
+        note.textContent = found ? "Added the towns and venues found nearby." : "Couldn't look up nearby towns just now, so it asks without names.";
+      } catch (e) {
+        if (note) note.textContent = "Couldn't look up nearby towns just now, so it asks without names.";
+      }
+    })();
 
     document.getElementById("handoffAdd").addEventListener("click", async () => {
       const out = document.getElementById("handoffResult");
