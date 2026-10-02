@@ -45,8 +45,21 @@ await page.route(/overpass/, (route) => {
   route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ elements: [
     { type: 'node', id: 1, lat: 50.86, lon: -1.23, tags: { name: 'Cineworld Test', amenity: 'cinema', 'addr:city': 'Whiteley' } }] }) });
 });
-await page.route(/nominatim/, (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([{
-  lat: '50.86', lon: '-1.23', display_name: 'Fareham', type: 'town', namedetails: { name: 'Fareham' }, address: { town: 'Fareham' }, extratags: {} }]) }));
+let cinemaSearch = 'none';   // what the place-search server says to "cinema": none | some
+const searchesSeen = [];
+await page.route(/nominatim/, (route) => {
+  const url = decodeURIComponent(route.request().url());
+  searchesSeen.push(url);
+  if (/[?&]q=cinema/.test(url)) {
+    const some = cinemaSearch === 'some';
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(some ? [
+      { class: 'amenity', type: 'cinema', lat: '50.85', lon: '-1.18', display_name: 'Reel Cinema, Fareham', namedetails: { name: 'Reel Cinema' }, address: { town: 'Fareham' } },
+      { class: 'amenity', type: 'cinema', lat: '50.80', lon: '-1.10', display_name: 'Vue Portsmouth, Portsmouth', namedetails: { name: 'Vue Portsmouth' }, address: { city: 'Portsmouth' } },
+    ] : []) });
+  }
+  route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([{
+    lat: '50.86', lon: '-1.23', display_name: 'Fareham', type: 'town', namedetails: { name: 'Fareham' }, address: { town: 'Fareham' }, extratags: {} }]) });
+});
 await page.route(/wikidata|wikipedia|photon|tile\.|open-meteo|places\.googleapis/, (r) => r.abort());
 
 const run = async (label) => {
@@ -85,10 +98,25 @@ check('and the cinema that was found is in the question', asked.length > 0 && /C
 overpass = 'all-hang';
 await run('every mirror hangs');
 check('with every map server silent, the search still goes ahead after a few seconds, not ninety', asked.length > 0 && asked[0].at < 14000, asked.length ? `${asked[0].at}ms` : 'never');
-check('without names it asks about cinemas in general rather than not at all', asked.length > 0 && /Find films/.test(asked[0].prompt) && !/Cineworld Test/.test(asked[0].prompt));
+check('without names it still asks about films, and does not invent a cinema', asked.length > 0 && /Find films/.test(asked[0].prompt) && !/Cineworld Test/.test(asked[0].prompt));
 await page.waitForTimeout(800);
 const trace = await page.evaluate(() => JSON.parse(localStorage.getItem('search-trace-v1') || '{}'));
 check('and the trace says the lookup was given up on, so the report explains the wait', /still looking|gave up|went ahead without/i.test(trace.lookups || ''), trace.lookups);
+
+// ---------- The map servers are down, but the place-search server knows the cinemas ----------
+overpass = 'all-refuse';
+cinemaSearch = 'some';
+searchesSeen.length = 0;
+await run('map servers down, place search answers');
+check('names from the second source reach the question, and quickly', asked.length > 0 && asked[0].at < 9000 && /Reel Cinema \(Fareham\)/.test(asked[0].prompt) && /Vue Portsmouth/.test(asked[0].prompt),
+  asked.length ? `${asked[0].at}ms ${asked[0].prompt.slice(120, 300)}` : 'never');
+check('it asked inside a box around the search area, not the whole world', searchesSeen.some((u) => /q=cinema/.test(u) && /bounded=1/.test(u) && /viewbox=/.test(u)));
+
+// ---------- No names from anywhere ----------
+overpass = 'all-refuse';
+cinemaSearch = 'none';
+await run('no names from anywhere');
+check('with no names at all the question still names the chains, so the model has something to look up', asked.length > 0 && /Vue, Odeon, Cineworld, Reel, Everyman, Picturehouse/.test(asked[0].prompt) && /each cinema's own listings/.test(asked[0].prompt));
 
 // ---------- Every mirror refuses at once ----------
 overpass = 'all-refuse';

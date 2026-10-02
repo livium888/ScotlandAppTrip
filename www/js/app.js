@@ -2,6 +2,7 @@ import { esc, safeUrl, cityColor } from "./lib/text.js";
 import { createStorage } from "./lib/storage.js";
 import { createExchangeLog, reportText, exchangeText } from "./lib/exchangelog.js";
 import { runChecks } from "./lib/diagnostics.js";
+import { viewboxFor, parseNominatimVenues, venuesLine as venuesLineFor, firstNonEmpty } from "./lib/venues.js";
 import { createBudgetScreen } from "./screens/budget.js";
 import { createTipsScreen } from "./screens/tips.js";
 import { createPickList } from "./screens/picklist.js";
@@ -7529,9 +7530,12 @@ ${(() => {
 
     const film = angle.key === "films";
     const named = ((eventSearch.ctx && eventSearch.ctx.venues) || {})[angle.key] || [];
-    const venuesLine = named.length
-      ? `${film ? "Cinemas" : "Theatres and arts centres"} in this area include: ${named.join(", ")}. Check each one's own listings.\n`
-      : "";
+    // Names make the model look things up; without them it often answers
+    // from memory. With none found, the towns and the cinema chains stand in.
+    const venuesLine =
+      film || angle.key === "theatre"
+        ? venuesLineFor({ film, named, towns: (eventSearch.ctx && eventSearch.ctx.towns) || [] })
+        : "";
     const rules = film
       ? `Only films rated ${chosenFilmRatings().join(" or ")} by the BBFC. Nothing rated R18. List each film once per cinema. ` +
         // UK chains publish the coming week's times on Monday or Tuesday, so
@@ -12126,6 +12130,9 @@ ${(() => {
   // answered by looking.
   const venueCache = {};
   const VENUE_LIMIT = 12;
+  // How long the Overpass mirrors have to themselves before the place-search
+  // server is asked as well.
+  const VENUE_FALLBACK_DELAY_MS = 2500;
   async function venuesNear(lat, lon, radiusMetres, kind) {
     const key = `${kind}|${lat.toFixed(2)},${lon.toFixed(2)},${Math.round(radiusMetres / 1609)}`;
     if (venueCache[key]) return venueCache[key];
@@ -12137,21 +12144,51 @@ ${(() => {
     const radius = Math.min(radiusMetres, OVERPASS_PLACES_RADIUS_M);
     const tag = kind === "cinema" ? `["amenity"="cinema"]` : `["amenity"~"^(theatre|arts_centre)$"]`;
     const q = `[out:json][timeout:25];(nwr${tag}["name"](around:${radius},${lat},${lon}););out center 120;`;
-    const data = await overpassJson(q, `${kind}s`);
-    if (!data || !Array.isArray(data.elements)) return [];
-    const out = data.elements
-      .map((el) => {
-        const la = el.lat != null ? el.lat : el.center && el.center.lat;
-        const lo = el.lon != null ? el.lon : el.center && el.center.lon;
-        if (la == null || !el.tags || !el.tags.name) return null;
-        const town = el.tags["addr:city"] || el.tags["addr:town"] || "";
-        return { label: town && !el.tags.name.includes(town) ? `${el.tags.name} (${town})` : el.tags.name, km: haversineKm(lat, lon, la, lo) };
-      })
-      .filter(Boolean)
-      .sort((a, b) => a.km - b.km)
-      .filter((x, i, all) => all.findIndex((y) => y.label === x.label) === i)
-      .slice(0, VENUE_LIMIT)
-      .map((x) => x.label);
+    // Two sources, asked together: the Overpass mirrors, and the same
+    // OpenStreetMap data through the place-search server, which answers when
+    // the mirrors do not (and did, on the phone that reported cinemas "none
+    // found" after ninety seconds). The first with names wins.
+    let settled = false;
+    const fromOverpass = overpassJson(q, `${kind}s`).then((data) => {
+      if (!data || !Array.isArray(data.elements)) return [];
+      return data.elements
+        .map((el) => {
+          const la = el.lat != null ? el.lat : el.center && el.center.lat;
+          const lo = el.lon != null ? el.lon : el.center && el.center.lon;
+          if (la == null || !el.tags || !el.tags.name) return null;
+          const town = el.tags["addr:city"] || el.tags["addr:town"] || "";
+          return { label: town && !el.tags.name.includes(town) ? `${el.tags.name} (${town})` : el.tags.name, km: haversineKm(lat, lon, la, lo) };
+        })
+        .filter(Boolean)
+        .sort((a, b) => a.km - b.km)
+        .filter((x, i, all) => all.findIndex((y) => y.label === x.label) === i)
+        .slice(0, VENUE_LIMIT)
+        .map((x) => x.label);
+    });
+    const fromPlaceSearch = (async () => {
+      // Not at once - a mirror that answers in a second makes this
+      // unnecessary - but as soon as the mirrors have given up, or after a
+      // short wait if they are only slow.
+      await Promise.race([new Promise((r) => setTimeout(r, VENUE_FALLBACK_DELAY_MS)), fromOverpass]);
+      if (settled) return [];
+      const t0 = Date.now();
+      try {
+        const url =
+          `https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&namedetails=1&limit=40&bounded=1` +
+          `&viewbox=${viewboxFor(lat, lon, radius)}&q=${kind === "cinema" ? "cinema" : "theatre"}`;
+        const res = await fetchWithTimeout(url, {}, 12000);
+        const names = res.ok
+          ? parseNominatimVenues(await res.json(), { lat, lon, types: kind === "cinema" ? ["cinema"] : ["theatre", "arts_centre"] })
+          : [];
+        overpassLog.push(`${kind}s: place search answered ${names.length} in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+        return names;
+      } catch (e) {
+        overpassLog.push(`${kind}s: place search failed after ${((Date.now() - t0) / 1000).toFixed(1)}s (${(e && e.message) || e})`);
+        return [];
+      }
+    })();
+    const out = await firstNonEmpty([fromOverpass, fromPlaceSearch]);
+    settled = true;
     if (out.length) {
       venueCache[key] = out;
       areaCacheSet(key, out);
