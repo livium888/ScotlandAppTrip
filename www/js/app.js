@@ -1,6 +1,7 @@
 import { esc, safeUrl, cityColor } from "./lib/text.js";
 import { createStorage } from "./lib/storage.js";
 import { createBudgetScreen } from "./screens/budget.js";
+import { createTipsScreen } from "./screens/tips.js";
 import { extractJson, partialListings, lineFormat, parseListingLines } from "./lib/listings.js";
 
 import { haversineKm, MILES_PER_KM, toMiles, formatDistance, formatDuration, legLabel, DETOUR_FACTOR, WALK_MAX_KM, DRIVE_KMH, ROAD_FACTOR, WALK_KMH_CHILD, WALK_KMH_ADULT } from "./lib/geo.js";
@@ -1606,46 +1607,22 @@ import { describeGeminiError, chooseGeminiModel, scoreSearchModel, rateForModel,
     return `£${Number(n).toFixed(Number.isInteger(n) ? 0 : 2)}`;
   }
 
+  // Notes & packing live in screens/tips.js. The old global key is passed in
+  // rather than named there: it is an address on every phone, and stays here
+  // with the other storage keys.
+  const tipsScreen = createTipsScreen({
+    view, storage, boardKey, activeBoard, loadPeople, isChild,
+    defaultPacking: PACKING,
+    legacyPackingKey: STORAGE_KEY,
+  });
+  const loadPacking = tipsScreen.loadPacking;
+
   // The budget screen lives in screens/budget.js and is handed what it needs.
   const budgetScreen = createBudgetScreen({
     view, storage, boardKey, activeBoard, loadPicks, loadPlan, loadPeople, isChild, pickCost, money,
     whoDescription, loadTripSettings, aiReady, callModel, toast, updatePick, daysAgoLabel,
     itemsInDayOrder, planItems,
   });
-
-  // The packing list used to be one global list of fixed Scottish items with
-  // only its ticks stored. It's now per board and fully editable - a
-  // three-day city break and a week in the Highlands need different lists.
-  function loadPacking() {
-    const board = activeBoard();
-    const stored = readJson(boardKey(board.id, "packing"), null);
-    if (Array.isArray(stored)) return stored;
-    // A short generic list beats an empty screen: nobody types "chargers"
-    // into nothing, they close it. Anything already ticked under the old
-    // global key is carried over.
-    const checked = readJson(STORAGE_KEY, {}) || {};
-    const seeded = PACKING.map((text, i) => ({ text, done: !!checked[i] }));
-    // And the few lines that depend on who is actually coming, from the
-    // people list rather than from a guess about families in general.
-    const people = loadPeople();
-    if (people.some((x) => x.buggy)) seeded.push({ text: "Buggy, and the rain cover for it", done: false });
-    if (people.some(isChild)) seeded.push({ text: "A comfort toy for the long legs", done: false });
-    if (people.some((x) => x.naps)) seeded.push({ text: "Whatever makes a nap happen away from home", done: false });
-    store(boardKey(board.id, "packing"), JSON.stringify(seeded));
-    return seeded;
-  }
-
-  function savePacking(items) {
-    store(boardKey(activeBoard().id, "packing"), JSON.stringify(items));
-  }
-
-  function loadBoardNotes() {
-    return readJson(boardKey(activeBoard().id, "notes"), "") || "";
-  }
-
-  function saveBoardNotes(text) {
-    store(boardKey(activeBoard().id, "notes"), JSON.stringify(text));
-  }
 
   // How far a place can be from a known city anchor and still be filed under
   // it. Without a limit the "nearest" city is returned no matter how absurd -
@@ -6670,98 +6647,6 @@ ${(() => {
   // screen. Picks absorbed the filter, the sorting and the guide, so they are
   // gone rather than left as an unreachable copy that drifts out of step.
 
-
-  function loadChecked() {
-    try {
-      return storage.readJson(STORAGE_KEY, {}) || {};
-    } catch {
-      return {};
-    }
-  }
-
-  function saveChecked(state) {
-    store(STORAGE_KEY, JSON.stringify(state));
-  }
-
-  // ---------- Notes & packing ----------
-  // Both belong to the board. The bundled Scotland advice stays on the board
-  // it came with; every board gets its own notes and its own list.
-  function renderTips() {
-    const board = activeBoard();
-    const items = loadPacking();
-    const notes = loadBoardNotes();
-
-    let html = `
-      <div class="section-label">Notes</div>
-      <div class="card">
-        <textarea class="settings-input notes-box" id="boardNotes" rows="4"
-          placeholder="Anything worth remembering — booking references, the code for the flat, who's driving.">${esc(notes)}</textarea>
-      </div>
-    `;
-
-    html += `<div class="section-label">Packing list${
-      items.length ? ` · ${items.filter((i) => i.done).length}/${items.length}` : ""
-    }</div>`;
-    html += `<div class="card">`;
-    if (items.length) {
-      html += `<ul class="packing-list">`;
-      items.forEach((it, i) => {
-        html += `<li data-i="${i}" class="${it.done ? "checked" : ""}">
-          <span class="packing-text">${esc(it.text)}</span>
-          <button class="packing-remove" data-packing-remove="${i}" aria-label="Remove ${esc(it.text)}">${icon('close', { size: 17, cls: 'ico-inline' })}</button>
-        </li>`;
-      });
-      html += `</ul>`;
-    } else {
-      html += `<p class="pick-status">Nothing on the list yet.</p>`;
-    }
-    html += `
-      <form class="search-bar packing-add" id="packingAddForm">
-        <input type="text" id="packingAddInput" placeholder="Add something to pack…" autocomplete="off" />
-        <button type="submit" aria-label="Add">+</button>
-      </form>
-    </div>`;
-
-    view.innerHTML = html;
-
-    const notesBox = document.getElementById("boardNotes");
-    if (notesBox) notesBox.addEventListener("blur", () => saveBoardNotes(notesBox.value));
-
-    view.querySelectorAll(".packing-list li").forEach((li) => {
-      li.addEventListener("click", (e) => {
-        if (e.target.closest("[data-packing-remove]")) return;
-        const i = Number(li.getAttribute("data-i"));
-        const list = loadPacking();
-        if (!list[i]) return;
-        list[i].done = !list[i].done;
-        savePacking(list);
-        li.classList.toggle("checked", list[i].done);
-      });
-    });
-
-    view.querySelectorAll("[data-packing-remove]").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const list = loadPacking();
-        list.splice(Number(btn.getAttribute("data-packing-remove")), 1);
-        savePacking(list);
-        renderTips();
-      });
-    });
-
-    const addForm = document.getElementById("packingAddForm");
-    if (addForm) {
-      addForm.addEventListener("submit", (e) => {
-        e.preventDefault();
-        const input = document.getElementById("packingAddInput");
-        const text = input.value.trim();
-        if (!text) return;
-        const list = loadPacking();
-        list.push({ text, done: false });
-        savePacking(list);
-        renderTips();
-      });
-    }
-  }
 
   // ---------- Explore nearby (Overpass / OpenStreetMap) ----------
 
@@ -19483,7 +19368,7 @@ ${(() => {
     // Its own screen under Find, with Find lit while you are on it.
     explore: { render: renderExploreScreen, parent: "events" },
     budget: { render: budgetScreen.render, parent: "trip" },
-    tips: { render: renderTips, parent: "trip" },
+    tips: { render: tipsScreen.render, parent: "trip" },
     // Reached from Settings, so its way out is wherever you came from.
     usage: { render: renderUsage, parent: "back" },
   };
