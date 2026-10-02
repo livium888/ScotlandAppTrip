@@ -2,6 +2,7 @@ import { esc, safeUrl, cityColor } from "./lib/text.js";
 import { createStorage } from "./lib/storage.js";
 import { createExchangeLog, reportText, exchangeText } from "./lib/exchangelog.js";
 import { runChecks } from "./lib/diagnostics.js";
+import { planShareText } from "./lib/shareplan.js";
 import { viewboxFor, parseNominatimVenues, venuesLine as venuesLineFor, firstNonEmpty } from "./lib/venues.js";
 import { createBudgetScreen } from "./screens/budget.js";
 import { createTipsScreen } from "./screens/tips.js";
@@ -4530,41 +4531,19 @@ ${(() => {
   // bundled Scotland trip and nothing else, so it was wrong on every other
   // board; it now summarises the board's own places, days and costs, with
   // the Scotland briefing kept only on the board it belongs to.
+  // The plan as a message: see lib/shareplan.js. Handed the lookups it needs.
   function formatBoardShareText() {
-    const board = activeBoard();
-    const plan = loadPlan();
-    const picks = loadPicks();
-    const byId = {};
-    picks.forEach((p) => (byId[p.id] = p));
-
-    const planned = Object.values(plan.items || {}).some((l) => (l || []).length);
-
-    const lines = [board.name];
-    if (board.destination) lines.push(board.destination);
-    lines.push("");
-
-    plan.days.forEach((day) => {
-      const items = plan.items[day.id] || [];
-      if (!items.length) return;
-      lines.push(`— ${day.label} —`);
-      items.forEach((it) => {
-        const p = byId[it.pickId];
-        if (!p) return;
-        lines.push(`  ${it.time ? it.time + " " : ""}${p.name}${p.booked ? " (booked)" : ""}`);
-      });
-      lines.push("");
+    return planShareText({
+      board: activeBoard(),
+      plan: loadPlan(),
+      picks: loadPicks(),
+      mapUrl: pickGoogleUrl,
+      // Where it is, in words. An event knows its venue; a place saved from the
+      // map knows its address, of which the town is the useful part. Never the
+      // folder (p.city), which is organisation rather than geography.
+      where: (p) => [p.venue, p.area || townFromAddress(p.address)].filter((x, i, all) => x && all.indexOf(x) === i).join(", "),
     });
-
-    const unscheduled = picks.filter(
-      (p) => !Object.values(plan.items || {}).some((l) => (l || []).some((it) => it.pickId === p.id))
-    );
-    if (unscheduled.length) {
-      lines.push("— Not scheduled —");
-      unscheduled.forEach((p) => lines.push(`  ${p.name}`));
-    }
-    return lines.join("\n").trim();
   }
-
 
   function setForKids(id, on) {
     updatePick(id, { forKids: !!on });
