@@ -17,6 +17,8 @@ const wwwDir = join(here, "..", "www");
 const PORT = 8946;
 
 const SUITES = [
+  "test_troubleshoot.mjs",
+  "test_troubleshoot_units.mjs",
   "test_ground_lines.mjs",
   "test_answers_units.mjs",
   "test_pickrows_units.mjs",

@@ -25,7 +25,7 @@ export function isQuotaError(e) {
 // somebody typed. Named here rather than imported, because a quota failure
 // during the very first load happens before the rest of the app has set up
 // its own constants. The names do not change.
-export const DEFAULT_EXPENDABLE = ["weather-cache-v1", "destination-coords-v1", "recent-searches-v1"];
+export const DEFAULT_EXPENDABLE = ["weather-cache-v1", "destination-coords-v1", "recent-searches-v1", "ai-exchanges-v1"];
 
 export function createStorage({
   backend = globalThis.localStorage,

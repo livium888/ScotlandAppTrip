@@ -1,5 +1,7 @@
 import { esc, safeUrl, cityColor } from "./lib/text.js";
 import { createStorage } from "./lib/storage.js";
+import { createExchangeLog, reportText, exchangeText } from "./lib/exchangelog.js";
+import { runChecks } from "./lib/diagnostics.js";
 import { createBudgetScreen } from "./screens/budget.js";
 import { createTipsScreen } from "./screens/tips.js";
 import { createPickList } from "./screens/picklist.js";
@@ -963,13 +965,22 @@ import { planItems, itemsInDayOrder, nextItemIndex } from "./lib/plan.js";
     const which = aiProviderKey();
     const s = loadTripSettings();
     if (which === "gemini") return callGemini(s.geminiKey.trim(), prompt, options);
-    return callOpenAICompatible(prompt, options);
+    const ex = { provider: aiProviderKey(), prompt, grounded: !!options.grounded, json: !!options.json, maxTokens: options.maxTokens || 0, model: s.aiModel || "" };
+    const t0 = Date.now();
+    try {
+      const r = await callOpenAICompatible(prompt, options, ex);
+      exchangeLog.record({ ...ex, ms: Date.now() - t0, ok: true, status: ex.status == null ? 200 : ex.status, raw: ex.raw != null ? ex.raw : r.text, model: r.model || ex.model, sources: r.sources, searched: r.searched });
+      return r;
+    } catch (e) {
+      exchangeLog.record({ ...ex, ms: Date.now() - t0, ok: false, status: e && e.status != null ? e.status : ex.status == null ? null : ex.status, error: (e && e.message) || String(e) });
+      throw e;
+    }
   }
 
   // Groq, OpenRouter, Together, LM Studio, Ollama's compatibility endpoint -
   // they all speak this, which is why it is one implementation rather than
   // one per host.
-  async function callOpenAICompatible(prompt, { json = false, maxTokens = 0, grounded = false, timeoutMs = 0 } = {}) {
+  async function callOpenAICompatible(prompt, { json = false, maxTokens = 0, grounded = false, timeoutMs = 0 } = {}, ex = {}) {
     const limit = timeoutMs || AI_TIMEOUT_MS;
     lastAiPrompt = prompt;
     const s = loadTripSettings();
@@ -1024,6 +1035,8 @@ import { planItems, itemsInDayOrder, nextItemIndex } from "./lib/plan.js";
     }
 
     const raw = await res.text();
+    ex.status = res.status;
+    ex.raw = raw;
     let data = null;
     try {
       data = JSON.parse(raw);
@@ -1053,12 +1066,36 @@ import { planItems, itemsInDayOrder, nextItemIndex } from "./lib/plan.js";
     return { text, sources: openAiCitations(data, choice) };
   }
 
-  async function callGemini(key, prompt, { grounded = false, json = false, maxTokens = 0, timeoutMs = 0, model: only = "", onText = null } = {}) {
+  // Every call goes through here so it is recorded: what was sent, the raw
+  // reply, and how it ended. That record is the Troubleshoot screen.
+  async function callGemini(key, prompt, options) {
+    const o = options || {};
+    const ex = { provider: "gemini", prompt, grounded: !!o.grounded, json: !!o.json, stream: !!o.onText, maxTokens: o.maxTokens || 0 };
+    const t0 = Date.now();
+    try {
+      const r = await callGeminiCall(key, prompt, o, ex);
+      exchangeLog.record({
+        ...ex, ms: Date.now() - t0, ok: true, status: ex.status == null ? 200 : ex.status,
+        raw: ex.raw != null ? ex.raw : r.text, model: r.model || ex.model, searched: r.searched, queries: r.queries,
+        sources: r.sources, finishReason: r.finishReason, blockReason: r.blockReason, usage: r.usage,
+      });
+      return r;
+    } catch (e) {
+      exchangeLog.record({
+        ...ex, ms: Date.now() - t0, ok: false, status: e && e.status != null ? e.status : ex.status == null ? null : ex.status,
+        error: (e && e.message) || String(e),
+      });
+      throw e;
+    }
+  }
+
+  async function callGeminiCall(key, prompt, { grounded = false, json = false, maxTokens = 0, timeoutMs = 0, model: only = "", onText = null } = {}, ex = {}) {
     const limit = timeoutMs || AI_TIMEOUT_MS;
     lastAiPrompt = prompt;
     const model = only || (await resolveGeminiModel(key));
     // Discovered names already include the "models/" prefix.
     const path = model.indexOf("models/") === 0 ? model : `models/${model}`;
+    ex.model = path;
     const body = {
       contents: [{ parts: [{ text: prompt }] }],
       generationConfig: { temperature: 0.2 },
@@ -1092,6 +1129,7 @@ import { planItems, itemsInDayOrder, nextItemIndex } from "./lib/plan.js";
         body: JSON.stringify(body),
         signal: controller.signal,
       });
+      ex.status = res.status;
       if (onText && res.ok) {
         const streamed = await readGeminiStream(res, onText);
         clearTimeout(timer);
@@ -1111,6 +1149,7 @@ import { planItems, itemsInDayOrder, nextItemIndex } from "./lib/plan.js";
       clearTimeout(timer);
     }
     const rawText = await res.text();
+    ex.raw = rawText;
     let data = null;
     try {
       data = JSON.parse(rawText);
@@ -1137,7 +1176,10 @@ import { planItems, itemsInDayOrder, nextItemIndex } from "./lib/plan.js";
 
   function finishGeminiReply(data, grounded, path) {
     const cand = data.candidates && data.candidates[0];
-    if (!cand) throw new Error("gemini returned no candidates");
+    if (!cand) {
+      const why = data.promptFeedback && data.promptFeedback.blockReason;
+      throw new Error(why ? `Gemini blocked the question (${why}).` : "gemini returned no candidates");
+    }
 
     const text = (cand.content && cand.content.parts ? cand.content.parts : [])
       .map((p) => p.text || "")
@@ -1176,6 +1218,9 @@ import { planItems, itemsInDayOrder, nextItemIndex } from "./lib/plan.js";
       searched,
       model: path,
       queries: gm && Array.isArray(gm.webSearchQueries) ? gm.webSearchQueries.slice(0, 20) : [],
+      finishReason: cand.finishReason || "",
+      blockReason: (data.promptFeedback && data.promptFeedback.blockReason) || "",
+      usage: data.usageMetadata || null,
     };
   }
 
@@ -1399,6 +1444,10 @@ import { planItems, itemsInDayOrder, nextItemIndex } from "./lib/plan.js";
   });
   const store = storage.write;
   const readJson = storage.readJson;
+
+  // Every request to a model, and what came back, for the Troubleshoot screen.
+  // Kept short, on this phone only, and out of backups.
+  const exchangeLog = createExchangeLog({ storage });
 
   function boardKey(id, part) {
     return `board:${id}:${part}`;
@@ -3356,6 +3405,9 @@ import { planItems, itemsInDayOrder, nextItemIndex } from "./lib/plan.js";
 
             <button class="modal-btn" id="testGeminiBtn" style="margin-top:10px;">Test key & find models</button>
             <pre class="settings-result" id="geminiTestResult" hidden></pre>
+            <button class="modal-btn" id="troubleshootBtn" style="margin-top:6px;">
+              ${icon("info", { size: 16, cls: "ico-inline" })} Search not working? Troubleshoot
+            </button>
 
             <div id="geminiModelWrap">
               <label class="settings-label" for="setGeminiModel">Model</label>
@@ -3923,6 +3975,8 @@ ${(() => {
     // offered, and the lite models mostly decide not to - so this asks one
     // question that cannot be answered well from memory and reports what
     // happened. One request, with search, each tap.
+    const troubleshootBtn = document.getElementById("troubleshootBtn");
+    if (troubleshootBtn) troubleshootBtn.addEventListener("click", () => openTroubleshoot());
     const testSearch = document.getElementById("testSearchBtn");
     if (testSearch) {
       testSearch.addEventListener("click", async () => {
@@ -9958,6 +10012,9 @@ ${(() => {
     `;
 
     html += renderEventsSearchBar();
+    // Always reachable, even before a search has run - and outside the ask
+    // card, which is held to three questions.
+    html += `<div class="ev-link-row"><button class="link-btn ev-handoff-link" id="evTroubleshoot">${icon("info", { size: 15, cls: "ico-inline" })} Troubleshoot search</button></div>`;
 
     if (eventSearch.status === "error") {
       html += `<div class="card"><p class="pick-status">${esc(eventSearch.error)}</p></div>`;
@@ -10381,6 +10438,8 @@ ${(() => {
 
     const handoff = document.getElementById("evHandoff");
     if (handoff) handoff.addEventListener("click", () => openHandoffSheet());
+    const troubleshootLink = document.getElementById("evTroubleshoot");
+    if (troubleshootLink) troubleshootLink.addEventListener("click", () => openTroubleshoot());
 
     const stopBtn = document.getElementById("evStop");
     if (stopBtn) stopBtn.addEventListener("click", () => stopEventSearch());
@@ -18200,6 +18259,184 @@ ${(() => {
       }
     });
     document.getElementById("traceShare").addEventListener("click", () => shareText("Wayfare search trace", text));
+  }
+
+  // ---------- Troubleshoot: what was sent, what came back, what is broken ----------
+  // "I'm not getting anything at all and I want to see what was sent and what
+  // was returned." Three things, in one place that is always reachable (it
+  // does not wait for a search to have run): live checks that name the layer
+  // that is failing, the record of every request to a model with its raw
+  // reply, and the last event search. All of it copies out as one report.
+  // Nothing in it can contain the API key.
+  let troubleshoot = { steps: [], verdict: "", running: false };
+
+  function troubleshootHeader() {
+    const s = loadTripSettings();
+    const gemini = aiProviderKey() === "gemini";
+    return {
+      at: new Date().toISOString(),
+      app: APP_VERSION_LABEL(),
+      provider: aiProviderKey(),
+      model: gemini ? (s.geminiModelPinned ? s.geminiModel : s.geminiSearchModel || s.geminiModel) : s.aiModel,
+      pinned: gemini && !!s.geminiModelPinned,
+      keySet: !!(gemini ? s.geminiKey : s.aiKey).trim(),
+      online: navigator.onLine !== false,
+    };
+  }
+
+  function troubleshootReportText() {
+    const trace = loadTrace();
+    return reportText({
+      header: troubleshootHeader(),
+      verdict: troubleshoot.verdict,
+      steps: troubleshoot.steps,
+      exchanges: exchangeLog.list(),
+      trace: trace ? traceText(trace) : "",
+    });
+  }
+
+  const TS_WORDS = { ok: "OK", warn: "Warning", fail: "Failed", skip: "Skipped" };
+
+  function troubleshootStepsHtml() {
+    return troubleshoot.steps
+      .map(
+        (st) => `<li class="ts-step ts-${st.status}">
+          <span class="ts-badge">${TS_WORDS[st.status] || st.status}</span>
+          <span class="ts-name">${esc(st.label)}${st.ms != null ? ` <span class="ts-ms">${(st.ms / 1000).toFixed(1)}s</span>` : ""}</span>
+          ${st.detail ? `<div class="ts-detail">${esc(st.detail)}</div>` : ""}
+        </li>`
+      )
+      .join("");
+  }
+
+  function troubleshootExchangesHtml() {
+    const list = exchangeLog.list();
+    if (!list.length) {
+      return `<p class="settings-hint">No request to a model has been made on this phone yet. Run a search, then come back.</p>`;
+    }
+    return list
+      .map((e, i) => {
+        const outcome = e.ok === false ? `Failed${e.status != null ? ` (HTTP ${e.status})` : ""}` : `OK (HTTP ${e.status == null ? "?" : e.status})`;
+        const searched = e.grounded ? (e.searched ? ", searched the web" : ", did NOT search") : "";
+        const when = e.at ? new Date(e.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+        const first = (e.prompt || "").split("\n")[0].slice(0, 60);
+        return `<details class="ts-exchange">
+          <summary><b>${i + 1}.</b> ${esc(when)} · ${esc(outcome)}${esc(searched)}<span class="ts-first">${esc(first)}</span></summary>
+          <pre class="settings-result trace-text">${esc(exchangeText(e, i + 1))}</pre>
+        </details>`;
+      })
+      .join("");
+  }
+
+  function openTroubleshoot() {
+    troubleshoot = { steps: [], verdict: "", running: false };
+    const trace = loadTrace();
+    placeModal.innerHTML = `
+      <div class="modal-backdrop" data-close="1">
+        <div class="modal-sheet" role="dialog" aria-label="Troubleshoot search">
+          <div class="modal-handle"></div>
+          <button class="modal-close" data-close="1" aria-label="Close">${icon("close", { size: 17, cls: "ico-inline" })}</button>
+          <div class="modal-body">
+            <h2 class="modal-title">Troubleshoot search</h2>
+            <p class="settings-hint">
+              When a search finds nothing, this shows which part is failing, exactly what was
+              sent to the AI and exactly what came back. Your key is never shown or copied.
+            </p>
+            <button class="modal-btn modal-btn-primary" id="tsRun" style="width:100%;">
+              ${icon("refresh", { size: 16, cls: "ico-inline" })} Run checks now
+            </button>
+            <p class="settings-hint">Uses two small requests to Google, one of them with search.</p>
+            <div class="settings-result" id="tsVerdict" role="status" hidden></div>
+            <ul class="ts-steps" id="tsSteps"></ul>
+
+            <div class="section-label" style="margin-top:18px;">What was sent and returned</div>
+            <div id="tsExchanges">${troubleshootExchangesHtml()}</div>
+
+            ${trace ? `<details class="ts-exchange"><summary><b>Last event search</b></summary><pre class="settings-result trace-text">${esc(traceText(trace))}</pre></details>` : ""}
+
+            <div class="settings-btn-row" style="margin-top:14px;">
+              <button class="modal-btn modal-btn-primary" id="tsCopy">${icon("note", { size: 16, cls: "ico-inline" })} Copy report</button>
+              <button class="modal-btn" id="tsShare">${icon("share", { size: 16, cls: "ico-inline" })} Share</button>
+            </div>
+            <button class="link-btn" id="tsClear">Clear this record</button>
+          </div>
+        </div>
+      </div>`;
+    placeModal.classList.add("open");
+    makeSheetDraggable(placeModal, closePlaceModal);
+    placeModal.querySelectorAll("[data-close]").forEach((el) =>
+      el.addEventListener("click", (e) => {
+        if (el.classList.contains("modal-backdrop") && e.target !== el) return;
+        closePlaceModal();
+      })
+    );
+
+    const drawSteps = () => {
+      const ul = document.getElementById("tsSteps");
+      if (ul) ul.innerHTML = troubleshootStepsHtml();
+    };
+
+    document.getElementById("tsRun").addEventListener("click", async () => {
+      if (troubleshoot.running) return;
+      const s = loadTripSettings();
+      const btn = document.getElementById("tsRun");
+      const verdict = document.getElementById("tsVerdict");
+      verdict.hidden = false;
+      if (aiProviderKey() !== "gemini") {
+        verdict.className = "settings-result";
+        verdict.textContent = "These checks are for Gemini. For another service, read what was sent and returned below.";
+        return;
+      }
+      troubleshoot = { steps: [], verdict: "", running: true };
+      btn.disabled = true;
+      btn.textContent = "Checking…";
+      verdict.className = "settings-result";
+      verdict.textContent = "Checking, one step at a time…";
+      drawSteps();
+      try {
+        const result = await runChecks({
+          key: s.geminiKey.trim(),
+          model: s.geminiModelPinned ? s.geminiModel : s.geminiSearchModel || s.geminiModel || "",
+          pick: (names) => names.slice().sort((a, b) => scoreSearchModel(b) - scoreSearchModel(a))[0],
+          fetch: (u, init) => fetch(u, init),
+          geminiBase: GEMINI_BASE,
+          overpass: OVERPASS_ENDPOINTS.map((e) => e.replace(/\/interpreter$/, "/status")),
+          nominatim: "https://nominatim.openstreetmap.org/search",
+          place: (activeBoard().destination || s.destination || "London").trim(),
+          online: navigator.onLine !== false,
+          onStep: (st) => {
+            troubleshoot.steps.push(st);
+            drawSteps();
+          },
+        });
+        troubleshoot.verdict = result.verdict;
+        const bad = troubleshoot.steps.some((st) => st.status === "fail" || st.status === "warn");
+        verdict.className = `settings-result ${bad ? "bad" : "ok"}`;
+        verdict.textContent = result.verdict;
+      } catch (e) {
+        troubleshoot.verdict = `The checks themselves failed to run: ${(e && e.message) || e}`;
+        verdict.className = "settings-result bad";
+        verdict.textContent = troubleshoot.verdict;
+      }
+      troubleshoot.running = false;
+      btn.disabled = false;
+      btn.innerHTML = `${icon("refresh", { size: 16, cls: "ico-inline" })} Run checks again`;
+    });
+
+    document.getElementById("tsCopy").addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(troubleshootReportText());
+        toast("Copied — paste it into a message");
+      } catch {
+        toast("Couldn't copy — use Share instead");
+      }
+    });
+    document.getElementById("tsShare").addEventListener("click", () => shareText("Wayfare troubleshooting report", troubleshootReportText()));
+    document.getElementById("tsClear").addEventListener("click", () => {
+      exchangeLog.clear();
+      document.getElementById("tsExchanges").innerHTML = troubleshootExchangesHtml();
+      toast("Cleared");
+    });
   }
 
   // ---------- The weekly check ----------

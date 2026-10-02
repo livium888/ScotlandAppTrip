@@ -138,6 +138,7 @@ export async function readGeminiStream(res, onText) {
           /* a display callback failing is not the search failing */
         }
       }
+      if (c.finishReason) merged.candidates[0].finishReason = c.finishReason;
       if (c.groundingMetadata) {
         const g = merged.candidates[0].groundingMetadata || {};
         const n = c.groundingMetadata;
@@ -149,6 +150,7 @@ export async function readGeminiStream(res, onText) {
       }
     }
     if (chunk.usageMetadata) merged.usageMetadata = chunk.usageMetadata;
+  if (chunk.promptFeedback) merged.promptFeedback = chunk.promptFeedback;
   };
   const handleBlock = (block) => {
     const lines = block.split(/\r?\n/).filter((l) => l.startsWith("data:"));

@@ -3813,6 +3813,7 @@ html, body {
 /* Offered whether the search form is open or folded away - it is most wanted
    exactly when there are already results and the form has collapsed. */
 .ev-handoff-link { display: block; margin: 10px auto 0; }
+.ev-link-row { display: flex; flex-direction: column; align-items: center; }
 
 /* Throwing a row off the list. Small and quiet - it sits in the corner of the
    card rather than competing with Save - but a real target, not a hairline. */
@@ -4290,3 +4291,18 @@ html, body {
 /* ---- What happened: the search trace ---- */
 .trace-text { white-space: pre-wrap; word-break: break-word; font-size: var(--type-xs); max-height: 60vh; overflow: auto; margin-top: 12px; }
 .ev-trace-btn { display: inline-flex; align-items: center; gap: 4px; width: auto; }
+
+/* Troubleshoot: each check says its result in words as well as colour. */
+.ts-steps { list-style: none; margin: 10px 0 0; padding: 0; }
+.ts-step { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; background: var(--card); }
+.ts-badge { display: inline-block; font-size: var(--type-xs); font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; padding: 2px 8px; border-radius: 999px; margin-right: 8px; border: 1px solid currentColor; }
+.ts-ok .ts-badge { color: var(--teal); }
+.ts-warn .ts-badge { color: var(--warn); }
+.ts-fail .ts-badge { color: var(--danger, #b3261e); }
+.ts-skip .ts-badge { color: var(--text-muted); }
+.ts-name { font-weight: 600; }
+.ts-ms { font-weight: 400; color: var(--text-muted); font-size: var(--type-xs); }
+.ts-detail { margin-top: 6px; font-size: var(--type-sm, var(--type-md)); color: var(--text); white-space: pre-wrap; word-break: break-word; }
+.ts-exchange { border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; margin-bottom: 8px; background: var(--card); }
+.ts-exchange summary { cursor: pointer; min-height: 44px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.ts-first { color: var(--text-muted); font-size: var(--type-xs); flex-basis: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
