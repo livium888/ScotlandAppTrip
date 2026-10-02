@@ -1,6 +1,9 @@
 import { esc, safeUrl, cityColor } from "./lib/text.js";
 import { extractJson, partialListings, lineFormat, parseListingLines } from "./lib/listings.js";
 
+import { haversineKm, MILES_PER_KM, toMiles, formatDistance, formatDuration, legLabel, DETOUR_FACTOR, WALK_MAX_KM, DRIVE_KMH, ROAD_FACTOR, WALK_KMH_CHILD, WALK_KMH_ADULT } from "./lib/geo.js";
+import { timeToMinutes, formatTime, labelForDate, DAY_NAMES, dayCodeFromLabel, clockOf, shortDayLabel, isoDate } from "./lib/time.js";
+import { ICS_LINE_END, icsEscape, icsFold, icsStamp, icsDay } from "./lib/ics.js";
 (function () {
   "use strict";
 
@@ -2162,16 +2165,6 @@ import { extractJson, partialListings, lineFormat, parseListingLines } from "./l
     store(boardKey(activeBoard().id, "notes"), JSON.stringify(text));
   }
 
-  function haversineKm(lat1, lon1, lat2, lon2) {
-    const R = 6371;
-    const dLat = ((lat2 - lat1) * Math.PI) / 180;
-    const dLon = ((lon2 - lon1) * Math.PI) / 180;
-    const a =
-      Math.sin(dLat / 2) ** 2 +
-      Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLon / 2) ** 2;
-    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  }
-
   // How far a place can be from a known city anchor and still be filed under
   // it. Without a limit the "nearest" city is returned no matter how absurd -
   // somewhere in Manchester would be filed under Glasgow simply because it is
@@ -3402,53 +3395,6 @@ import { extractJson, partialListings, lineFormat, parseListingLines } from "./l
     } catch {
       /* an old plugin without readdir just leaves them all, which is fine */
     }
-  }
-
-  // ---------- Putting the trip in a real calendar ----------
-  // The plan lives in this app and nowhere else, which is fine until somebody
-  // else in the family wants to know what Tuesday looks like.
-  //
-  // There is an `ics` package on npm and it was the obvious thing to reach
-  // for. It is twenty-one files of Node modules, which a no-build-step app
-  // cannot vendor without pulling in a bundler - and the format itself is a
-  // dozen lines of text with strict rules about escaping and line endings.
-  // The rules are the actual work, and they are written out below rather than
-  // hidden behind a dependency that would cost more to carry than to replace.
-  const ICS_LINE_END = "\r\n"; // RFC 5545 is explicit about this, and Outlook cares
-
-  function icsEscape(text) {
-    return String(text || "")
-      .replace(/\\/g, "\\\\")
-      .replace(/;/g, "\;")
-      .replace(/,/g, "\\,")
-      .replace(/\r?\n/g, "\\n");
-  }
-
-  // Long lines must be folded at 75 octets, continued with a leading space.
-  // A calendar that refuses to open is the usual symptom of skipping this.
-  function icsFold(line) {
-    if (line.length <= 75) return line;
-    const parts = [line.slice(0, 75)];
-    let rest = line.slice(75);
-    while (rest.length > 74) {
-      parts.push(" " + rest.slice(0, 74));
-      rest = rest.slice(74);
-    }
-    if (rest) parts.push(" " + rest);
-    return parts.join(ICS_LINE_END);
-  }
-
-  function icsStamp(date) {
-    const p = (n) => String(n).padStart(2, "0");
-    return (
-      `${date.getUTCFullYear()}${p(date.getUTCMonth() + 1)}${p(date.getUTCDate())}` +
-      `T${p(date.getUTCHours())}${p(date.getUTCMinutes())}${p(date.getUTCSeconds())}Z`
-    );
-  }
-
-  function icsDay(date) {
-    const p = (n) => String(n).padStart(2, "0");
-    return `${date.getFullYear()}${p(date.getMonth() + 1)}${p(date.getDate())}`;
   }
 
   // Every stop on every dated day, as calendar events. A stop with a time gets
@@ -5406,40 +5352,8 @@ ${(() => {
     rescheduleTimer = setTimeout(() => rescheduleNotifications(), 1200);
   }
 
-  // "Day 3 · Fri 21 Aug" -> "Fri 21". Full labels don't fit on a chip.
-  function shortDayLabel(label) {
-    const m = String(label || "").match(/\b(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\b\s*(\d{1,2})?/i);
-    if (m) return m[2] ? `${m[1]} ${m[2]}` : m[1];
-    return String(label || "").replace(/^Day\s*\d+\s*·\s*/i, "").slice(0, 10);
-  }
-
   function planItems(plan, dayId) {
     return plan.items[dayId] || [];
-  }
-
-  // ---------- Times ----------
-  // Times are typed by hand into a small box on a phone, so "9", "9.30" and
-  // "0930" all have to mean what they obviously mean. Returns minutes since
-  // midnight, or null for anything that isn't a time.
-  function timeToMinutes(value) {
-    const s = String(value || "").trim();
-    if (!s) return null;
-    const m = /^(\d{1,2})\s*[:.h]?\s*(\d{2})?\s*(am|pm)?$/i.exec(s);
-    if (!m) return null;
-    let hours = Number(m[1]);
-    const mins = m[2] ? Number(m[2]) : 0;
-    const suffix = (m[3] || "").toLowerCase();
-    if (mins > 59) return null;
-    if (suffix === "pm" && hours < 12) hours += 12;
-    if (suffix === "am" && hours === 12) hours = 0;
-    if (hours > 23) return null;
-    return hours * 60 + mins;
-  }
-
-  function formatTime(value) {
-    const mins = timeToMinutes(value);
-    if (mins == null) return String(value || "").trim();
-    return `${String(Math.floor(mins / 60)).padStart(2, "0")}:${String(mins % 60).padStart(2, "0")}`;
   }
 
   // A day reads in the order you will walk it, not the order things happened
@@ -5567,22 +5481,6 @@ ${(() => {
     const plan = loadPlan();
     plan.days.push({ id: newDayId(plan), label: trimmed });
     savePlan(plan);
-  }
-
-  // ---------- Days made when you need them ----------
-  // Scheduling used to require a plan to exist first: the day chips only
-  // appeared once days had been added in the Itinerary tab, and a saved place
-  // met "Add days in the Itinerary tab first" - a trip you have to set up
-  // before you can use it. But a day is only a label with a date in it, and
-  // the date is already known the moment you say "today" or tap one on a
-  // calendar. So it is made on the spot.
-  // Written the way the bundled days are, so dayLabelToDate() can read back
-  // anything this creates.
-  const WEEKDAY_TITLES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-  const MONTH_TITLES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-
-  function labelForDate(date) {
-    return `${WEEKDAY_TITLES[date.getDay()]} ${date.getDate()} ${MONTH_TITLES[date.getMonth()]}`;
   }
 
   // Labels carry a day and a month but no year, so a trip running 29 Dec to
@@ -6424,16 +6322,6 @@ ${(() => {
   }
 
 
-  // Reads the day-of-week out of a day label like "Day 3 · Fri 21 Aug".
-  const DAY_NAMES = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
-
-  function dayCodeFromLabel(label) {
-    const m = String(label || "").match(/\b(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\b/i);
-    if (!m) return null;
-    const map = { sun: "Su", mon: "Mo", tue: "Tu", wed: "We", thu: "Th", fri: "Fr", sat: "Sa" };
-    return map[m[1].slice(0, 3).toLowerCase()] || null;
-  }
-
   // ---------- Opening hours, properly ----------
   // This used to be ~100 lines of hand-rolled regex that deliberately refused
   // most of the OSM opening_hours syntax: anything with public holidays,
@@ -6540,10 +6428,6 @@ ${(() => {
     } catch {
       return { known: false };
     }
-  }
-
-  function clockOf(date) {
-    return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
   }
 
   // "Is it shut all day on this day of the week." The library thinks in
@@ -6719,56 +6603,9 @@ ${(() => {
     return best;
   }
 
-  // Rough walking time between two stops. Deliberately straight-line distance
-  // with a detour factor rather than a routing API - it needs no key, works
-  // offline, and the point is to flag "that's a long way with a small child",
-  // not to give turn-by-turn timings.
-  // Walking pace depends on who is walking. This was a constant 3.5 km/h -
-  // "this is with a 4-year-old" - for everybody, so an adults-only trip got
-  // a child's walking times on every leg.
-  const WALK_KMH_CHILD = 3.5;
-  const WALK_KMH_ADULT = 5;
   function walkKmh() {
     return showsKids() && loadPeople().some(isChild) ? WALK_KMH_CHILD : WALK_KMH_ADULT;
   }
-  const DETOUR_FACTOR = 1.3; // streets aren't straight lines
-
-  // ---------- Distance ----------
-  // This is a UK trip planned by someone who thinks in miles, and the app was
-  // quoting kilometres at them. Every distance goes through here so there is
-  // one place that decides, rather than six sites each formatting their own.
-  const MILES_PER_KM = 0.621371;
-
-  function toMiles(km) {
-    return km * MILES_PER_KM;
-  }
-
-  // Under about a quarter of a mile, a fraction is harder to picture than
-  // yards - "0.2 miles" versus "350 yards".
-  function formatDistance(km) {
-    const mi = toMiles(km);
-    if (mi < 0.25) return `${Math.round(mi * 1760 / 10) * 10} yd`;
-    if (mi < 10) return `${mi.toFixed(1)} mi`;
-    return `${Math.round(mi)} mi`;
-  }
-
-  function formatDuration(mins) {
-    if (mins < 60) return `${mins} min`;
-    const h = Math.floor(mins / 60);
-    const m = mins % 60;
-    return m ? `${h} h ${m} min` : `${h} h`;
-  }
-
-  // Beyond this, a leg is a drive. Two miles is about the furthest that
-  // reads as "we'll walk it" with a four-year-old who has already done a
-  // castle that morning.
-  const WALK_MAX_KM = 3.2;
-  // Deliberately conservative: a UK average across single carriageways,
-  // towns and the odd motorway stretch. Better to over-estimate a drive than
-  // to promise Stirling in forty minutes.
-  const DRIVE_KMH = 60;
-  const ROAD_FACTOR = 1.35; // roads wander more than streets do
-
   // A leg between two stops, walked or driven depending on how far it is.
   // The old version assumed walking at any distance, so two places forty
   // miles apart came out as "🚶 690 min".
@@ -6779,10 +6616,6 @@ ${(() => {
     const km = straight * (driving ? ROAD_FACTOR : DETOUR_FACTOR);
     const mins = Math.round((km / (driving ? DRIVE_KMH : walkKmh())) * 60);
     return { km, mins, driving, icon: driving ? "🚗" : "🚶" };
-  }
-
-  function legLabel(leg) {
-    return `${leg.icon} ${formatDuration(leg.mins)} · ${formatDistance(leg.km)}`;
   }
 
   function renderMyPlan() {
@@ -19077,10 +18910,6 @@ ${(() => {
 
   function weatherLook(code) {
     return WMO.find((w) => code <= w.max) || { icon: "🌡️", label: "" };
-  }
-
-  function isoDate(d) {
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   }
 
   function daysFromNow(date) {

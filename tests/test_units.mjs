@@ -6,6 +6,9 @@
 // moved out into www/js/lib/ so they can be. Behaviour is unchanged; the
 // browser suites still cover the app using them.
 import { esc, safeUrl, cityColor } from '../www/js/lib/text.js';
+import { haversineKm, toMiles, formatDistance, formatDuration, legLabel } from '../www/js/lib/geo.js';
+import { timeToMinutes, formatTime, labelForDate, dayCodeFromLabel, clockOf, shortDayLabel, isoDate } from '../www/js/lib/time.js';
+import { icsEscape, icsFold, icsStamp, icsDay } from '../www/js/lib/ics.js';
 import { extractJson, partialListings, lineFormat, parseListingLines } from '../www/js/lib/listings.js';
 
 let failures = 0;
@@ -59,6 +62,35 @@ check('lines that are not list items are ignored', parseListingLines('Here you g
 check('with wholeOnly, a line still being written is left for later',
   parseListingLines('- name: A; date: 2026-10-03\n- name: B; da', true).length === 1 &&
   parseListingLines('- name: A; date: 2026-10-03\n- name: B; date: 2026-10-04\n', true).length === 2);
+
+// ---------- geo ----------
+check('Edinburgh to Glasgow is about 67 km as the crow flies', Math.abs(haversineKm(55.9533, -3.1883, 55.8642, -4.2518) - 67) < 2);
+check('the same point is zero apart, and distance is symmetric', haversineKm(53, -1, 53, -1) === 0 &&
+  Math.abs(haversineKm(53, -1, 54, -2) - haversineKm(54, -2, 53, -1)) < 1e-9);
+check('kilometres become miles', Math.abs(toMiles(10) - 6.21371) < 1e-6);
+check('short distances are in yards, middling in tenths of a mile, long in whole miles',
+  formatDistance(0.2) === '220 yd' && formatDistance(1.6) === '1.0 mi' && formatDistance(32) === '20 mi', `${formatDistance(0.2)}|${formatDistance(1.6)}|${formatDistance(32)}`);
+check('durations read as minutes, hours, or both', formatDuration(45) === '45 min' && formatDuration(120) === '2 h' && formatDuration(95) === '1 h 35 min');
+check('a leg says how, how long and how far', legLabel({ icon: 'W', mins: 12, km: 1.6 }) === 'W 12 min · 1.0 mi');
+
+// ---------- time ----------
+check('times are understood the ways people write them', timeToMinutes('9') === 540 && timeToMinutes('09:30') === 570 && timeToMinutes('9.30') === 570 &&
+  timeToMinutes('2pm') === 840 && timeToMinutes('12am') === 0 && timeToMinutes('12pm') === 720 && timeToMinutes('7h15') === 435);
+check('nonsense times are null, not a wrong number', timeToMinutes('') === null && timeToMinutes('25:00') === null && timeToMinutes('10:75') === null && timeToMinutes('soon') === null);
+check('times are shown as HH:MM, and left alone when unreadable', formatTime('2pm') === '14:00' && formatTime('9') === '09:00' && formatTime('late') === 'late');
+const sat = new Date(2026, 9, 3, 7, 5);
+check('a date has a weekday, day and month', labelForDate(sat) === 'Sat 3 Oct');
+check('a day label gives its two-letter code', dayCodeFromLabel('Day 2 · Sat 3 Oct') === 'Sa' && dayCodeFromLabel('Day 2') === null);
+check('a day label is shortened for a chip', shortDayLabel('Day 2 · Sat 3 Oct') === 'Sat 3' && shortDayLabel('Day 1 · Arrival') === 'Arrival');
+check('a clock and an ISO date are zero-padded', clockOf(sat) === '07:05' && isoDate(sat) === '2026-10-03');
+
+// ---------- calendar files ----------
+check('calendar text escapes backslash, semicolon, comma and newline', icsEscape('a\\b;c,d\ne') === 'a\\\\b\\;c\\,d\\ne', icsEscape('a\\b;c,d\ne'));
+check('long calendar lines fold at 75 characters, continuing with a space', (() => {
+  const folded = icsFold('X'.repeat(200)).split('\r\n');
+  return folded[0].length === 75 && folded.slice(1).every((l) => l.startsWith(' ') && l.length <= 75) && folded.join('').replace(/ /g, '') === 'X'.repeat(200);
+})() && icsFold('short') === 'short');
+check('calendar stamps are UTC and dates are local', icsStamp(new Date(Date.UTC(2026, 9, 3, 7, 5, 9))) === '20261003T070509Z' && icsDay(sat) === '20261003');
 
 console.log(failures ? `\n${failures} FAILED` : '\nAll checks passed');
 process.exit(failures ? 1 : 0);
