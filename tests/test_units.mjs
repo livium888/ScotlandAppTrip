@@ -9,6 +9,7 @@ import { esc, safeUrl, cityColor } from '../www/js/lib/text.js';
 import { haversineKm, toMiles, formatDistance, formatDuration, legLabel } from '../www/js/lib/geo.js';
 import { timeToMinutes, formatTime, labelForDate, dayCodeFromLabel, clockOf, shortDayLabel, isoDate } from '../www/js/lib/time.js';
 import { icsEscape, icsFold, icsStamp, icsDay } from '../www/js/lib/ics.js';
+import { describeGeminiError, scoreGeminiModel, chooseGeminiModel, scoreSearchModel, rateForModel, money4, openAiCitations, isQuotaError, readGeminiStream } from '../www/js/lib/ai.js';
 import { extractJson, partialListings, lineFormat, parseListingLines } from '../www/js/lib/listings.js';
 
 let failures = 0;
@@ -91,6 +92,60 @@ check('long calendar lines fold at 75 characters, continuing with a space', (() 
   return folded[0].length === 75 && folded.slice(1).every((l) => l.startsWith(' ') && l.length <= 75) && folded.join('').replace(/ /g, '') === 'X'.repeat(200);
 })() && icsFold('short') === 'short');
 check('calendar stamps are UTC and dates are local', icsStamp(new Date(Date.UTC(2026, 9, 3, 7, 5, 9))) === '20261003T070509Z' && icsDay(sat) === '20261003');
+
+// ---------- Gemini errors say what to do ----------
+const err = (status, message, extra = {}) => describeGeminiError(status, { error: { message, ...extra } }, '');
+check('a rejected key says to check it is a Gemini key', /API_KEY_INVALID/.test(err(400, 'API key not valid. Please pass a valid API key.')) &&
+  /aistudio\.google\.com/.test(err(400, 'API key not valid')));
+check('a disabled API says to enable it', /isn't enabled/.test(err(403, 'Generative Language API has not been used in project 1 before or it is disabled')));
+check('an application-restricted key says to set restrictions to None', /Application restrictions to "None"/.test(err(403, 'Requests from referer <empty> are blocked.')));
+check('other refusals, missing models and quota each get their own words', /API restrictions/.test(err(403, 'nope')) &&
+  /Model not found/.test(err(404, 'x')) && /Rate limit or quota/.test(err(429, 'x')) && /^Gemini returned 500/.test(err(500, 'x')));
+check('Google\'s own message is always kept', err(429, 'Quota exceeded for metric X').includes('Quota exceeded for metric X'));
+check('with no body at all it still says something', /no detail/.test(describeGeminiError(502, null, '')));
+
+// ---------- choosing a model ----------
+const models = ['models/gemini-2.5-flash', 'models/gemini-3.5-flash-lite', 'models/gemini-3.5-flash', 'models/gemini-3.5-pro-preview', 'models/gemini-2.0-flash-001'];
+check('the default is the newest generation, preferring the cheapest capable tier', chooseGeminiModel(models.map((name) => ({ name }))) === 'models/gemini-3.5-flash-lite');
+check('previews and dated builds rank below the same model without', scoreGeminiModel('models/gemini-3.5-flash-preview') < scoreGeminiModel('models/gemini-3.5-flash') &&
+  scoreGeminiModel('models/gemini-2.0-flash-001') < scoreGeminiModel('models/gemini-2.0-flash'));
+check('with nothing available, nothing is chosen', chooseGeminiModel([]) === '');
+check('for searching, a full flash beats pro beats lite - tier before version', scoreSearchModel('models/gemini-2.5-flash') > scoreSearchModel('models/gemini-3.5-pro') &&
+  scoreSearchModel('models/gemini-3.5-pro') > scoreSearchModel('models/gemini-3.5-flash-lite'));
+check('image, speech, embedding and open models are never used for searching', ['gemini-3-pro-image', 'gemini-2.5-flash-preview-tts', 'text-embedding-004', 'gemma-3-27b', 'gemini-2.0-flash-live']
+  .every((n) => scoreSearchModel(n) === -Infinity));
+
+// ---------- the usage meter ----------
+check('cost rates match the cheapest tier first', rateForModel('models/gemini-3.5-flash-lite').label === 'Flash-Lite' &&
+  rateForModel('gemini-3.5-flash').label === 'Flash' && rateForModel('gemini-3.5-pro').label === 'Pro' && rateForModel('mystery').label === 'unknown model');
+check('money reads as pounds, or "less than 1p"', money4(0) === '£0' && money4(0.004) === 'less than 1p' && money4(1.234) === '£1.23');
+
+// ---------- citations from other hosts ----------
+check('citations are read from annotations, a flat list and search results, without duplicates', same(openAiCitations(
+  { citations: ['https://a.example', { url: 'https://b.example', title: 'B' }], search_results: [{ url: 'https://c.example', title: 'C' }, { url: 'https://a.example' }] },
+  { message: { annotations: [{ type: 'url_citation', url_citation: { url: 'https://a.example', title: 'A' } }] } }),
+  [{ title: 'A', uri: 'https://a.example' }, { title: 'B', uri: 'https://b.example' }, { title: 'C', uri: 'https://c.example' }]));
+check('no citations is an empty list, not an error', same(openAiCitations(null, null), []));
+
+// ---------- a full phone ----------
+check('a full phone is recognised however the browser names it', isQuotaError({ name: 'QuotaExceededError' }) && isQuotaError({ code: 22 }) &&
+  isQuotaError({ name: 'NS_ERROR_DOM_QUOTA_REACHED' }) && !isQuotaError(new Error('other')) && !isQuotaError(null));
+
+// ---------- the answer arriving in pieces ----------
+const sse = (chunks) => new Response(new ReadableStream({ start(c) { chunks.forEach((x) => c.enqueue(new TextEncoder().encode(x))); c.close(); } }));
+const seen = [];
+const body = (o) => `data: ${JSON.stringify(o)}\n\n`;
+const merged = await readGeminiStream(sse([
+  body({ candidates: [{ content: { parts: [{ text: '- name: A' }] } }] }),
+  // One event split across two network reads.
+  body({ candidates: [{ content: { parts: [{ text: '; date: 1' }] }, groundingMetadata: { webSearchQueries: ['q1'], groundingChunks: [{ web: { uri: 'u1' } }] } }], usageMetadata: { promptTokenCount: 5 } }).slice(0, 40),
+  body({ candidates: [{ content: { parts: [{ text: '; date: 1' }] }, groundingMetadata: { webSearchQueries: ['q1'], groundingChunks: [{ web: { uri: 'u1' } }] } }], usageMetadata: { promptTokenCount: 5 } }).slice(40),
+]), (t) => seen.push(t));
+check('the text is announced as it grows', seen.length >= 1 && seen[seen.length - 1] === '- name: A; date: 1', JSON.stringify(seen));
+check('what was searched and the token counts survive the merge', same(merged.candidates[0].groundingMetadata.webSearchQueries, ['q1']) &&
+  merged.usageMetadata.promptTokenCount === 5 && merged.candidates[0].content.parts.map((p) => p.text).join('') === '- name: A; date: 1', JSON.stringify(merged));
+check('a display callback that throws does not fail the search', await readGeminiStream(sse([body({ candidates: [{ content: { parts: [{ text: 'x' }] } }] })]),
+  () => { throw new Error('ui'); }).then(() => true, () => false));
 
 console.log(failures ? `\n${failures} FAILED` : '\nAll checks passed');
 process.exit(failures ? 1 : 0);
