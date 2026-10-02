@@ -11088,25 +11088,33 @@ ${(() => {
     // call, no key, no AI quota - and it is what turns "within 15 miles of
     // Bakewell" into a question about places that actually have parish halls.
     // Cached per area, so a second search of the same place pays nothing.
-    try {
-      ctx.towns = route
-        ? await routeTowns(route.from, route.to, (route.miles || DEFAULT_CORRIDOR_MILES) * 1609)
-        : await townsAround(centre, radius);
-    } catch {
-      // The prompt falls back to the radius wording. Never fatal.
-    }
-    if (generation !== eventGeneration) return;
-
+    // Towns and venues are looked up together, and the search waits for them
+    // only so long (see AREA_LOOKUP_BUDGET_MS). A report from a phone showed
+    // this waiting ninety seconds on dead map servers before anything was
+    // sent, which read as "nothing at all".
     ctx.venues = {};
     const kindsNow = anglesForSearch().map((a) => a.key);
-    for (const [kindKey, osm] of [["films", "cinema"], ["theatre", "theatre"]]) {
-      if (!kindsNow.includes(kindKey) || route) continue;
-      try {
-        ctx.venues[kindKey] = await venuesNear(centre.lat, centre.lon, radius, osm);
-      } catch {
-        ctx.venues[kindKey] = [];
-      }
-    }
+    const gaveUp = (what) => () =>
+      overpassLog.push(`${what}: still looking after ${AREA_LOOKUP_BUDGET_MS / 1000}s - went ahead without them (kept for next time if they arrive)`);
+    await Promise.all([
+      withinBudget(
+        route
+          ? routeTowns(route.from, route.to, (route.miles || DEFAULT_CORRIDOR_MILES) * 1609)
+          : townsAround(centre, radius),
+        AREA_LOOKUP_BUDGET_MS,
+        gaveUp("towns")
+      ).then((v) => {
+        // The prompt falls back to the radius wording. Never fatal.
+        if (v) ctx.towns = v;
+      }),
+      ...[["films", "cinema"], ["theatre", "theatre"]]
+        .filter(([kindKey]) => kindsNow.includes(kindKey) && !route)
+        .map(([kindKey, osm]) =>
+          withinBudget(venuesNear(centre.lat, centre.lon, radius, osm), AREA_LOOKUP_BUDGET_MS, gaveUp(`${osm}s`)).then((v) => {
+            ctx.venues[kindKey] = v || [];
+          })
+        ),
+    ]);
     if (generation !== eventGeneration) return;
 
     if (eventQueue) eventQueue.stop();
@@ -12014,32 +12022,86 @@ ${(() => {
   // read "Venues named: none found" and had no towns at all, and nothing
   // said whether that was a timeout, a refusal or an empty answer.
   const overpassLog = [];
-  async function overpassJson(q, label) {
-    for (const endpoint of OVERPASS_ENDPOINTS) {
-      const host = endpoint.replace(/^https:\/\/|\/api.*$/g, "");
-      const t0 = Date.now();
-      try {
-        const res = await fetchWithTimeout(
-          endpoint,
-          { method: "POST", body: q, headers: { "Content-Type": "text/plain" } },
-          OVERPASS_LOOKUP_TIMEOUT_MS
-        );
-        if (!res.ok) {
-          overpassLog.push(`${label}: ${host} said ${res.status} after ${((Date.now() - t0) / 1000).toFixed(1)}s`);
-          continue;
+  // The mirrors are asked together, a couple of seconds apart, and the first
+  // good answer wins. They used to be tried one after another at thirty
+  // seconds each, so a single dead server cost half a minute and three cost a
+  // minute and a half, with nothing on screen the whole time.
+  function overpassJson(q, label) {
+    return new Promise((resolve) => {
+      let finished = false;
+      let outstanding = OVERPASS_ENDPOINTS.length;
+      const started = [];
+      const lose = () => {
+        outstanding -= 1;
+        if (outstanding === 0 && !finished) {
+          finished = true;
+          resolve(null);
         }
-        const data = await res.json();
-        overpassLog.push(`${label}: ${host} answered ${(data.elements || []).length} in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
-        return data;
-      } catch (e) {
-        overpassLog.push(`${label}: ${host} failed after ${((Date.now() - t0) / 1000).toFixed(1)}s (${(e && e.message) || e})`);
-      }
-    }
-    return null;
+      };
+      // Mirror i starts when the one before it has failed, or after a short
+      // wait if that one is still thinking - whichever is first. A server
+      // that refuses at once costs nothing; one that hangs costs a couple
+      // of seconds, not half a minute.
+      const start = (i) => {
+        if (i >= OVERPASS_ENDPOINTS.length || started[i]) return;
+        started[i] = true;
+        if (finished) return lose();
+        setTimeout(() => start(i + 1), OVERPASS_STAGGER_MS);
+        const endpoint = OVERPASS_ENDPOINTS[i];
+        const host = endpoint.replace(/^https:\/\/|\/api.*$/g, "");
+        const t0 = Date.now();
+        const failed = () => {
+          lose();
+          start(i + 1);
+        };
+        fetchWithTimeout(endpoint, { method: "POST", body: q, headers: { "Content-Type": "text/plain" } }, OVERPASS_LOOKUP_TIMEOUT_MS)
+          .then(async (res) => {
+            if (!res.ok) {
+              overpassLog.push(`${label}: ${host} said ${res.status} after ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+              return failed();
+            }
+            const data = await res.json();
+            overpassLog.push(`${label}: ${host} answered ${(data.elements || []).length} in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+            if (!finished) {
+              finished = true;
+              resolve(data);
+            }
+            lose();
+          })
+          .catch((e) => {
+            overpassLog.push(`${label}: ${host} failed after ${((Date.now() - t0) / 1000).toFixed(1)}s (${(e && e.message) || e})`);
+            failed();
+          });
+      };
+      start(0);
+    });
+  }
+  const OVERPASS_STAGGER_MS = 2500;
+  // How long a search waits for town and venue names before it goes ahead
+  // without them. The names improve the question; they are not the question.
+  // A lookup that arrives late is still kept, and helps the next search.
+  const AREA_LOOKUP_BUDGET_MS = 8000;
+  function withinBudget(promise, ms, onGiveUp) {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        if (onGiveUp) onGiveUp();
+        resolve(null);
+      }, ms);
+      promise.then(
+        (v) => {
+          clearTimeout(timer);
+          resolve(v);
+        },
+        () => {
+          clearTimeout(timer);
+          resolve(null);
+        }
+      );
+    });
   }
   // Longer than the everyday limit: a 25-mile question is a slow one, and a
   // phone that gives up at fifteen seconds gets nothing at all.
-  const OVERPASS_LOOKUP_TIMEOUT_MS = 30000;
+  const OVERPASS_LOOKUP_TIMEOUT_MS = 20000;
 
   // The towns and venues of an area barely change, so once one is known it
   // is kept on the phone rather than asked for on every search.

@@ -148,5 +148,12 @@ check('what was searched and the token counts survive the merge', same(merged.ca
 check('a display callback that throws does not fail the search', await readGeminiStream(sse([body({ candidates: [{ content: { parts: [{ text: 'x' }] } }] })]),
   () => { throw new Error('ui'); }).then(() => true, () => false));
 
+// A model that echoes the format back instead of answering writes the label
+// words as if they were values. Seen on a phone: "- name; venue; town; date;
+// end date; times; ages; ..." came back as a listing called "name" at "venue".
+check('a line that only repeats the labels is not a listing', parseListingLines('- name; venue; town; date; end date; times; ages; for children; price; booking; tickets; link; what').length === 0);
+check('nor is a line of labels with colons and nothing after them', parseListingLines('- name: ; venue: ; town: ').length === 0);
+check('a real listing next to an echoed line is still read', parseListingLines('- name; venue; town\n- name: A; venue: B; town: C; date: 2026-10-03').length === 1);
+
 console.log(failures ? `\n${failures} FAILED` : '\nAll checks passed');
 process.exit(failures ? 1 : 0);

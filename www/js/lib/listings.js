@@ -125,7 +125,11 @@ export function readLabelledLines(text, labels, options) {
   const startsWithRequired = new RegExp(`^\\s*${required}\\s*[:;(]`, "i");
   const lines = String(text || "").split(/\r?\n/);
   if (wholeOnly && !/\n$/.test(String(text || ""))) lines.pop();
-  const labelOf = (w) => labels[String(w || "").toLowerCase().replace(/[*_]/g, "").trim()];
+  const labelOf = (w) => labels[String(w || "").toLowerCase().replace(/[*_:]/g, "").trim()];
+  const startsLabelled = (p) => {
+    const m = /^([A-Za-z][A-Za-z ]{0,20}?)\s*[:(]/.exec(p);
+    return !!(m && labelOf(m[1]));
+  };
   const out = [];
   lines.forEach((raw) => {
     const line = raw.replace(/^\s*(?:[-*•]|\d+[.)])\s+/, "");
@@ -154,7 +158,10 @@ export function readLabelledLines(text, labels, options) {
         set(labelOf(m[1]), m[2]);
         continue;
       }
-      if (labelOf(part) && i + 1 < parts.length && !labelOf(parts[i + 1])) {
+      // "label:" with nothing after it is an empty field, not the start of a
+      // pair; and a next part that is itself "label: value" is not a value.
+      if (labelOf(part) && /:\s*$/.test(part)) continue;
+      if (labelOf(part) && i + 1 < parts.length && !labelOf(parts[i + 1]) && !startsLabelled(parts[i + 1])) {
         set(labelOf(part), parts[i + 1]);
         i++;
         continue;
@@ -164,7 +171,10 @@ export function readLabelledLines(text, labels, options) {
         item[lastKey] += `; ${part}`;
         continue;
       }
-      loose.push(part);
+      // A label word with nothing after it is the model echoing the format
+      // back, not a value: "name; venue; town; date..." is not a listing
+      // called "name" at "venue".
+      if (!labelOf(part)) loose.push(part);
     }
     // Unlabelled leading parts, in the order the search lists its fields.
     looseKeys.forEach((key) => {
