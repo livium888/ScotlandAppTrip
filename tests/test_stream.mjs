@@ -70,7 +70,7 @@ const ANGLES = {
 };
 
 await page.route(/generativelanguage\.googleapis\.com/, async (route) => {
-  if (/\/models\?/.test(route.request().url())) {
+  if (/\/models(\?|$)/.test(route.request().url())) {
     return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
       models: [{ name: 'models/gemini-3.5-flash-lite', supportedGenerationMethods: ['generateContent'] }] }) });
   }
@@ -124,7 +124,7 @@ const settle = async (ms) => {
       if (window.__tripTest && window.__tripTest.eventsBusy) return !window.__tripTest.eventsBusy();
       return !/Asking six different ways|Looking\./.test(document.getElementById('view').textContent);
     }, null, { timeout: ms });
-  } catch (e) {
+  } catch {
     console.log('  (never settled)');
   }
 };

@@ -25,7 +25,7 @@ const page = await browser.newPage();
 // on the way in - re-applied on every navigation, since these tests clear
 // storage and reload.
 await page.addInitScript(() => {
-  try { localStorage.setItem('onboarded-v1', '1'); } catch (e) { /* nothing to do */ }
+  try { localStorage.setItem('onboarded-v1', '1'); } catch { /* nothing to do */ }
 });
 await page.setViewportSize({ width: 390, height: 780 });
 page.on('pageerror', (e) => { console.log('PAGEERROR:', e.message); failures++; });

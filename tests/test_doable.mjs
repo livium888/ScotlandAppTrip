@@ -306,7 +306,7 @@ check('and it can be turned off like the other three', off === 0, String(off));
 
 const evDay = inDays(3);
 await page.route(/generativelanguage\.googleapis\.com/, (route) => {
-  if (/\/models\?/.test(route.request().url())) {
+  if (/\/models(\?|$)/.test(route.request().url())) {
     return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
       models: [{ name: 'models/gemini-3.5-flash-lite', supportedGenerationMethods: ['generateContent'] }] }) });
   }
@@ -434,7 +434,7 @@ check('while the rest of the judgements still apply',
 // and only blanks, and is not allowed near what the event actually is.
 
 await page.route(/generativelanguage\.googleapis\.com/, (route) => {
-  if (/\/models\?/.test(route.request().url())) {
+  if (/\/models(\?|$)/.test(route.request().url())) {
     return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
       models: [{ name: 'models/gemini-3.5-flash-lite', supportedGenerationMethods: ['generateContent'] }] }) });
   }

@@ -127,7 +127,7 @@
     try {
       const u = new URL(raw);
       return ["http:", "https:", "mailto:", "tel:"].includes(u.protocol) ? u.href : "";
-    } catch (e) {
+    } catch {
       return "";
     }
   }
@@ -166,7 +166,7 @@
       try {
         await browser.open({ url, presentationStyle: "popover" });
         return;
-      } catch (e) {
+      } catch {
         // fall through to a normal navigation
       }
     }
@@ -216,7 +216,7 @@
     let stored = {};
     try {
       stored = JSON.parse(localStorage.getItem(TRIP_KEY)) || {};
-    } catch (e) {
+    } catch {
       stored = {};
     }
     return {
@@ -784,12 +784,12 @@
   const GEMINI_MODEL_PREFERENCE = ["flash-lite", "flash-latest", "flash", "pro"];
 
   async function geminiListModels(key) {
-    const res = await fetchWithTimeout(`${GEMINI_BASE}/models?key=${encodeURIComponent(key)}`, {}, AI_TIMEOUT_MS);
+    const res = await fetchWithTimeout(`${GEMINI_BASE}/models`, { headers: { "x-goog-api-key": key } }, AI_TIMEOUT_MS);
     const text = await res.text();
     let data = null;
     try {
       data = JSON.parse(text);
-    } catch (e) {
+    } catch {
       data = null;
     }
     if (!res.ok) {
@@ -1151,7 +1151,7 @@
     let data = null;
     try {
       data = JSON.parse(raw);
-    } catch (e) {
+    } catch {
       data = null;
     }
     if (!res.ok) {
@@ -1239,10 +1239,11 @@
       // Streamed when someone is watching it arrive: the answer is written a
       // listing at a time, and a search that shows nothing for a minute and
       // then everything at once reads as broken for that whole minute.
-      const method = onText ? "streamGenerateContent?alt=sse&" : "generateContent?";
-      res = await fetch(`${GEMINI_BASE}/${path}:${method}key=${encodeURIComponent(key)}`, {
+      const method = onText ? "streamGenerateContent?alt=sse" : "generateContent";
+      res = await fetch(`${GEMINI_BASE}/${path}:${method}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        // In a header, not the address: URLs end up in logs and referrers.
+        headers: { "Content-Type": "application/json", "x-goog-api-key": key },
         body: JSON.stringify(body),
         signal: controller.signal,
       });
@@ -1268,7 +1269,7 @@
     let data = null;
     try {
       data = JSON.parse(rawText);
-    } catch (e) {
+    } catch {
       data = null;
     }
     if (!res.ok) {
@@ -1306,7 +1307,7 @@
           text += piece;
           try {
             onText(text);
-          } catch (e) {
+          } catch {
             /* a display callback failing is not the search failing */
           }
         }
@@ -1328,7 +1329,7 @@
       const payload = lines.map((l) => l.slice(5).trim()).join("");
       try {
         take(JSON.parse(payload));
-      } catch (e) {
+      } catch {
         /* a malformed chunk loses that chunk, not the answer */
       }
       return true;
@@ -1364,7 +1365,7 @@
       let data = null;
       try {
         data = JSON.parse(all);
-      } catch (e) {
+      } catch {
         data = null;
       }
       if (!data) throw new Error("Gemini returned a response that wasn't JSON.");
@@ -1591,7 +1592,7 @@
 
     try {
       return JSON.parse(body);
-    } catch (e) {
+    } catch {
       // Not valid, which is the normal case rather than the exception.
     }
     // jsonrepair reads what a model actually produces rather than what it was
@@ -1613,7 +1614,7 @@
     if (!lib) return undefined;
     try {
       return JSON.parse(lib(body));
-    } catch (e) {
+    } catch {
       return undefined;
     }
   }
@@ -1668,7 +1669,7 @@
     }
     try {
       return JSON.parse(head + closers.reverse().join(""));
-    } catch (e) {
+    } catch {
       return null;
     }
   }
@@ -1826,7 +1827,7 @@
     try {
       const v = JSON.parse(localStorage.getItem(key));
       return v === null || v === undefined ? fallback : v;
-    } catch (e) {
+    } catch {
       return fallback;
     }
   }
@@ -2506,7 +2507,7 @@
       // the worst version of a wrong guess: nobody sees it happen.
       savePicks(picks);
       if (view.dataset.activeTab === "picks") renderPicks();
-    } catch (e) {
+    } catch {
       // best-effort - the pick just won't get a mini-map/nearby search
     }
   }
@@ -2637,7 +2638,7 @@
         // lookups out of politeness to Nominatim. There is nobody to be
         // polite to when the answer came off the device.
         lastGeocodeFromCache = answer.fromCache;
-      } catch (e) {
+      } catch {
         lastGeocodeFromCache = false;
         continue;
       }
@@ -2821,7 +2822,7 @@
       if (p856 && p856[0] && p856[0].mainsnak && p856[0].mainsnak.datavalue) {
         website = p856[0].mainsnak.datavalue.value;
       }
-    } catch (e) {
+    } catch {
       // no official-website claim available - not fatal
     }
 
@@ -2841,7 +2842,7 @@
         // somewhere you might go.
         if (sum.thumbnail && sum.thumbnail.source) photo = upscaleWikiThumb(sum.thumbnail.source);
       }
-    } catch (e) {
+    } catch {
       // no Wikipedia page - Wikidata's short description is still fine
     }
 
@@ -2909,7 +2910,7 @@
           const hit = named || close;
           if (hit) return { url: upscaleWikiThumb(hit.thumbnail.source), asked: true };
         }
-      } catch (e) {
+      } catch {
         /* offline, or Wikipedia having a day - not worth a message */
       }
     }
@@ -2921,7 +2922,7 @@
       const pages = Object.values((data.query && data.query.pages) || {});
       const hit = pages.find((p) => p.thumbnail && p.thumbnail.source && photoTitleFits(p.title, name));
       return { url: hit ? upscaleWikiThumb(hit.thumbnail.source) : null, asked: true };
-    } catch (e) {
+    } catch {
       return { url: null, asked: answered };
     }
   }
@@ -3009,9 +3010,7 @@
       // data-photo keeps the original address after src has been swapped for
       // a blob, so the cache stays keyed on the picture rather than on a URL
       // that only exists in this tab.
-      return `<div class="${cls}"><img src="${esc(p.photo)}" data-photo="${esc(p.photo)}" alt="" loading="lazy" decoding="async"
-        onload="window.__photoSeen(this)"
-        onerror="window.__photoGone(this)" /></div>`;
+      return `<div class="${cls}"><img src="${esc(p.photo)}" data-photo="${esc(p.photo)}" alt="" loading="lazy" decoding="async" /></div>`;
     }
     return `<div class="${cls} photo-none">${icon(categoryIcon(p), { size: size === "hero" ? 44 : 22 })}</div>`;
   }
@@ -3100,7 +3099,7 @@
           : loadAnchor();
       const results = await searchGooglePlaces(query, loadTripSettings().googleKey.trim(), anchor);
       hit = results.find((r) => r.lat != null && (!anchor || confirmedWithinAnchor(anchor, r.lat, r.lon, ANCHOR_GRACE)));
-    } catch (e) {
+    } catch {
       // A failed lookup is not worth retrying on every open; it is marked
       // below either way, the same as a photo that could not be found.
     }
@@ -3413,7 +3412,7 @@
       // being written into every backup file.
       delete s.aiKey;
       return JSON.stringify(s);
-    } catch (e) {
+    } catch {
       return rawSettings;
     }
   }
@@ -3515,7 +3514,7 @@
         encoding: "utf8",
         recursive: true,
       });
-    } catch (e) {
+    } catch {
       // A phone that will not let the app write is not a broken app, and it
       // is not worth a message either - the banner already asks for a manual
       // export, and that is still true.
@@ -3546,7 +3545,7 @@
       for (const name of doomed) {
         await fs.deleteFile({ path: name, directory: "DOCUMENTS" }).catch(() => {});
       }
-    } catch (e) {
+    } catch {
       /* an old plugin without readdir just leaves them all, which is fine */
     }
   }
@@ -3731,7 +3730,7 @@
         return `${picks} places (from an earlier version)`;
       }
       return `${boards} board${boards === 1 ? "" : "s"}, ${picks} places, ${planned} planned items`;
-    } catch (e) {
+    } catch {
       return "contents unreadable";
     }
   }
@@ -3760,7 +3759,7 @@
       let value;
       try {
         value = JSON.parse(raw);
-      } catch (e) {
+      } catch {
         // A key this build does not know about is not worth refusing a whole
         // restore over, but one it will read back certainly is.
         const known = rules.some((r) => r.test(key));
@@ -3777,7 +3776,7 @@
     let parsed;
     try {
       parsed = JSON.parse(text);
-    } catch (e) {
+    } catch {
       return { ok: false, message: "That file isn't valid JSON." };
     }
     if (!parsed || parsed.format !== "scotland-trip-backup" || !parsed.data) {
@@ -3825,7 +3824,7 @@
     const localSettings = (() => {
       try {
         return JSON.parse(localStorage.getItem(TRIP_KEY)) || {};
-      } catch (e) {
+      } catch {
         return {};
       }
     })();
@@ -3854,7 +3853,7 @@
             if (localSettings.googleKey) restored.googleKey = localSettings.googleKey;
             store(k, JSON.stringify(restored));
             return;
-          } catch (e) {
+          } catch {
             /* fall through to a plain restore */
           }
         }
@@ -5163,7 +5162,7 @@ ${(() => {
         await navigator.clipboard.writeText(text);
         toast("Copied to clipboard — paste it into WhatsApp");
         return;
-      } catch (e) {
+      } catch {
         // fall through
       }
     }
@@ -5210,7 +5209,7 @@ ${(() => {
         // path, so failing quietly here is fine.
         try {
           if (document.execCommand("copy")) toast("Copied");
-        } catch (e) {
+        } catch {
           /* the text is selected either way - a long-press copy still works */
         }
       });
@@ -6644,7 +6643,7 @@ ${(() => {
     let result = null;
     try {
       result = build(raw, hoursContextFor(pick));
-    } catch (e) {
+    } catch {
       // Overwhelmingly this is "PH used without a country". Dropping the
       // holiday clause keeps the ordinary week, which is most of the value.
       const withoutHolidays = raw
@@ -6684,7 +6683,7 @@ ${(() => {
         // When it shuts, if it is open; when it opens, if it is not.
         change: change instanceof Date && !Number.isNaN(change.getTime()) ? change : null,
       };
-    } catch (e) {
+    } catch {
       return { known: false };
     }
   }
@@ -7737,7 +7736,7 @@ ${(() => {
   function loadChecked() {
     try {
       return JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
-    } catch (e) {
+    } catch {
       return {};
     }
   }
@@ -8376,7 +8375,7 @@ ${(() => {
           lon: centre.lon,
           miles: toMiles(radiusMetres / 1000),
         });
-      } catch (e) {
+      } catch {
         geo = null;
       }
       // The distance check only ever ran when the place had been found, so
@@ -9508,7 +9507,7 @@ ${(() => {
           answer = list;
           break;
         }
-      } catch (e) {
+      } catch {
         // The other attempt may still answer.
       }
     }
@@ -9870,7 +9869,7 @@ ${(() => {
         if (depth === 0 && from >= 0) {
           try {
             out.push(JSON.parse(text.slice(from, i + 1)));
-          } catch (e) {
+          } catch {
             /* not valid on its own; the whole answer is still read at the end */
           }
           from = -1;
@@ -9931,7 +9930,7 @@ ${(() => {
       let geo = null;
       try {
         geo = await geocodePlace(attempt.q, attempt.hint, anchor);
-      } catch (e) {
+      } catch {
         geo = null;
       }
       if (!geo) continue;
@@ -9966,7 +9965,7 @@ ${(() => {
     let anywhere = null;
     try {
       anywhere = await geocodePlace(event.area, null, null);
-    } catch (e) {
+    } catch {
       anywhere = null;
     }
     if (anywhere) {
@@ -10031,7 +10030,7 @@ ${(() => {
           lastGeocodeFromCache = true;
           await next();
           wentToNetwork = !lastGeocodeFromCache;
-        } catch (e) {
+        } catch {
           // One event failing to place is not the queue failing.
         }
         if (items.length && !stopped && wentToNetwork) {
@@ -10634,7 +10633,7 @@ ${(() => {
         try {
           await navigator.clipboard.writeText(box.value || prompt);
           copied = true;
-        } catch (e) {
+        } catch {
           // Falls through to selecting it, which a long-press can copy.
         }
       }
@@ -10679,7 +10678,7 @@ ${(() => {
         document.getElementById("handoffPrompt").value = prompt;
         const found = towns.length + Object.values(venues).reduce((n, v) => n + v.length, 0);
         note.textContent = found ? "Added the towns and venues found nearby." : "Couldn't look up nearby towns just now, so it asks without names.";
-      } catch (e) {
+      } catch {
         if (note) note.textContent = "Couldn't look up nearby towns just now, so it asks without names.";
       }
     })();
@@ -10782,7 +10781,7 @@ ${(() => {
       let names = [];
       try {
         names = await settlementsNear(point.lat, point.lon, corridorMetres);
-      } catch (e) {
+      } catch {
         names = [];
       }
       const { alongKm } = projectOntoRoute(point, from, to);
@@ -11220,7 +11219,7 @@ ${(() => {
             lon: pos.lon,
             miles: anchorMiles(evCentreNow()),
           });
-        } catch (err) {
+        } catch {
           whereSay("Couldn't get your location.");
         }
       });
@@ -12768,7 +12767,7 @@ ${(() => {
       ctx.towns = route
         ? await routeTowns(route.from, route.to, (route.miles || DEFAULT_CORRIDOR_MILES) * 1609)
         : await townsAround(centre, radius);
-    } catch (e) {
+    } catch {
       // The prompt falls back to the radius wording. Never fatal.
     }
     if (generation !== eventGeneration) return;
@@ -12779,7 +12778,7 @@ ${(() => {
       if (!kindsNow.includes(kindKey) || route) continue;
       try {
         ctx.venues[kindKey] = await venuesNear(centre.lat, centre.lon, radius, osm);
-      } catch (e) {
+      } catch {
         ctx.venues[kindKey] = [];
       }
     }
@@ -15239,7 +15238,7 @@ ${(() => {
     let geo = null;
     try {
       geo = await geocodePlace(from, null);
-    } catch (e) {
+    } catch {
       geo = null;
     }
     ideaStartGeo = geo ? { query: from, lat: geo.lat, lon: geo.lon } : null;
@@ -15277,7 +15276,7 @@ ${(() => {
             stop.area || null,
             start ? { name: tripIdea.brief.from, lat: start.lat, lon: start.lon, miles: tripIdea.brief.miles || 150 } : null
           );
-        } catch (e) {
+        } catch {
           geo = null;
         }
         if (geo) {
@@ -15889,7 +15888,7 @@ ${(() => {
       tripIdea.brief.from = place || `${pos.lat.toFixed(3)}, ${pos.lon.toFixed(3)}`;
       ideaStartGeo = { query: tripIdea.brief.from, lat: pos.lat, lon: pos.lon };
       saveIdea();
-    } catch (e) {
+    } catch {
       toast("Couldn't get your location");
     }
     renderIdea();
@@ -16148,7 +16147,7 @@ ${(() => {
       renderSearchOverlay();
       placeSearchResults(generation, anchor);
       return;
-    } catch (e) {
+    } catch {
       if (generation !== searchGeneration) return;
       pickSearch = { query: q, status: seed ? "done" : "error", results: seed ? [seed] : [], guidance: extra, anchor: searchAnchor };
     }
@@ -16167,7 +16166,7 @@ ${(() => {
       let geo = null;
       try {
         geo = await geocodePlace(r.name, r.postcode || r.area || null, anchor);
-      } catch (e) {
+      } catch {
         geo = null;
       }
       if (generation !== searchGeneration) return;
@@ -16861,7 +16860,7 @@ ${(() => {
             lon: pos.lon,
             miles,
           });
-        } catch (err) {
+        } catch {
           say("Couldn't get your location.");
         }
       });
@@ -17474,7 +17473,7 @@ ${(() => {
     for (const url of anchor ? [`${base}&bounded=1&viewbox=${encodeURIComponent(anchorViewbox(anchor))}`, base] : [base]) {
       try {
         data = (await cachedJson(url, { headers: { Accept: "application/json" } })).data;
-      } catch (e) {
+      } catch {
         return [];
       }
       if (Array.isArray(data) && data.some((r) => looksLikeMajorPlace({ type: r.type }))) break;
@@ -17713,7 +17712,7 @@ ${(() => {
         req.onsuccess = () => resolve(req.result === undefined ? null : req.result);
         req.onerror = () => resolve(null);
       });
-    } catch (e) {
+    } catch {
       return null;
     }
   }
@@ -17731,7 +17730,7 @@ ${(() => {
         tx.oncomplete = () => resolve(true);
         tx.onerror = () => resolve(false);
       });
-    } catch (e) {
+    } catch {
       return false;
     }
   }
@@ -17755,7 +17754,7 @@ ${(() => {
       // is not worth the room on a phone.
       if (blob.size > 900000) return;
       await dbPut(PHOTO_STORE, url, blob);
-    } catch (e) {
+    } catch {
       /* no signal, or the picture has gone - nothing to record */
     }
   }
@@ -17769,19 +17768,18 @@ ${(() => {
     return photoObjectUrls[url];
   }
 
-  // Called from the <img> itself, which is the only place that knows whether
-  // the picture arrived. Both handlers are on window because the markup is
-  // built as a string in a dozen places.
-  window.__photoSeen = (img) => {
+  // Whether a picture arrived is only known to its <img>. load and error do
+  // not bubble, so one listener on the document in the capture phase hears
+  // them for markup built as a string in a dozen places - and, unlike an
+  // inline onload="", is allowed under the Content-Security-Policy.
+  const photoSeen = (img) => {
     keepPhoto(img.getAttribute("data-photo") || img.src);
   };
 
-  window.__photoGone = (img) => {
+  const photoGone = (img) => {
     const url = img.getAttribute("data-photo") || img.src;
-    // Whatever happens next, this handler must not run again on the same
-    // element, or a cached blob that also fails would loop.
-    img.onerror = null;
-    img.removeAttribute("onerror");
+    // A cached blob that also fails must not come back here and loop.
+    img.setAttribute("data-photo-retried", "1");
     photoFromCache(url).then((objUrl) => {
       if (objUrl) {
         img.src = objUrl;
@@ -17791,6 +17789,23 @@ ${(() => {
       img.remove();
     });
   };
+
+  document.addEventListener(
+    "load",
+    (e) => {
+      const t = e.target;
+      if (t && t.tagName === "IMG" && t.hasAttribute("data-photo")) photoSeen(t);
+    },
+    true
+  );
+  document.addEventListener(
+    "error",
+    (e) => {
+      const t = e.target;
+      if (t && t.tagName === "IMG" && t.hasAttribute("data-photo") && !t.hasAttribute("data-photo-retried")) photoGone(t);
+    },
+    true
+  );
 
   // ---------- The geocoder's answers, kept ----------
   // A place does not move. Asking Nominatim the same question twice is a
@@ -17844,7 +17859,7 @@ ${(() => {
         req.onsuccess = () => resolve(req.result || 0);
         req.onerror = () => resolve(0);
       });
-    } catch (e) {
+    } catch {
       return 0;
     }
   }
@@ -17872,7 +17887,7 @@ ${(() => {
         };
         req.onerror = () => resolve(total);
       });
-    } catch (e) {
+    } catch {
       return 0;
     }
   }
@@ -17898,7 +17913,7 @@ ${(() => {
         tx.oncomplete = resolve;
         tx.onerror = resolve;
       });
-    } catch (e) {
+    } catch {
       /* nothing cached to clear */
     }
   }
@@ -18120,7 +18135,7 @@ ${(() => {
           }
           await new Promise((r) => setTimeout(r, 60));
         }
-      } catch (e) {
+      } catch {
         // A missing tile is a grey square later, not a failed download.
       }
       if (onProgress && done % 5 === 0) onProgress(done, wanted.length);
@@ -18721,7 +18736,7 @@ ${(() => {
       ].filter(Boolean);
       const unique = parts.filter((p, i) => parts.indexOf(p) === i);
       return unique.length ? unique.join(", ") : data.name || null;
-    } catch (e) {
+    } catch {
       return null;
     }
   }
@@ -19180,7 +19195,7 @@ ${(() => {
           again.focus();
           try {
             again.setSelectionRange(caret, caret);
-          } catch (e) {
+          } catch {
             /* a search input can refuse a range; the focus is the point */
           }
         }
@@ -19554,7 +19569,7 @@ ${(() => {
         return { polar: true, up: !!(t.nadir && SC.getPosition(t.nadir, anchor.lat, anchor.lon).altitude > 0) };
       }
       return { sunrise: t.sunrise, sunset: t.sunset, dusk: ok(t.dusk) ? t.dusk : null };
-    } catch (e) {
+    } catch {
       return null;
     }
   }
@@ -19637,7 +19652,7 @@ ${(() => {
       if (current && current.display === "granted") return true;
       const asked = await plugin.requestPermissions();
       return !!(asked && asked.display === "granted");
-    } catch (e) {
+    } catch {
       return false;
     }
   }
@@ -19873,7 +19888,7 @@ ${(() => {
             saveNotifySettings({ enabled: false });
             return;
           }
-        } catch (e) {
+        } catch {
           /* a plugin that cannot be asked is assumed to be fine */
         }
       }
@@ -19888,7 +19903,7 @@ ${(() => {
           (n) => Number(n.id) >= 1000 && !isWeeklyCheckId(n.id)
         );
         if (mine.length) await plugin.cancel({ notifications: mine.map((n) => ({ id: n.id })) });
-      } catch (e) {
+      } catch {
         /* nothing pending, or an older plugin - scheduling still works */
       }
 
@@ -19904,7 +19919,7 @@ ${(() => {
         });
       }
       store(NOTIFY_FINGERPRINT_KEY, print);
-    } catch (e) {
+    } catch {
       // A phone that refuses to schedule is not a reason for a broken app.
       // The screen still says everything these would have said.
     } finally {
@@ -19921,7 +19936,7 @@ ${(() => {
         (n) => Number(n.id) >= 1000 && !isWeeklyCheckId(n.id)
       );
       if (mine.length) await plugin.cancel({ notifications: mine.map((n) => ({ id: n.id })) });
-    } catch (e) {
+    } catch {
       /* nothing to cancel */
     }
     store(NOTIFY_FINGERPRINT_KEY, "");
@@ -19961,7 +19976,7 @@ ${(() => {
     traceSaveTimer = setTimeout(() => {
       try {
         store(TRACE_KEY, JSON.stringify(searchTrace));
-      } catch (e) {
+      } catch {
         /* a full phone loses the trace, not the search */
       }
     }, 300);
@@ -19980,7 +19995,7 @@ ${(() => {
     try {
       const info = await app.getInfo();
       appBuild = `${info.version || "?"} (${info.build || "?"})`;
-    } catch (e) {
+    } catch {
       /* unknown is fine */
     }
   })();
@@ -20050,7 +20065,7 @@ ${(() => {
       try {
         await navigator.clipboard.writeText(text);
         toast("Copied — paste it into a message");
-      } catch (e) {
+      } catch {
         toast("Couldn't copy — use Share instead");
       }
     });
@@ -20148,12 +20163,12 @@ ${(() => {
         const pending = await plugin.getPending();
         const mine = ((pending && pending.notifications) || []).filter((n) => isWeeklyCheckId(n.id));
         if (mine.length) await plugin.cancel({ notifications: mine.map((n) => ({ id: n.id })) });
-      } catch (e) {
+      } catch {
         /* nothing pending */
       }
       if (wanted.length) await plugin.schedule({ notifications: wanted });
       store(WEEKLY_FINGERPRINT_KEY, print);
-    } catch (e) {
+    } catch {
       // The checks are still saved; the next change or launch tries again.
     } finally {
       weeklyScheduling = false;
@@ -20337,7 +20352,7 @@ ${(() => {
         }
         showView(extra.tab || "today");
       });
-    } catch (e) {
+    } catch {
       /* an older plugin without listeners still fires the notifications */
     }
   }
@@ -21016,7 +21031,7 @@ ${(() => {
       const low = priced.reduce((a, l) => a + l.low, 0) + trip.reduce((a, l) => a + l.low, 0) + ownTotal;
       const high = priced.reduce((a, l) => a + l.high, 0) + trip.reduce((a, l) => a + l.high, 0) + ownTotal;
       if (low || high) budgetLine = low === high ? money(low) : `${money(low)}–${money(high)}`;
-    } catch (e) {
+    } catch {
       // A budget that cannot be totalled is not a reason for this screen to
       // fail; the row still opens the screen that can explain itself.
     }
@@ -21189,7 +21204,7 @@ ${(() => {
   function armBackButton() {
     try {
       history.pushState({ appNav: true }, "");
-    } catch (e) {
+    } catch {
       /* a file:// origin can refuse pushState; the on-screen ✕ still works */
     }
   }
@@ -21559,7 +21574,7 @@ ${(() => {
         try {
           bar.setStyle({ style: dark ? "DARK" : "LIGHT" });
           bar.setBackgroundColor({ color: dark ? "#12161b" : "#f7f6f3" });
-        } catch (e) {
+        } catch {
           /* An older WebView without one of these is not worth a broken app. */
         }
       };
@@ -21577,7 +21592,7 @@ ${(() => {
     try {
       if (kind === "heavy") haptics.notification({ type: "SUCCESS" });
       else haptics.impact({ style: kind === "medium" ? "MEDIUM" : "LIGHT" });
-    } catch (e) {
+    } catch {
       /* Not every device has a motor, and none of this is load-bearing. */
     }
   }

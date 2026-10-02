@@ -159,7 +159,7 @@ await page.evaluate(() => {
 const wrote = await page.evaluate(() => window.__tripTest.store('some-key', 'x'));
 check('a write that cannot happen answers that it did not', wrote === false, String(wrote));
 check('rather than throwing out of whatever was running',
-  await page.evaluate(() => { try { window.__tripTest.store('k', 'v'); return 'returned'; } catch (e) { return 'threw'; } }) === 'returned');
+  await page.evaluate(() => { try { window.__tripTest.store('k', 'v'); return 'returned'; } catch { return 'threw'; } }) === 'returned');
 check('and says what is actually wrong, in words with something to do in them',
   await page.evaluate(() => /storage/i.test(document.body.textContent) && /backup/i.test(document.body.textContent)),
   await page.evaluate(() => (document.querySelector('.toast') || {}).textContent || document.body.textContent.slice(-200)));

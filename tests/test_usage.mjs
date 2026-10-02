@@ -35,7 +35,7 @@ await page.route(/wikidata|wikipedia|overpass|tile\.|photon|places\.googleapis|o
 // Google's own counts, which is the whole point: not something we work out.
 let reportUsage = true;
 await page.route(/generativelanguage\.googleapis\.com/, (route) => {
-  if (/\/models\?/.test(route.request().url())) {
+  if (/\/models(\?|$)/.test(route.request().url())) {
     return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
       models: [{ name: 'models/gemini-3.5-flash-lite', supportedGenerationMethods: ['generateContent'] }] }) });
   }

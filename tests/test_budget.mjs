@@ -24,11 +24,11 @@ page.on('pageerror', (e) => { console.log('PAGEERROR:', e.message); failures++; 
 
 let asked = '';
 await page.route(/generativelanguage\.googleapis\.com/, (route) => {
-  if (/\/models\?/.test(route.request().url())) {
+  if (/\/models(\?|$)/.test(route.request().url())) {
     return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
       models: [{ name: 'models/gemini-3.5-flash-lite', supportedGenerationMethods: ['generateContent'] }] }) });
   }
-  try { asked = JSON.parse(route.request().postData() || '{}').contents[0].parts[0].text; } catch (e) { /* not a prompt */ }
+  try { asked = JSON.parse(route.request().postData() || '{}').contents[0].parts[0].text; } catch { /* not a prompt */ }
   return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
     candidates: [{ content: { parts: [{ text: JSON.stringify({
       places: [

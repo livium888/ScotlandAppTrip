@@ -3455,6 +3455,7 @@ html, body {
   padding: 10px 0;
   outline: none;
 }
+.find-bar:focus-within { border-color: var(--teal); box-shadow: 0 0 0 2px var(--teal); }
 .find-input::-webkit-search-cancel-button { display: none; }
 .find-clear {
   flex: none;

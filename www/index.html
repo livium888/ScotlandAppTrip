@@ -2,7 +2,12 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<!-- Scripts only from the app itself: no inline, no eval. A missed escape of
+     text from OpenStreetMap or a language model is then a bug, not a script.
+     Network and pictures stay open on purpose - the places and maps come from
+     many hosts, and a self-hosted model can be on http://localhost. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https: http:; font-src 'self' data:; connect-src 'self' https: http:; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'" />
 <title>Wayfare</title>
 <link rel="stylesheet" href="vendor/leaflet/leaflet.css" />
 <link rel="stylesheet" href="css/style.css" />

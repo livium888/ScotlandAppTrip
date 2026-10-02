@@ -29,7 +29,7 @@ await page.setViewportSize({ width: 390, height: 420 });
 page.on('pageerror', (e) => { console.log('PAGEERROR:', e.message); failures++; });
 
 await page.route(/generativelanguage\.googleapis\.com/, (route) => {
-  if (/\/models\?/.test(route.request().url())) {
+  if (/\/models(\?|$)/.test(route.request().url())) {
     return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
       models: [{ name: 'models/gemini-3.5-flash-lite', supportedGenerationMethods: ['generateContent'] }] }) });
   }

@@ -1,4 +1,4 @@
-# Assurance review — Scotland with Ally
+# Assurance review — Wayfare
 
 Reviewed against OWASP SAMM's five business functions. A caveat up front:
 SAMM measures an *organisation's* maturity across many teams and products.
@@ -256,3 +256,22 @@ gap between Nominatim calls to stay within what a free community service asks.
 
   The app now says this at the key field, and its 403 handler no longer
   suggests the restriction that would break it.
+
+---
+
+## Addendum — hardening round after the architecture review
+
+Each item below has a test in `tests/test_hardening.mjs`.
+
+- **Content-Security-Policy** added as a meta tag: scripts only from the app
+  itself (no inline, no eval), no plugins, no `<base>`, no form posts, no
+  frames. Network and image sources stay open on purpose - places, maps and
+  pictures come from many hosts and a self-hosted model can be on
+  `http://localhost`. This is a second defence behind `esc()`, not a
+  replacement for it. The two inline `onload`/`onerror` handlers on photos
+  were replaced with capture-phase listeners to make it possible.
+- **Gemini key moved from the URL to the `x-goog-api-key` header**, so it is not
+  in anything that logs addresses. Verify on a real phone after updating: this
+  is the one change here that depends on Gemini's browser CORS behaviour.
+- **Pinch-zoom re-enabled** (`user-scalable=no` removed), WCAG 1.4.4.
+- **Focus ring** restored on the saved-places search box.

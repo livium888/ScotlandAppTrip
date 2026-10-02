@@ -66,7 +66,7 @@ const openHandoff = async () => {
   await page.evaluate(() => { const b = document.getElementById('evHandoff'); if (b) b.click(); });
   try {
     await page.waitForSelector('#handoffPrompt', { timeout: 8000 });
-  } catch (e) {
+  } catch {
     console.log('  (no hand-off sheet)');
   }
   await page.waitForTimeout(300);

@@ -49,7 +49,7 @@ const seed = async (setup) => {
     localStorage.setItem('boards-v1', JSON.stringify(b));
     localStorage.setItem('board:b:picks', JSON.stringify(picks));
     localStorage.setItem('board:b:folders', JSON.stringify(['Bakewell']));
-    // eslint-disable-next-line no-eval
+     
     eval(s);
   }, [board(), goodPicks, setup]);
   await page.reload({ waitUntil: 'load' });

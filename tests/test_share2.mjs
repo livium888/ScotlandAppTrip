@@ -104,7 +104,7 @@ function installMockShareReceiver(page) {
     try {
       window.__mockListeners.sharedPlace({ name: 'Some Random Cafe', rawText: 'Some Random Cafe shared' });
       return true;
-    } catch (e) {
+    } catch {
       return false;
     }
   });

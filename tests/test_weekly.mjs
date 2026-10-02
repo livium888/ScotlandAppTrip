@@ -60,7 +60,7 @@ const saturday = (() => {
 })();
 let prompts = [];
 await page.route(/generativelanguage\.googleapis\.com/, (route) => {
-  if (/\/models\?/.test(route.request().url())) {
+  if (/\/models(\?|$)/.test(route.request().url())) {
     return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
       models: [{ name: 'models/gemini-3.5-flash', supportedGenerationMethods: ['generateContent'] }] }) });
   }

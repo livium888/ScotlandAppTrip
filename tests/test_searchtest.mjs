@@ -23,7 +23,7 @@ const asked = [];
 let broken = false;
 await page.route(/generativelanguage\.googleapis\.com/, (route) => {
   const url = route.request().url();
-  if (/\/models\?/.test(url)) {
+  if (/\/models(\?|$)/.test(url)) {
     return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
       models: [{ name: 'models/gemini-3.5-flash-lite', supportedGenerationMethods: ['generateContent'] },
         { name: 'models/gemini-3.5-flash', supportedGenerationMethods: ['generateContent'] }] }) });

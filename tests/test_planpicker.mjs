@@ -41,7 +41,7 @@ const PICKS = PERTH.concat(EDIN).map(([name, lat, lon, city], i) => ({
 let prompts = [];
 let reply = () => ({});
 await page.route(/generativelanguage\.googleapis\.com/, (route) => {
-  if (/\/models\?/.test(route.request().url())) {
+  if (/\/models(\?|$)/.test(route.request().url())) {
     return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
       models: [{ name: 'models/gemini-3.5-flash-lite', supportedGenerationMethods: ['generateContent'] }] }) });
   }
@@ -279,7 +279,7 @@ await seed({ days: [{ id: 'd1', label: 'Day 1 · Wed 19 Aug' }], items: {} });
 reply = () => 'TRUNCATED';
 await page.unroute(/generativelanguage\.googleapis\.com/);
 await page.route(/generativelanguage\.googleapis\.com/, (route) => {
-  if (/\/models\?/.test(route.request().url())) {
+  if (/\/models(\?|$)/.test(route.request().url())) {
     return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
       models: [{ name: 'models/gemini-3.5-flash-lite', supportedGenerationMethods: ['generateContent'] }] }) });
   }
@@ -309,7 +309,7 @@ check('the request asks for as much room as the trip planner does',
 await seed({ days: [{ id: 'd1', label: 'Day 1 · Wed 19 Aug' }], items: {} });
 await page.unroute(/generativelanguage\.googleapis\.com/);
 await page.route(/generativelanguage\.googleapis\.com/, (route) => {
-  if (/\/models\?/.test(route.request().url())) {
+  if (/\/models(\?|$)/.test(route.request().url())) {
     return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
       models: [{ name: 'models/gemini-3.5-flash-lite', supportedGenerationMethods: ['generateContent'] }] }) });
   }
@@ -341,7 +341,7 @@ check('all three are planned rather than none', planned.length === 3, JSON.strin
 await seed({ days: [{ id: 'd1', label: 'Day 1 · Wed 19 Aug' }], items: {} });
 await page.unroute(/generativelanguage\.googleapis\.com/);
 await page.route(/generativelanguage\.googleapis\.com/, (route) => {
-  if (/\/models\?/.test(route.request().url())) {
+  if (/\/models(\?|$)/.test(route.request().url())) {
     return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
       models: [{ name: 'models/gemini-3.5-flash-lite', supportedGenerationMethods: ['generateContent'] }] }) });
   }

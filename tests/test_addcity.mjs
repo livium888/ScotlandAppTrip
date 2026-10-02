@@ -27,7 +27,7 @@ const page = await browser.newPage();
 // on the way in - re-applied on every navigation, since these tests clear
 // storage and reload.
 await page.addInitScript(() => {
-  try { localStorage.setItem('onboarded-v1', '1'); } catch (e) { /* nothing to do */ }
+  try { localStorage.setItem('onboarded-v1', '1'); } catch { /* nothing to do */ }
 });
 await page.setViewportSize({ width: 390, height: 820 });
 page.on('pageerror', (e) => { console.log('PAGEERROR:', e.message); failures++; });
@@ -38,7 +38,7 @@ const readPicks = () => page.evaluate(() => JSON.parse(localStorage.getItem('boa
 let aiPrompts = [];
 await page.route(/generativelanguage\.googleapis\.com/, (route) => {
   const url = route.request().url();
-  if (/\/models\?/.test(url)) {
+  if (/\/models(\?|$)/.test(url)) {
     return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
       models: [{ name: 'models/gemini-3.5-flash-lite', supportedGenerationMethods: ['generateContent'] }] }) });
   }

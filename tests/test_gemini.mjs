@@ -37,7 +37,7 @@ const page = await browser.newPage();
 // on the way in - re-applied on every navigation, since these tests clear
 // storage and reload.
 await page.addInitScript(() => {
-  try { localStorage.setItem('onboarded-v1', '1'); } catch (e) { /* nothing to do */ }
+  try { localStorage.setItem('onboarded-v1', '1'); } catch { /* nothing to do */ }
 });
 page.on('pageerror', (e) => { console.log('PAGEERROR:', e.message); failures++; });
 
@@ -46,7 +46,7 @@ let osmEmpty = true;
 
 await page.route(/generativelanguage\.googleapis\.com/, async (route) => {
   // Model discovery (GET /models) now precedes generateContent.
-  if (/\/models\?/.test(route.request().url())) {
+  if (/\/models(\?|$)/.test(route.request().url())) {
     return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
       models: [{ name: 'models/gemini-2.5-flash', supportedGenerationMethods: ['generateContent'] }] }) });
   }

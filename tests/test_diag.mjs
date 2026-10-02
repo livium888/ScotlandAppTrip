@@ -20,7 +20,7 @@ const browser = await chromium.launch(LAUNCH_OPTS);
   // The app meets a first-time user with three questions before anything else;
   // these checks are about a trip already under way.
   await page.addInitScript(() => {
-    try { localStorage.setItem('onboarded-v1', '1'); } catch (e) { /* nothing to do */ }
+    try { localStorage.setItem('onboarded-v1', '1'); } catch { /* nothing to do */ }
   });
   page.on('pageerror', (e) => { console.log('PAGEERROR:', e.message); failures++; });
   await page.route(/generativelanguage\.googleapis\.com/, (route) =>
@@ -52,7 +52,7 @@ const browser = await chromium.launch(LAUNCH_OPTS);
   // The app meets a first-time user with three questions before anything else;
   // these checks are about a trip already under way.
   await page.addInitScript(() => {
-    try { localStorage.setItem('onboarded-v1', '1'); } catch (e) { /* nothing to do */ }
+    try { localStorage.setItem('onboarded-v1', '1'); } catch { /* nothing to do */ }
   });
   await page.route(/generativelanguage\.googleapis\.com/, (route) =>
     route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({
@@ -75,13 +75,13 @@ const browser = await chromium.launch(LAUNCH_OPTS);
   // The app meets a first-time user with three questions before anything else;
   // these checks are about a trip already under way.
   await page.addInitScript(() => {
-    try { localStorage.setItem('onboarded-v1', '1'); } catch (e) { /* nothing to do */ }
+    try { localStorage.setItem('onboarded-v1', '1'); } catch { /* nothing to do */ }
   });
   page.on('pageerror', (e) => { console.log('PAGEERROR:', e.message); failures++; });
   let listCalls = 0; let genPath = '';
   await page.route(/generativelanguage\.googleapis\.com/, (route) => {
     const u = route.request().url();
-    if (/\/models\?/.test(u)) {
+    if (/\/models(\?|$)/.test(u)) {
       listCalls++;
       return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ models: [
         { name: 'models/gemini-pro-legacy', supportedGenerationMethods: ['generateContent'] },
@@ -118,7 +118,7 @@ const browser = await chromium.launch(LAUNCH_OPTS);
   // The app meets a first-time user with three questions before anything else;
   // these checks are about a trip already under way.
   await page.addInitScript(() => {
-    try { localStorage.setItem('onboarded-v1', '1'); } catch (e) { /* nothing to do */ }
+    try { localStorage.setItem('onboarded-v1', '1'); } catch { /* nothing to do */ }
   });
   page.on('pageerror', (e) => { console.log('PAGEERROR:', e.message); failures++; });
   await page.route(/nominatim\.openstreetmap\.org/, (route) =>

@@ -89,12 +89,12 @@ const BIG_TRIP = { options: [0, 1, 2].map((o) => ({
 
 let aiPrompts = [];
 await page.route(/generativelanguage\.googleapis\.com/, (route) => {
-  if (/\/models\?/.test(route.request().url())) {
+  if (/\/models(\?|$)/.test(route.request().url())) {
     return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
       models: [{ name: 'models/gemini-3.5-flash-lite', supportedGenerationMethods: ['generateContent'] }] }) });
   }
   let prompt = '';
-  try { prompt = JSON.parse(route.request().postData() || '{}').contents[0].parts[0].text; } catch (e) { /* not a prompt */ }
+  try { prompt = JSON.parse(route.request().postData() || '{}').contents[0].parts[0].text; } catch { /* not a prompt */ }
   aiPrompts.push(prompt);
   return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
     candidates: [{ content: { parts: [{ text: JSON.stringify(/a big one/.test(prompt) ? BIG_TRIP : TRIP) }] } }] }) });
@@ -685,7 +685,7 @@ check('every tap target is big enough to hit', await page.evaluate(() => {
 let attempts = [];
 await page.unroute(/generativelanguage\.googleapis\.com/);
 await page.route(/generativelanguage\.googleapis\.com/, (route) => {
-  if (/\/models\?/.test(route.request().url())) {
+  if (/\/models(\?|$)/.test(route.request().url())) {
     return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
       models: [{ name: 'models/gemini-3.5-flash-lite', supportedGenerationMethods: ['generateContent'] }] }) });
   }
@@ -724,7 +724,7 @@ check('and asks for enough room that a whole trip is not cut off mid-object',
 // 2. The model answers with the right thing under a different key.
 await page.unroute(/generativelanguage\.googleapis\.com/);
 await page.route(/generativelanguage\.googleapis\.com/, (route) => {
-  if (/\/models\?/.test(route.request().url())) {
+  if (/\/models(\?|$)/.test(route.request().url())) {
     return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
       models: [{ name: 'models/gemini-3.5-flash-lite', supportedGenerationMethods: ['generateContent'] }] }) });
   }
@@ -761,7 +761,7 @@ check('including a stop written as a bare name', await page.evaluate(() =>
 //     how the day planner's reader was caught out.
 await page.unroute(/generativelanguage\.googleapis\.com/);
 await page.route(/generativelanguage\.googleapis\.com/, (route) => {
-  if (/\/models\?/.test(route.request().url())) {
+  if (/\/models(\?|$)/.test(route.request().url())) {
     return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
       models: [{ name: 'models/gemini-3.5-flash-lite', supportedGenerationMethods: ['generateContent'] }] }) });
   }
@@ -787,7 +787,7 @@ check('and both of them survive the unwrapping', await page.evaluate(() =>
 // 3. When it really cannot be read, say what came back rather than nothing.
 await page.unroute(/generativelanguage\.googleapis\.com/);
 await page.route(/generativelanguage\.googleapis\.com/, (route) => {
-  if (/\/models\?/.test(route.request().url())) {
+  if (/\/models(\?|$)/.test(route.request().url())) {
     return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
       models: [{ name: 'models/gemini-3.5-flash-lite', supportedGenerationMethods: ['generateContent'] }] }) });
   }
@@ -817,7 +817,7 @@ check('and offers a way on rather than a dead end', await page.evaluate(() =>
 
 await page.unroute(/generativelanguage\.googleapis\.com/);
 await page.route(/generativelanguage\.googleapis\.com/, async (route) => {
-  if (/\/models\?/.test(route.request().url())) {
+  if (/\/models(\?|$)/.test(route.request().url())) {
     return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
       models: [{ name: 'models/gemini-3.5-flash-lite', supportedGenerationMethods: ['generateContent'] }] }) });
   }

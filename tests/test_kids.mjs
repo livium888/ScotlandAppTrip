@@ -29,11 +29,11 @@ page.on('pageerror', (e) => { console.log('PAGEERROR:', e.message); failures++; 
 
 let aiPrompts = [];
 await page.route(/generativelanguage\.googleapis\.com/, (route) => {
-  if (/\/models\?/.test(route.request().url())) {
+  if (/\/models(\?|$)/.test(route.request().url())) {
     return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
       models: [{ name: 'models/gemini-3.5-flash-lite', supportedGenerationMethods: ['generateContent'] }] }) });
   }
-  try { aiPrompts.push(JSON.parse(route.request().postData() || '{}').contents[0].parts[0].text); } catch (e) { /* not a prompt */ }
+  try { aiPrompts.push(JSON.parse(route.request().postData() || '{}').contents[0].parts[0].text); } catch { /* not a prompt */ }
   return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
     candidates: [{ content: { parts: [{ text: JSON.stringify([
       { name: 'The Play Barn', area: 'Pitlochry', postcode: '', why: 'Indoor, and it has a coffee machine.' },

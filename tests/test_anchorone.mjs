@@ -27,7 +27,7 @@ const page = await browser.newPage();
 await page.setViewportSize({ width: 390, height: 844 });
 page.on('pageerror', (e) => { console.log('PAGEERROR:', e.message); failures++; });
 await page.addInitScript(() => {
-  try { localStorage.setItem('onboarded-v1', '1'); } catch (e) { /* nothing to do */ }
+  try { localStorage.setItem('onboarded-v1', '1'); } catch { /* nothing to do */ }
 });
 await page.route(/generativelanguage|wikidata|wikipedia|overpass|tile\.|open-meteo|photon|places\.googleapis|upload\./, (r) => r.abort());
 // Records every bounding box the app asks the geocoder for.

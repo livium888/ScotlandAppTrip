@@ -25,7 +25,7 @@ const page = await browser.newPage();
 // on the way in - re-applied on every navigation, since these tests clear
 // storage and reload.
 await page.addInitScript(() => {
-  try { localStorage.setItem('onboarded-v1', '1'); } catch (e) { /* nothing to do */ }
+  try { localStorage.setItem('onboarded-v1', '1'); } catch { /* nothing to do */ }
 });
 await page.setViewportSize({ width: 390, height: 820 });
 page.on('pageerror', (e) => { console.log('PAGEERROR:', e.message); failures++; });
@@ -45,12 +45,12 @@ let geoDelayMs = () => 0;
 let wikiDelayMs = () => 0;
 
 await page.route(/generativelanguage\.googleapis\.com/, async (route) => {
-  if (/\/models\?/.test(route.request().url())) {
+  if (/\/models(\?|$)/.test(route.request().url())) {
     return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
       models: [{ name: 'models/gemini-3.5-flash-lite', supportedGenerationMethods: ['generateContent'] }] }) });
   }
   let prompt = '';
-  try { prompt = JSON.parse(route.request().postData() || '{}').contents[0].parts[0].text; } catch (e) { /* not a prompt we care about */ }
+  try { prompt = JSON.parse(route.request().postData() || '{}').contents[0].parts[0].text; } catch { /* not a prompt we care about */ }
   const wait = aiDelayMs(prompt);
   if (wait) await sleep(wait);
   return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({

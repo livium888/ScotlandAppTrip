@@ -7,18 +7,22 @@ It began as an app for one family's week in Scotland, and everything specific
 to that trip has since been taken out. What is left works anywhere: you tell it
 where you're going and who's coming, and the rest follows from that.
 
-The app has six tabs:
+The app has three tabs:
 
-- **Today** — the day's stops in time order, with the next one flagged, walking
-  times between them, and the forecast at the top
-- **Kids** — the places they'll actually enjoy, and searches worded for the age
-  of the child you have
-- **Itinerary** — day-by-day plan; drop saved places into days and give them times
-- **Picks** — everything you've saved, grouped by area, filtered by All / To do /
-  Eat, plus search and "explore around a place"
-- **Budget** — cost breakdown and running total
-- **Tips** — walking-with-a-4-year-old advice, crowd-avoidance, safety notes, and
-  a tappable packing checklist
+- **Trip** — the plan before you go and today's stops while you're there. Days
+  hold saved places with times; the next stop is flagged, with walking times
+  between stops and the forecast at the top. Kids' activities, the budget and
+  the notes and packing checklist are reached from here.
+- **Find** — what's on near you, over the dates you choose: events, cinema,
+  theatre, children's sessions, places nearby, a weekly check before the
+  weekend, and whole days out with the stops in order. There is also an "Ask
+  somewhere else" route: copy a ready-made question into any assistant and
+  paste the answer back.
+- **Saved** — everything you've saved, grouped by area, filtered by All / To do /
+  Eat / On, with search once you have a few.
+
+A Kids / Adults switch in the top bar changes what is suggested and how searches
+are worded.
 
 ## What needs signal, and what doesn't
 

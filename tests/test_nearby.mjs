@@ -22,14 +22,14 @@ const page = await browser.newPage();
 await page.setViewportSize({ width: 390, height: 844 });
 page.on('pageerror', (e) => { console.log('PAGEERROR:', e.message); failures++; });
 await page.addInitScript(() => {
-  try { localStorage.setItem('onboarded-v1', '1'); } catch (e) { /* nothing to do */ }
+  try { localStorage.setItem('onboarded-v1', '1'); } catch { /* nothing to do */ }
 });
 
 // Four suggestions: one genuinely nearby, one the geocoder cannot place at
 // all, one that places hundreds of miles away, and one more nearby - the
 // exact mix that produced a Chelsea in a Stirling search.
 await page.route(/generativelanguage\.googleapis\.com/, (route) => {
-  if (/\/models\?/.test(route.request().url())) {
+  if (/\/models(\?|$)/.test(route.request().url())) {
     return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
       models: [{ name: 'models/gemini-3.5-flash-lite', supportedGenerationMethods: ['generateContent'] }] }) });
   }
