@@ -4306,3 +4306,8 @@ html, body {
 .ts-exchange { border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; margin-bottom: 8px; background: var(--card); }
 .ts-exchange summary { cursor: pointer; min-height: 44px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
 .ts-first { color: var(--text-muted); font-size: var(--type-xs); flex-basis: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Rain plan: a wet day's outdoor stops, and the way to somewhere dry. */
+.rain-plan { display: flex; flex-direction: column; gap: 8px; margin: 8px 0; padding: 10px 12px; border: 1px solid var(--warn); border-radius: 10px; background: var(--card); }
+.rain-plan-text { font-size: var(--type-md); line-height: 1.4; }
+.rain-plan-btn { align-self: flex-start; min-height: 44px; }

@@ -3,6 +3,7 @@ import { createStorage } from "./lib/storage.js";
 import { createExchangeLog, reportText, exchangeText } from "./lib/exchangelog.js";
 import { runChecks } from "./lib/diagnostics.js";
 import { planShareText } from "./lib/shareplan.js";
+import { rainPlan, rainBannerHtml, rainCategoryKey } from "./lib/rain.js";
 import { viewboxFor, parseNominatimVenues, venuesLine as venuesLineFor, firstNonEmpty } from "./lib/venues.js";
 import { createBudgetScreen } from "./screens/budget.js";
 import { createTipsScreen } from "./screens/tips.js";
@@ -6008,6 +6009,7 @@ ${(() => {
             <button class="plan-day-remove" data-remove-day="${esc(day.id)}" aria-label="Remove day">${icon('close', { size: 17, cls: 'ico-inline' })}</button>
           </div>
           ${weatherLine(forecast, { quiet: true })}
+          ${rainBanner(day.id, forecast)}
           ${daylightLine(dateForDayLabel(day.label), dayWeatherAnchor(day.id))}
           <div class="plan-items" data-plan-day="${esc(day.id)}">
       `;
@@ -17783,6 +17785,35 @@ ${(() => {
     const day = w.days.find((d) => d.date === isoDate(date));
     return day ? { day, stale: w.stale, place: anchor.name } : null;
   }
+
+  // On a wet day, which planned stops are outdoors, and the way to indoor
+  // alternatives near them (see lib/rain.js). It points; it never changes the
+  // plan, and it asks nothing of the model until you tap Search. On the Plan
+  // screen only: Today already has its own "Wet day" button, and Plan - where
+  // a trip is arranged days ahead - had the weather but nothing to do about it.
+  function rainBanner(dayId, forecast) {
+    if (!forecast || forecast.tooFar || !forecast.day) return "";
+    const plan = loadPlan();
+    const byId = {};
+    loadPicks().forEach((p) => (byId[p.id] = p));
+    const stops = itemsInDayOrder(planItems(plan, dayId)).map((it) => byId[it.pickId]).filter(Boolean);
+    return rainBannerHtml(rainPlan({ stops, rainChance: forecast.day.rainChance }), icon);
+  }
+
+  // Delegated, so it works on whichever screen drew the banner. Opens Explore
+  // centred on the stop with the indoor search chosen - and stops there: the
+  // search itself is the next tap, so nothing is spent until you ask.
+  view.addEventListener("click", (e) => {
+    const btn = e.target.closest && e.target.closest("[data-rain-search]");
+    if (!btn) return;
+    explore.open = true;
+    showView("explore");
+    setExploreCentreFromPick(btn.getAttribute("data-rain-search"));
+    explore.category = rainCategoryKey(showsKids());
+    explore.customQuery = "";
+    markExploreStale();
+    redrawExplore();
+  });
 
   function weatherLine(f, opts) {
     if (!f) return "";
