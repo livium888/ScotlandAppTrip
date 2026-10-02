@@ -9,7 +9,8 @@ import { esc, safeUrl, cityColor } from '../www/js/lib/text.js';
 import { haversineKm, toMiles, formatDistance, formatDuration, legLabel } from '../www/js/lib/geo.js';
 import { timeToMinutes, formatTime, labelForDate, dayCodeFromLabel, clockOf, shortDayLabel, isoDate } from '../www/js/lib/time.js';
 import { icsEscape, icsFold, icsStamp, icsDay } from '../www/js/lib/ics.js';
-import { describeGeminiError, scoreGeminiModel, chooseGeminiModel, scoreSearchModel, rateForModel, money4, openAiCitations, isQuotaError, readGeminiStream } from '../www/js/lib/ai.js';
+import { describeGeminiError, scoreGeminiModel, chooseGeminiModel, scoreSearchModel, rateForModel, money4, openAiCitations, readGeminiStream } from '../www/js/lib/ai.js';
+import { isQuotaError } from '../www/js/lib/storage.js';
 import { extractJson, partialListings, lineFormat, parseListingLines } from '../www/js/lib/listings.js';
 
 let failures = 0;

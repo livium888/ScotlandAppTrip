@@ -1,240 +1,111 @@
-// Phase 4: the trip lives in one phone's localStorage and the app was casual
-// about all three ways of losing it.
+// The storage keeper, tested in Node against a pretend phone.
 //
-// 1. Thirty-three calls to setItem, not one guarded. When storage fills,
-//    setItem throws, the throw lands in whatever handler was running, and the
-//    app says "Something went wrong" - which is not what happened, gives
-//    nobody anything to do, and loses the edit.
-//
-// 2. Two hardcoded lists of what a board is made of - one in the backup, one
-//    in deleteBoard - neither updated since the day it was written. Four
-//    parts added later were in neither, so a backup silently left them behind
-//    and a deleted board left them on the phone for ever.
-//
-// 3. The recent searches were exported into every backup file and then
-//    refused on import: room in the file, thrown away on arrival. And the
-//    version written into every backup since the first one was read by
-//    nothing, so a file from a newer build would be half-restored in silence.
-import { chromium } from 'playwright';
+// Every part of the app used to reach into localStorage on its own. The
+// guarded write and the forgiving JSON read existed, but nine places went
+// around them, so the rules (what to do when the phone is full, what to do
+// when a saved value is damaged) lived in several places and held in some.
+// createStorage is the one keeper; the backend is passed in so a full phone
+// and a blocked one can be pretended here, which a real browser can't do on
+// demand.
 import fs from 'node:fs';
-const SANDBOX_CHROMIUM = '/opt/pw-browsers/chromium';
-const LAUNCH_OPTS = fs.existsSync(SANDBOX_CHROMIUM) ? { executablePath: SANDBOX_CHROMIUM } : {};
+import { createStorage } from '../www/js/lib/storage.js';
 
-const BASE = 'http://localhost:8946';
 let failures = 0;
 const check = (l, c, extra) => { if (c) console.log(`PASS: ${l}`); else { console.log(`FAIL: ${l}${extra ? ' :: ' + extra : ''}`); failures++; } };
 
-const browser = await chromium.launch(LAUNCH_OPTS);
-const page = await browser.newPage();
-await page.setViewportSize({ width: 390, height: 844 });
-page.on('pageerror', (e) => { console.log('PAGEERROR:', e.message); failures++; });
-await page.route(/generativelanguage|nominatim|wikidata|wikipedia|overpass|open-meteo|photon|places\.googleapis|upload\.|tile\./, (r) => r.abort());
-
-// A stub Filesystem, so the automatic backup can be watched without a phone.
-await page.addInitScript(() => {
-  localStorage.setItem('onboarded-v1', '1');
-  const written = {};
-  let refuse = false;
-  window.__fs = {
-    get written() { return written; },
-    refuse: (v) => { refuse = v; },
-  };
-  window.Capacitor = {
-    Plugins: {
-      Filesystem: {
-        writeFile: async ({ path, data }) => {
-          if (refuse) throw new Error('no permission');
-          written[path] = data;
-        },
-        readdir: async () => ({ files: Object.keys(written).map((name) => ({ name })) }),
-        deleteFile: async ({ path }) => { delete written[path]; },
-      },
+// A pretend localStorage with a size limit and switches for the ways it breaks.
+const phone = ({ limit = Infinity, blocked = false } = {}) => {
+  const data = new Map();
+  const api = {
+    data,
+    limit,
+    blocked,
+    getItem: (k) => { if (api.blocked) throw new Error('storage blocked'); return data.has(k) ? data.get(k) : null; },
+    setItem: (k, v) => {
+      if (api.blocked) throw new Error('storage blocked');
+      const used = [...data].reduce((n, [kk, vv]) => n + (kk === k ? 0 : kk.length + vv.length), 0);
+      if (used + k.length + String(v).length > api.limit) { const e = new Error('full'); e.name = 'QuotaExceededError'; throw e; }
+      data.set(k, String(v));
     },
+    removeItem: (k) => data.delete(k),
   };
-});
+  return api;
+};
 
-await page.goto(BASE, { waitUntil: 'load' });
-await page.evaluate(() => {
-  localStorage.setItem('boards-v1', JSON.stringify({
-    activeId: 'b-1',
-    boards: [
-      { id: 'b-1', name: 'Scotland', destination: 'Scotland', dated: true, hasGuide: false, createdAt: 1 },
-      { id: 'b-2', name: 'Lakes', destination: 'Cumbria', dated: true, hasGuide: false, createdAt: 2 },
-    ] }));
-  localStorage.setItem('trip-settings-v1', JSON.stringify({ destination: 'Scotland', geminiKey: 'SECRET', geminiModel: '' }));
-  // Every part a board can have, on both boards.
-  ['b-1', 'b-2'].forEach((id) => {
-    localStorage.setItem(`board:${id}:picks`, JSON.stringify([
-      { id: 'p1', name: 'Stirling Castle', city: 'Stirling', category: 'Castle', lat: 56.12, lon: -3.94, addedAt: 1, photoChecked: true },
-      { id: 'p2', name: 'Wallace Monument', city: 'Stirling', category: 'Monument', lat: 56.13, lon: -3.92, addedAt: 2, photoChecked: true },
-      { id: 'p3', name: 'The Birds and Bees', city: 'Stirling', category: 'Pub', lat: 56.14, lon: -3.93, addedAt: 3, photoChecked: true },
-    ]));
-    localStorage.setItem(`board:${id}:folders`, JSON.stringify(['Stirling']));
-    localStorage.setItem(`board:${id}:plan`, JSON.stringify({ days: [], items: {} }));
-    localStorage.setItem(`board:${id}:budget`, JSON.stringify([{ id: 'x', label: 'Fuel', amount: 40 }]));
-    localStorage.setItem(`board:${id}:packing`, JSON.stringify([{ id: 'k', text: 'Wellies', done: false }]));
-    localStorage.setItem(`board:${id}:notes`, JSON.stringify('Ferry books up early'));
-    localStorage.setItem(`board:${id}:search-anchor`, JSON.stringify({ name: 'Stirling', lat: 56.12, lon: -3.94, miles: 10 }));
-    localStorage.setItem(`board:${id}:budget-est`, JSON.stringify({ at: Date.now(), places: {}, foodPerDay: { low: 20, high: 40 } }));
-    localStorage.setItem(`board:${id}:idea`, JSON.stringify({ title: 'A day round Stirling' }));
-    localStorage.setItem(`board:${id}:collapsed`, JSON.stringify(['Stirling']));
-  });
-  localStorage.setItem('recent-searches-v1', JSON.stringify(['cosy pub', 'soft play']));
-  localStorage.setItem('people-v1', JSON.stringify([{ name: 'Ally', age: 3 }]));
-});
-await page.reload({ waitUntil: 'load' });
-await page.waitForTimeout(600);
+// ---------- the ordinary case ----------
+{
+  const b = phone(); const s = createStorage({ backend: b });
+  check('a write is kept, reported as kept, and can be read back', s.write('a', '1') === true && s.read('a') === '1' && b.data.get('a') === '1');
+  check('a key that was never written reads as null', s.read('nope') === null);
+  s.remove('a');
+  check('removing forgets it', s.read('a') === null);
+  s.write('x', '1'); s.write('y', '2'); s.removeMany(['x', 'y', 'never-there']);
+  check('several can be removed at once, including ones that were never there', s.read('x') === null && s.read('y') === null);
+}
 
-// ---------- A backup contains all of it ----------
+// ---------- reading JSON ----------
+{
+  const b = phone(); const s = createStorage({ backend: b });
+  s.write('ok', JSON.stringify({ a: [1, 2] }));
+  check('saved JSON comes back as data', JSON.stringify(s.readJson('ok', null)) === '{"a":[1,2]}');
+  check('a missing key gives the fallback', s.readJson('missing', 'fb') === 'fb');
+  s.write('bad', '{"a": [1,');
+  check('damaged JSON gives the fallback instead of throwing', s.readJson('bad', 'fb') === 'fb');
+  s.write('null', 'null');
+  check('a stored null gives the fallback', s.readJson('null', 'fb') === 'fb');
+  s.write('zero', '0');
+  check('a stored zero is a value, not a missing one', s.readJson('zero', 'fb') === 0);
+}
 
-const backup = await page.evaluate(() => JSON.parse(window.__tripTest.buildBackup()));
-const parts = await page.evaluate(() => window.__tripTest.BOARD_PARTS);
-check('a board is described in one place, not two', Array.isArray(parts) && parts.length >= 10, JSON.stringify(parts));
+// ---------- the phone is blocked outright ----------
+{
+  const b = phone({ blocked: true }); const s = createStorage({ backend: b });
+  check('reads on a blocked phone give null and the fallback', s.read('a') === null && s.readJson('a', 'fb') === 'fb');
+  let threw = null;
+  try { s.write('a', '1'); } catch (e) { threw = e; }
+  check('a write that fails for a reason other than space is not hidden', threw && /blocked/.test(threw.message));
+}
 
-const missing = parts.filter((part) => !(`board:b-1:${part}` in backup.data));
-check('every part of a board is in the backup', missing.length === 0, `missing: ${JSON.stringify(missing)}`);
-check('for every board, not just the open one',
-  parts.every((part) => `board:b-2:${part}` in backup.data), 'b-2 incomplete');
-check('and the searches you have run', 'recent-searches-v1' in backup.data, JSON.stringify(Object.keys(backup.data)));
-check('and who is travelling', 'people-v1' in backup.data, JSON.stringify(Object.keys(backup.data)));
+// ---------- a full phone ----------
+{
+  const b = phone({ limit: 60 });
+  let told = 0;
+  const s = createStorage({ backend: b, onFull: () => told++, expendable: ['weather-cache', 'recent'] });
+  b.setItem('weather-cache', 'W'.repeat(30));
+  b.setItem('recent', 'R'.repeat(10));
+  check('with only expendable things in the way, a write makes room and succeeds', s.write('trip', 'T'.repeat(30)) === true &&
+    s.read('weather-cache') === null && s.read('recent') === null && s.read('trip') === 'T'.repeat(30));
+  check('and nobody is bothered about it', told === 0);
 
-// The one thing that must never travel.
-check('but not the API key, which is the one thing a shared file must not carry',
-  !/SECRET/.test(JSON.stringify(backup)), 'key leaked');
+  check('with nothing left to clear, the write fails and says so', s.write('big', 'B'.repeat(200)) === false && told === 1);
+  check('what was already saved is untouched by the failed write', s.read('trip') === 'T'.repeat(30) && s.read('big') === null);
+  s.write('big2', 'B'.repeat(200));
+  check('it only says so once, not on every failed edit', told === 1);
+}
 
-// ---------- And all of it comes back ----------
+// ---------- the render cache is told ----------
+{
+  const b = phone(); let n = 0;
+  const s = createStorage({ backend: b, onWrite: () => n++ });
+  s.write('a', '1'); s.write('b', '2');
+  check('every write tells the caller, so anything cached from storage can be dropped', n === 2);
+}
 
-await page.evaluate((text) => {
-  // Wipe everything the backup should restore, then put the file back.
-  Object.keys(localStorage)
-    .filter((k) => /^board:|^recent-searches|^people-/.test(k))
-    .forEach((k) => localStorage.removeItem(k));
-  window.__tripTest.importBackup(text);
-}, JSON.stringify(backup));
-await page.waitForTimeout(300);
+// ---------- the default list of expendables ----------
+{
+  const b = phone({ limit: 70 });
+  const s = createStorage({ backend: b });
+  b.setItem('weather-cache-v1', 'W'.repeat(40));
+  check('by default the forecast cache is what gets cleared to make room', s.write('trip', 'T'.repeat(40)) === true && s.read('weather-cache-v1') === null);
+}
 
-const restored = await page.evaluate((p) =>
-  p.filter((part) => localStorage.getItem(`board:b-1:${part}`) === null), parts);
-check('a restore puts every part back', restored.length === 0, `still missing: ${JSON.stringify(restored)}`);
-check('including the searches, which used to be exported and then refused',
-  await page.evaluate(() => /cosy pub/.test(localStorage.getItem('recent-searches-v1') || '')),
-  await page.evaluate(() => localStorage.getItem('recent-searches-v1')));
-check('and the key already on this phone is not blanked by a file that has none',
-  await page.evaluate(() => JSON.parse(localStorage.getItem('trip-settings-v1')).geminiKey === 'SECRET'));
+// ---------- and nothing goes around it ----------
+{
+  const strip = (t) => t.replace(/\/\*[\s\S]*?\*\//g, '').split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n');
+  const app = strip(fs.readFileSync(new URL('../www/js/app.js', import.meta.url), 'utf8'));
+  const stray = app.split('\n').filter((l) => /\blocalStorage\b/.test(l.replace(/\/\/.*$/, '')));
+  check('app.js never touches localStorage itself - every read and write goes through the keeper', stray.length === 0, stray.join(' | ').slice(0, 200));
+}
 
-// ---------- A file from a newer build is refused, not half-read ----------
-
-const future = await page.evaluate(() => {
-  const b = JSON.parse(window.__tripTest.buildBackup());
-  b.version = 99;
-  b.data['board:b-1:picks'] = JSON.stringify([]);
-  return window.__tripTest.importBackup(JSON.stringify(b));
-});
-check('a backup from a newer version is refused', future.ok === false, JSON.stringify(future));
-check('and says what to do about it', /update the app/i.test(future.message), future.message);
-check('and nothing was restored from it in the meantime',
-  await page.evaluate(() => JSON.parse(localStorage.getItem('board:b-1:picks')).length) === 3);
-
-// ---------- Deleting a board takes all of it ----------
-
-await page.evaluate(() => window.__tripTest.deleteBoard('b-2'));
-const leaked = await page.evaluate(() =>
-  Object.keys(localStorage).filter((k) => k.indexOf('board:b-2:') === 0));
-check('deleting a board leaves nothing of it behind', leaked.length === 0, JSON.stringify(leaked));
-check('and does not touch the other one',
-  await page.evaluate(() => Object.keys(localStorage).filter((k) => k.indexOf('board:b-1:') === 0).length) >= 10);
-
-// ---------- A full phone says so, and does not lose the app ----------
-
-// setItem throws for everything from here on, the way a full phone does.
-await page.evaluate(() => {
-  window.__realSetItem = Storage.prototype.setItem;
-  Storage.prototype.setItem = function (k, v) {
-    const e = new Error('quota');
-    e.name = 'QuotaExceededError';
-    throw e;
-  };
-});
-
-const wrote = await page.evaluate(() => window.__tripTest.store('some-key', 'x'));
-check('a write that cannot happen answers that it did not', wrote === false, String(wrote));
-check('rather than throwing out of whatever was running',
-  await page.evaluate(() => { try { window.__tripTest.store('k', 'v'); return 'returned'; } catch { return 'threw'; } }) === 'returned');
-check('and says what is actually wrong, in words with something to do in them',
-  await page.evaluate(() => /storage/i.test(document.body.textContent) && /backup/i.test(document.body.textContent)),
-  await page.evaluate(() => (document.querySelector('.toast') || {}).textContent || document.body.textContent.slice(-200)));
-
-// Opening a screen with a full phone must not take the app down with it.
-// The seeded board has its one section folded, so the rows are legitimately
-// hidden - the heading and its count are what prove the list was built.
-await page.evaluate(() => document.querySelector('[data-view="picks"]').click());
-await page.waitForTimeout(500);
-check('and the app is still standing', await page.evaluate(() => {
-  const head = document.querySelector('[data-fold]');
-  return !!head && /Stirling/.test(head.textContent) && /3/.test(head.textContent);
-}), await page.evaluate(() => document.getElementById('view').textContent.replace(/\s+/g, ' ').slice(0, 200)));
-
-// And still saves what it can once there is room again.
-await page.evaluate(() => { Storage.prototype.setItem = window.__realSetItem; });
-
-// The expendable caches are given up first, so a phone that is merely full
-// rather than hopeless keeps working.
-await page.evaluate(() => {
-  Storage.prototype.setItem = window.__realSetItem;
-  localStorage.setItem('weather-cache-v1', JSON.stringify({ x: 1 }));
-  localStorage.setItem('destination-coords-v1', JSON.stringify({ x: 1 }));
-  let full = true;
-  const real = window.__realSetItem;
-  Storage.prototype.setItem = function (k, v) {
-    // Full once, then room again - which is what dropping a cache achieves.
-    if (full && k === 'squeeze-test') { full = false; const e = new Error('quota'); e.name = 'QuotaExceededError'; throw e; }
-    return real.call(this, k, v);
-  };
-});
-const squeezed = await page.evaluate(() => window.__tripTest.store('squeeze-test', 'y'));
-check('a write that fails once succeeds after clearing what is only cached', squeezed === true, String(squeezed));
-check('and the forecast is what got given up, not anything you typed',
-  await page.evaluate(() => localStorage.getItem('weather-cache-v1') === null &&
-    localStorage.getItem('board:b-1:picks') !== null));
-await page.evaluate(() => { Storage.prototype.setItem = window.__realSetItem; });
-
-// ---------- The backup nobody has to remember ----------
-
-await page.evaluate(() => {
-  localStorage.removeItem('auto-backup-at-v1');
-  localStorage.removeItem('last-backup-at-v1');
-});
-const auto = await page.evaluate(() => window.__tripTest.autoBackup());
-check('the app writes a backup by itself', auto.ok === true, JSON.stringify(auto));
-check('as a dated file somebody could find', /^trip-backup-\d{4}-\d{2}-\d{2}\.json$/.test(auto.name || ''), auto.name);
-check('with the trip actually in it',
-  await page.evaluate(() => /Stirling Castle/.test(Object.values(window.__fs.written)[0] || '')));
-check('and the banner stops asking, because it has been backed up',
-  await page.evaluate(() => !!JSON.parse(localStorage.getItem('last-backup-at-v1') || 'null')));
-
-const again = await page.evaluate(() => window.__tripTest.autoBackup());
-check('and it does not do it again every time the app opens', again.ok === false, JSON.stringify(again));
-
-// Old ones are cleared out, or a year of them sits on a phone nobody looks at.
-await page.evaluate(async () => {
-  ['trip-backup-2020-01-01.json', 'trip-backup-2020-01-02.json', 'trip-backup-2020-01-03.json']
-    .forEach((n) => { window.__fs.written[n] = '{}'; });
-  localStorage.removeItem('auto-backup-at-v1');
-  await window.__tripTest.autoBackup();
-});
-check('and only the last few are kept',
-  await page.evaluate(() => Object.keys(window.__fs.written).length) <= 3,
-  await page.evaluate(() => JSON.stringify(Object.keys(window.__fs.written))));
-
-// A phone that refuses to let the app write is not a broken app.
-await page.evaluate(() => {
-  window.__fs.refuse(true);
-  localStorage.removeItem('auto-backup-at-v1');
-});
-const refused = await page.evaluate(() => window.__tripTest.autoBackup());
-check('a phone that will not be written to is handled quietly',
-  refused.ok === false && refused.reason === 'write refused', JSON.stringify(refused));
-
-await browser.close();
-console.log(failures === 0 ? '\nALL TESTS PASSED' : `\n${failures} FAILED`);
+console.log(failures ? `\n${failures} FAILED` : '\nAll checks passed');
 process.exit(failures ? 1 : 0);

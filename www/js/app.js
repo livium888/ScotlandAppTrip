@@ -1,10 +1,11 @@
 import { esc, safeUrl, cityColor } from "./lib/text.js";
+import { createStorage } from "./lib/storage.js";
 import { extractJson, partialListings, lineFormat, parseListingLines } from "./lib/listings.js";
 
 import { haversineKm, MILES_PER_KM, toMiles, formatDistance, formatDuration, legLabel, DETOUR_FACTOR, WALK_MAX_KM, DRIVE_KMH, ROAD_FACTOR, WALK_KMH_CHILD, WALK_KMH_ADULT } from "./lib/geo.js";
 import { timeToMinutes, formatTime, labelForDate, DAY_NAMES, dayCodeFromLabel, clockOf, shortDayLabel, isoDate } from "./lib/time.js";
 import { ICS_LINE_END, icsEscape, icsFold, icsStamp, icsDay } from "./lib/ics.js";
-import { describeGeminiError, chooseGeminiModel, scoreSearchModel, rateForModel, money4, openAiCitations, isQuotaError, readGeminiStream } from "./lib/ai.js";
+import { describeGeminiError, chooseGeminiModel, scoreSearchModel, rateForModel, money4, openAiCitations, readGeminiStream } from "./lib/ai.js";
 (function () {
   "use strict";
 
@@ -168,7 +169,7 @@ import { describeGeminiError, chooseGeminiModel, scoreSearchModel, rateForModel,
   function loadTripSettings() {
     let stored = {};
     try {
-      stored = JSON.parse(localStorage.getItem(TRIP_KEY)) || {};
+      stored = storage.readJson(TRIP_KEY, {}) || {};
     } catch {
       stored = {};
     }
@@ -1380,72 +1381,19 @@ import { describeGeminiError, chooseGeminiModel, scoreSearchModel, rateForModel,
   };
 
   // ---------- Writing to the phone ----------
-  // Thirty-three calls to localStorage.setItem, not one of them guarded. When
-  // storage fills, setItem throws, the throw lands in whatever handler was
-  // running, and the app says "Something went wrong" - which is not what
-  // happened and gives nobody anything to do. The edit is simply lost, and
-  // the next one will be too.
-  //
-  // Nothing here can invent room, but it can say what is true, and it can
-  // make room out of the things that are only worth keeping while there is
-  // space for them.
-  let quotaWarned = false;
-
-  // Derived data with a shelf life: a forecast, a coordinate lookup, the last
-  // few searches. All of it can be fetched again; none of it is anything
-  // somebody typed.
-  function dropExpendable() {
-    let freed = false;
-    // Named rather than referenced: these constants are declared further down
-    // the file, and a quota failure during the very first load would hit them
-    // before they exist. The names do not change; the ordering might.
-    ["weather-cache-v1", "destination-coords-v1", "recent-searches-v1"].forEach((k) => {
-      if (localStorage.getItem(k) !== null) {
-        localStorage.removeItem(k);
-        freed = true;
-      }
-    });
-    return freed;
-  }
-
-  // Answers whether the write actually happened, so a caller that cares can
-  // ask. Most do not, and for those the point is that the app keeps working
-  // and says out loud that this one did not save.
-  function store(key, value) {
+  // Everything saved goes through one keeper (lib/storage.js): the guarded
+  // write that makes room and says so once when the phone is full, and the
+  // forgiving read. Nothing else in this file touches localStorage.
+  const storage = createStorage({
     // A write invalidates anything a render pass has cached. Renders do not
-    // write, so this should never fire mid-pass; a cache that can serve a
-    // stale value is worse than no cache at all.
-    if (renderPass && renderPass.data) renderPass.data = {};
-    try {
-      localStorage.setItem(key, value);
-      return true;
-    } catch (e) {
-      if (!isQuotaError(e)) throw e;
-      // One attempt at making room, then one honest retry.
-      if (dropExpendable()) {
-        try {
-          localStorage.setItem(key, value);
-          return true;
-        } catch (again) {
-          if (!isQuotaError(again)) throw again;
-        }
-      }
-      if (!quotaWarned) {
-        quotaWarned = true;
-        toast("This phone is out of storage — that change was not saved. Export a backup, then clear some space.");
-      }
-      return false;
-    }
-  }
-
-  function readJson(key, fallback) {
-    try {
-      const v = JSON.parse(localStorage.getItem(key));
-      return v === null || v === undefined ? fallback : v;
-    } catch {
-      return fallback;
-    }
-  }
+    // write, so this should never fire mid-pass.
+    onWrite: () => {
+      if (renderPass && renderPass.data) renderPass.data = {};
+    },
+    onFull: () => toast("This phone is out of storage — that change was not saved. Export a backup, then clear some space."),
+  });
+  const store = storage.write;
+  const readJson = storage.readJson;
 
   function boardKey(id, part) {
     return `board:${id}:${part}`;
@@ -1562,7 +1510,7 @@ import { describeGeminiError, chooseGeminiModel, scoreSearchModel, rateForModel,
     state.boards = state.boards.filter((b) => b.id !== id);
     if (state.activeId === id) state.activeId = state.boards[0].id;
     saveBoards(state);
-    BOARD_PARTS.forEach((part) => localStorage.removeItem(boardKey(id, part)));
+    storage.removeMany(BOARD_PARTS.map((part) => boardKey(id, part)));
     return true;
   }
 
@@ -3025,7 +2973,7 @@ import { describeGeminiError, chooseGeminiModel, scoreSearchModel, rateForModel,
   function buildBackup() {
     const data = {};
     backupKeys().forEach((k) => {
-      const v = localStorage.getItem(k);
+      const v = storage.read(k);
       if (v === null) return;
       data[k] = k === TRIP_KEY ? redactSecrets(v) : v;
     });
@@ -3381,7 +3329,7 @@ import { describeGeminiError, chooseGeminiModel, scoreSearchModel, rateForModel,
     // entered here - otherwise restoring quietly turns the AI search off.
     const localSettings = (() => {
       try {
-        return JSON.parse(localStorage.getItem(TRIP_KEY)) || {};
+        return storage.readJson(TRIP_KEY, {}) || {};
       } catch {
         return {};
       }
@@ -7180,7 +7128,7 @@ ${(() => {
 
   function loadChecked() {
     try {
-      return JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
+      return storage.readJson(STORAGE_KEY, {}) || {};
     } catch {
       return {};
     }
@@ -19192,7 +19140,7 @@ ${(() => {
       }
       const wanted = plannedNotifications();
       const print = notifyFingerprint(wanted);
-      if (!force && print === (localStorage.getItem(NOTIFY_FINGERPRINT_KEY) || "")) return;
+      if (!force && print === (storage.read(NOTIFY_FINGERPRINT_KEY) || "")) return;
 
       // Clear what this app scheduled, and only that.
       try {
@@ -19454,7 +19402,7 @@ ${(() => {
     if (!plugin || weeklyScheduling) return;
     const wanted = weeklyNotifications();
     const print = JSON.stringify(wanted.map((n) => [n.id, n.schedule.on, n.body]));
-    if (print === (localStorage.getItem(WEEKLY_FINGERPRINT_KEY) || "")) return;
+    if (print === (storage.read(WEEKLY_FINGERPRINT_KEY) || "")) return;
     weeklyScheduling = true;
     try {
       try {
@@ -20659,7 +20607,7 @@ ${(() => {
   let welcome = null;
 
   function needsWelcome() {
-    if (localStorage.getItem(ONBOARDED_KEY)) return false;
+    if (storage.read(ONBOARDED_KEY)) return false;
     // Anyone with a trip already in progress has answered these questions by
     // doing, and being asked now would be an insult rather than a welcome.
     //

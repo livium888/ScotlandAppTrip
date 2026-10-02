@@ -234,14 +234,3 @@ export function money4(n) {
   if (n < 0.01) return `less than 1p`;
   return `£${n.toFixed(2)}`;
 }
-
-export function isQuotaError(e) {
-  if (!e) return false;
-  // Different browsers name it differently, and Safari's is a number.
-  return (
-    e.name === "QuotaExceededError" ||
-    e.name === "NS_ERROR_DOM_QUOTA_REACHED" ||
-    e.code === 22 ||
-    e.code === 1014
-  );
-}
